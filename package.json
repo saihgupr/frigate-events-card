@@ -1,0 +1,31 @@
+{
+    "name": "frigate-events-card",
+    "version": "2.0.0",
+    "description": "A simple Lovelace card for displaying recent Frigate events",
+    "main": "frigate-events-card.js",
+    "type": "module",
+    "scripts": {
+        "build": "rollup -c",
+        "watch": "rollup -c --watch"
+    },
+    "keywords": [
+        "frigate",
+        "home-assistant",
+        "lovelace",
+        "card"
+    ],
+    "author": "saihgupr",
+    "license": "MIT",
+    "dependencies": {
+        "home-assistant-js-websocket": "^9.6.0",
+        "lit": "^3.1.0",
+        "tslib": "^2.8.1"
+    },
+    "devDependencies": {
+        "@rollup/plugin-node-resolve": "^15.2.3",
+        "@rollup/plugin-terser": "^0.4.4",
+        "@rollup/plugin-typescript": "^11.1.5",
+        "rollup": "^4.9.1",
+        "typescript": "^5.3.3"
+    }
+}

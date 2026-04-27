@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+
+# Build output (keep frigate-events-card.js for easy install)
+# frigate-events-card.js
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# TypeScript cache
+*.tsbuildinfo
+
+# Deploy script
+deploy.sh
+.git-backup-*

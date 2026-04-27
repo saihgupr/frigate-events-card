@@ -1,0 +1,117 @@
+# Frigate Events Card
+
+A simple Lovelace card for displaying recent Frigate detection events in a horizontal gallery
+
+![Screenshot](https://github.com/saihgupr/frigate-events-card/blob/main/images/snapshots/screenshot_1.png)
+![Screenshot](https://github.com/saihgupr/frigate-events-card/blob/main/images/snapshots/screenshot_2.png)
+![Screenshot](https://github.com/saihgupr/frigate-events-card/blob/main/images/snapshots/screenshot_3.png)
+![Screenshot](https://github.com/saihgupr/frigate-events-card/blob/main/images/snapshots/screenshot_4.png)
+
+## Features
+
+- **Fast & Lightweight**: Minified and optimized for quick loading.
+- **Live Updates**: Instantly shows new events via WebSocket.
+- **Responsive**: Auto-adjusting grid layout that works great on mobile.
+- **Rich Media**: High-quality snapshots with optional zooming.
+- **Video Playback**: Natively stream MP4 and HLS (`.m3u8`) event clips directly in your browser, with an optional "hover to play" feature.
+- **Customizable Layout**: Reverse the rendering order or offset the timeline to build the exact dashboard you want.
+- **Daily Reset**: Optional automated clearing for a fresh daily view.
+- **Interactive**: Detailed modal view with full event information.
+
+## Installation
+
+### HACS (Recommended)
+
+This card can be easily installed via [HACS](https://hacs.xyz/) (Home Assistant Community Store) as a custom repository.
+
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=saihgupr&repository=frigate-events-card&category=plugin)
+
+1. Open HACS in Home Assistant.
+2. Click on the 3 dots in the top right corner and select **Custom repositories**.
+3. Add the URL of this repository (`https://github.com/saihgupr/frigate-events-card`) and select **Dashboard** (or Lovelace) as the category.
+4. Click **Add**, then close the modal.
+5. You should now see "Frigate Events Card" in your HACS interface. Click on it and select **Download**.
+6. When prompted, reload your browser cache.
+
+### Manual Installation
+
+1. Download `frigate-events-card.js` from the [latest release](https://github.com/saihgupr/frigate-events-card/releases)
+2. Copy it to your Home Assistant `www/` folder
+3. Add the resource in your Lovelace dashboard:
+   ```yaml
+   resources:
+     - url: /local/frigate-events-card.js
+       type: module
+   ```
+4. Add the card to your dashboard
+
+## Usage
+
+```yaml
+type: custom:frigate-events-card
+frigate_client_id: frigate
+event_count: 5
+
+# Optional filters
+cameras:
+  - wyze_camera
+labels:
+  - person
+  - car
+zones:
+  - front_a
+  - front_b
+
+# Optional: Video playback settings
+video: true
+video_on_hover: true
+
+# Optional: Layout overrides
+reverse: true
+offset: 1
+
+# Optional: Reset display daily at a specific time (24hr format)
+daily_clear_time: "04:00"
+```
+
+## Configuration Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `frigate_client_id` | string | `frigate` | Your Frigate instance ID |
+| `event_count` | number | `5` | Number of events to display |
+| `title` | string | `Frigate Events` | Card title |
+| `cameras` | list | all | Filter to specific cameras |
+| `labels` | list | all | Filter to specific labels (person, car, etc.) |
+| `zones` | list | all | Filter to specific Frigate zones |
+| `show_label` | boolean | `true` | Show detection label |
+| `show_timestamp` | boolean | `true` | Show event time |
+| `show_camera` | boolean | `false` | Show camera name |
+| `video` | boolean | `false` | Whether to play video clips instead of snapshots in the gallery and modal. |
+| `video_on_hover` | boolean | `false` | Play video clips automatically when hovering over an event snapshot in the gallery. |
+| `reverse` | boolean | `false` | Reverses the rendering order of the timeline (events populate right-to-left instead of left-to-right). |
+| `offset` | number | `0` | Number of recent events to skip/hide from the start of the list. Useful for excluding the newest event if it's already shown in another card. |
+| `daily_clear_time` | string | none | Optional. Time to reset the display daily (24hr format, e.g., "04:00"). If set, events before this time are hidden and shown as grey placeholders. If omitted, no daily reset occurs. |
+
+## Requirements
+
+- Home Assistant with [Frigate Integration](https://github.com/blakeblackshear/frigate-hass-integration) installed
+- Frigate NVR with cameras configured
+
+## Contributing
+
+Contributions are always welcome! If you'd like to help improve this card:
+1. Fork the repository
+2. Create a new branch (`git checkout -b feature/awesome-feature`)
+3. Make your changes and test them locally using `npm run build`
+4. Commit your changes (`git commit -m 'Add awesome feature'`)
+5. Push to the branch (`git push origin feature/awesome-feature`)
+6. Open a Pull Request
+
+## Support & Feedback
+
+If you encounter any issues, bugs, or have feature requests, please [open an issue on GitHub](https://github.com/saihgupr/frigate-events-card/issues).
+
+Frigate Events Card is open-source and free. If you find it useful, consider giving it a star ⭐ or making a donation to support development!
+
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/saihgupr)
