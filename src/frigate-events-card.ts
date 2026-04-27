@@ -189,12 +189,16 @@ export class FrigateEventsCard extends LitElement {
     this._error = undefined;
 
     try {
+      const eventCount = this._config.event_count || 5;
+      const offset = this._config.offset || 0;
+      const fetchLimit = eventCount + offset;
+
       const events = await getEvents(this.hass, {
         instance_id: this._config.frigate_client_id,
         cameras: this._config.cameras,
         labels: this._config.labels,
         zones: this._config.zones,
-        limit: this._config.event_count,
+        limit: fetchLimit,
         has_snapshot: true,
       });
 
