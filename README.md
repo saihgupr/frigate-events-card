@@ -100,13 +100,12 @@ daily_clear_time: "04:00"
 
 ## Contributing
 
-Contributions are always welcome! If you'd like to help improve this card:
+Contributions are welcome! Please submit all Pull Requests to the **develop** branch.
+
 1. Fork the repository
-2. Create a new branch (`git checkout -b feature/awesome-feature`)
-3. Make your changes and test them locally using `npm run build`
-4. Commit your changes (`git commit -m 'Add awesome feature'`)
-5. Push to the branch (`git push origin feature/awesome-feature`)
-6. Open a Pull Request
+2. Create a feature branch (`git checkout -b feature/awesome-feature`)
+3. Commit your changes and push to your fork
+4. Open a Pull Request to **develop**
 
 ## Support & Feedback
 
