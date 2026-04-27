@@ -13,7 +13,8 @@ A simple Lovelace card for displaying recent Frigate detection events in a horiz
 - **Live Updates**: Instantly shows new events via WebSocket.
 - **Responsive**: Auto-adjusting grid layout that works great on mobile.
 - **Rich Media**: High-quality snapshots with optional zooming.
-- **Video Playback**: Natively stream MP4 and HLS (`.m3u8`) event clips directly in your browser, with an optional "hover to play" feature.
+- **Video Playback**: Natively stream MP4 and HLS (`.m3u8`) event clips directly in your browser.
+- **Hover Previews**: Instantly play video clips when hovering over any event in the gallery.
 - **Customizable Layout**: Reverse the rendering order or offset the timeline to build the exact dashboard you want.
 - **Daily Reset**: Optional automated clearing for a fresh daily view.
 - **Interactive**: Detailed modal view with full event information.
