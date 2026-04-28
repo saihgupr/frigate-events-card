@@ -1,9 +1,17 @@
 # Changelog
 
-All notable changes to this project will be documented in this file.
+## [2.0.2] - 2026-04-28
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+### Added
+- Feature: Added `debug` configuration option to display the card version number above snapshots for troubleshooting.
+
+## [2.0.1] - 2026-04-28
+
+### Fixed
+- Fixed: Chrome compatibility for hover animations by prioritizing MP4 sources and ensuring explicit muted properties.
+- Fixed: Hover flicker issue in some browsers by adding `pointer-events: none` to the overlay video.
+- Fixed: Special characters and spaces in camera names/ids are now correctly handled via URL encoding.
+- Feature: Officially added `video_on_hover` to the configuration schema.
 
 ## [2.0.0] - 2026-04-27
 

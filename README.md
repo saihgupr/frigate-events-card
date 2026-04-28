@@ -73,6 +73,9 @@ offset: 1
 
 # Optional: Reset display daily at a specific time (24hr format)
 daily_clear_time: "04:00"
+
+# Optional: Debugging
+debug: true
 ```
 
 ## Configuration Options
@@ -93,6 +96,7 @@ daily_clear_time: "04:00"
 | `reverse` | boolean | `false` | Reverses the rendering order of the timeline (events populate right-to-left instead of left-to-right). |
 | `offset` | number | `0` | Number of recent events to skip/hide from the start of the list. Useful for excluding the newest event if it's already shown in another card. |
 | `daily_clear_time` | string | none | Optional. Time to reset the display daily (24hr format, e.g., "04:00"). If set, events before this time are hidden and shown as grey placeholders. If omitted, no daily reset occurs. |
+| `debug` | boolean | `false` | Enable debug mode to display the current card version number above snapshots. |
 
 ## Requirements
 
