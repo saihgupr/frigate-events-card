@@ -7,7 +7,7 @@ import { HomeAssistant, LovelaceCardConfig } from './ha/types';
 import { FrigateEvent, FrigateEventChange } from './frigate/types';
 import { getEvents, getEventSnapshotURL, subscribeToEvents, getEventClipURL, getEventHlsURL } from './frigate/api';
 
-const CARD_VERSION = '2.0.0';
+const CARD_VERSION = '2.0.1';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -25,8 +25,10 @@ interface FrigateEventsCardConfig extends LovelaceCardConfig {
   title?: string;
   daily_clear_time?: string; // Format: "HH:MM" (24-hour), e.g., "04:00"
   video?: boolean;
+  video_on_hover?: boolean;
   offset?: number;
   reverse?: boolean;
+  debug?: boolean;
 }
 
 const DEFAULT_CONFIG: Partial<FrigateEventsCardConfig> = {
@@ -37,8 +39,10 @@ const DEFAULT_CONFIG: Partial<FrigateEventsCardConfig> = {
   show_camera: false,
   title: 'Frigate Events',
   video: false,
+  video_on_hover: false,
   offset: 0,
   reverse: false,
+  debug: false,
 };
 
 // Label to icon mapping
@@ -449,8 +453,8 @@ export class FrigateEventsCard extends LitElement {
         <div class="frigate-events-modal-image-container">
           ${showVideo
             ? `<video autoplay muted controls playsinline style="width: 100%; height: auto; display: block;">
-                 <source src="${hlsUrl}" type="application/x-mpegURL">
                  <source src="${clipUrl}" type="video/mp4">
+                 <source src="${hlsUrl}" type="application/x-mpegURL">
                </video>`
             : `<img src="${snapshotUrl}" alt="${event.label}" style="width: 100%; height: auto; display: block;" />`
           }          <button class="frigate-events-modal-close">x</button>
@@ -546,6 +550,7 @@ export class FrigateEventsCard extends LitElement {
     return html`
       <ha-card>
         <div class="content">
+          ${this._config.debug ? html`<div class="debug-version">v${CARD_VERSION}</div>` : ''}
           ${this._loading
         ? html`<div class="loading"></div>`
         : this._error
@@ -584,9 +589,16 @@ export class FrigateEventsCard extends LitElement {
           loading="lazy"
         />
         ${playVideoOnHover && isHovered
-          ? html`<video autoplay muted loop playsinline style="position: absolute; top: 0; left: 0; z-index: 2;">
-                   <source src="${hlsUrl}" type="application/x-mpegURL">
+          ? html`<video 
+                   autoplay 
+                   muted 
+                   .muted=${true}
+                   loop 
+                   playsinline 
+                   style="position: absolute; top: 0; left: 0; z-index: 2; width: 100%; height: 100%; object-fit: cover; pointer-events: none;"
+                 >
                    <source src="${clipUrl}" type="video/mp4">
+                   <source src="${hlsUrl}" type="application/x-mpegURL">
                  </video>`          : ''
         }
       </div>
@@ -658,6 +670,15 @@ export class FrigateEventsCard extends LitElement {
         height: 100%;
         object-fit: cover;
         display: block;
+      }
+      
+      .debug-version {
+        font-size: 10px;
+        color: var(--secondary-text-color, #aaa);
+        padding: 2px 8px;
+        text-align: right;
+        font-family: monospace;
+        opacity: 0.7;
       }
 
     `;

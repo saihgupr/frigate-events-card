@@ -24,7 +24,7 @@ export async function getEvents(
  * Get thumbnail URL for an event
  */
 export function getEventThumbnailURL(clientId: string, eventId: string): string {
-    return `/api/frigate/${clientId}/thumbnail/${eventId}`;
+    return `/api/frigate/${encodeURIComponent(clientId)}/thumbnail/${encodeURIComponent(eventId)}`;
 }
 
 /**
@@ -41,21 +41,21 @@ export function getEventSnapshotURL(
     if (options?.timestamp) params.set('timestamp', '1');
 
     const queryString = params.toString();
-    return `/api/frigate/${clientId}/notifications/${eventId}/snapshot.jpg${queryString ? '?' + queryString : ''}`;
+    return `/api/frigate/${encodeURIComponent(clientId)}/notifications/${encodeURIComponent(eventId)}/snapshot.jpg${queryString ? '?' + queryString : ''}`;
 }
 
 /**
  * Get video clip URL for an event
  */
 export function getEventClipURL(clientId: string, eventId: string, camera: string): string {
-    return `/api/frigate/${clientId}/notifications/${eventId}/${camera}/clip.mp4`;
+    return `/api/frigate/${encodeURIComponent(clientId)}/notifications/${encodeURIComponent(eventId)}/${encodeURIComponent(camera)}/clip.mp4`;
 }
 
 /**
  * Get HLS playlist URL for an event (Safari/iOS fallback)
  */
 export function getEventHlsURL(clientId: string, eventId: string, camera: string): string {
-    return `/api/frigate/${clientId}/notifications/${eventId}/${camera}/master.m3u8`;
+    return `/api/frigate/${encodeURIComponent(clientId)}/notifications/${encodeURIComponent(eventId)}/${encodeURIComponent(camera)}/master.m3u8`;
 }
 
 /**
