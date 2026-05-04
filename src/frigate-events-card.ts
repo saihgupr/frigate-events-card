@@ -7,7 +7,7 @@ import { HomeAssistant, LovelaceCardConfig } from './ha/types';
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, subscribeToEvents, getEventClipURL, getEventHlsURL } from './frigate/api';
 
-const CARD_VERSION = '2.1.6';
+const CARD_VERSION = '2.1.8';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -31,6 +31,8 @@ interface FrigateEventsCardConfig extends LovelaceCardConfig {
   video_on_hover?: boolean;
   offset?: number;
   reverse?: boolean;
+  video_skip_seconds?: number;
+  video_end_skip_seconds?: number;
   debug?: boolean;
 }
 
@@ -45,6 +47,8 @@ const DEFAULT_CONFIG: Partial<FrigateEventsCardConfig> = {
   video_on_hover: false,
   offset: 0,
   reverse: false,
+  video_skip_seconds: 0,
+  video_end_skip_seconds: 0,
   debug: false,
 };
 
@@ -426,6 +430,11 @@ export class FrigateEventsCard extends LitElement {
     FrigateEventsCard._stylesInjected = true;
   }
 
+  private _getVideoTimeParam(): string {
+    const skipSeconds = this._config?.video_skip_seconds || 0;
+    return skipSeconds > 0 ? `#t=${skipSeconds}` : '';
+  }
+
   private _showModal(): void {
     if (!this._selectedEvent) return;
 
@@ -448,15 +457,29 @@ export class FrigateEventsCard extends LitElement {
 
     // Build modal content
     const showVideo = this._config?.video && event.has_clip;
-    const clipUrl = getEventClipURL(clientId, event.id, event.camera);
-    const hlsUrl = getEventHlsURL(clientId, event.id, event.camera);
+    const timeParam = this._getVideoTimeParam();
+    const clipUrl = getEventClipURL(clientId, event.id, event.camera) + timeParam;
+    const hlsUrl = getEventHlsURL(clientId, event.id, event.camera) + timeParam;
 
     // Build modal content html
     this._modalContainer.innerHTML = `
       <div class="frigate-events-modal-content">
         <div class="frigate-events-modal-image-container">
           ${showVideo
-            ? `<video autoplay muted controls playsinline style="width: 100%; height: auto; display: block;">
+            ? `<video autoplay muted controls playsinline 
+                      ontimeupdate="
+                        const skip = ${this._config?.video_skip_seconds || 0}; 
+                        const endSkip = ${this._config?.video_end_skip_seconds || 0};
+                        if (!this.duration || !isFinite(this.duration)) return;
+                        if (endSkip > 0) {
+                          const endTime = Math.max(skip, this.duration - endSkip);
+                          if (this.currentTime >= endTime - 0.1) {
+                            this.pause();
+                            this.currentTime = endTime;
+                          }
+                        }
+                      "
+                      style="width: 100%; height: auto; display: block;">
                  <source src="${clipUrl}" type="video/mp4">
                  <source src="${hlsUrl}" type="application/x-mpegURL">
                </video>`
@@ -765,6 +788,26 @@ export class FrigateEventsCard extends LitElement {
     this._startHoverVideoTracking(video, frigateEvent);
   }
 
+  private _handleVideoTimeUpdate(event: Event): void {
+    const video = event.currentTarget as HTMLVideoElement;
+    const skipSeconds = this._config?.video_skip_seconds || 0;
+    const endSkipSeconds = this._config?.video_end_skip_seconds || 0;
+
+    if (!video.duration || !isFinite(video.duration)) return;
+
+    if (endSkipSeconds > 0) {
+      const endTime = Math.max(skipSeconds, video.duration - endSkipSeconds);
+      if (video.currentTime >= endTime - 0.1) {
+        video.currentTime = skipSeconds;
+        video.play().catch(() => {});
+      }
+    } else if (skipSeconds > 0) {
+      if (video.currentTime < skipSeconds && video.currentTime < 1) {
+        video.currentTime = skipSeconds;
+      }
+    }
+  }
+
   private _getLabelIcon(label: string): string {
     return LABEL_ICONS[label.toLowerCase()] || '📷';
   }
@@ -822,8 +865,9 @@ export class FrigateEventsCard extends LitElement {
 
     const isHovered = this._hoveredEventId === event.id;
     const playVideoOnHover = this._config?.video_on_hover && event.has_clip;
-    const clipUrl = getEventClipURL(clientId, event.id, event.camera);
-    const hlsUrl = getEventHlsURL(clientId, event.id, event.camera);
+    const timeParam = this._getVideoTimeParam();
+    const clipUrl = getEventClipURL(clientId, event.id, event.camera) + timeParam;
+    const hlsUrl = getEventHlsURL(clientId, event.id, event.camera) + timeParam;
 
     return html`
       <div class="event"
@@ -845,6 +889,7 @@ export class FrigateEventsCard extends LitElement {
                    loop
                    playsinline
                    @loadedmetadata=${(ev: Event) => this._handleHoverVideoMetadata(ev, event)}
+                   @timeupdate=${(ev: Event) => this._handleVideoTimeUpdate(ev)}
                    style="position: absolute; top: 0; left: 0; z-index: 2; width: 100%; height: 100%; object-fit: cover; pointer-events: none;"
                  >
                    <source src="${clipUrl}" type="video/mp4">
