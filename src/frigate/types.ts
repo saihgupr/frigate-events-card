@@ -2,6 +2,21 @@
  * Frigate event types
  */
 
+export type FrigateBoundingBox = [number, number, number, number];
+export type FrigatePathPoint = [[number, number], number];
+
+export interface FrigateSnapshotData {
+    box?: FrigateBoundingBox;
+    region?: FrigateBoundingBox;
+}
+
+export interface FrigateEventData {
+    box?: FrigateBoundingBox;
+    region?: FrigateBoundingBox;
+    path_data?: FrigatePathPoint[];
+    snapshot?: FrigateSnapshotData | null;
+}
+
 export interface FrigateEvent {
     id: string;
     camera: string;
@@ -14,6 +29,9 @@ export interface FrigateEvent {
     has_snapshot: boolean;
     zones: string[];
     retain_indefinitely?: boolean;
+    box?: FrigateBoundingBox;
+    region?: FrigateBoundingBox;
+    data?: FrigateEventData | null;
 }
 
 export interface FrigateEventChange {

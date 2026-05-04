@@ -4,10 +4,10 @@
 import { LitElement, html, css, PropertyValues, TemplateResult, CSSResult } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { HomeAssistant, LovelaceCardConfig } from './ha/types';
-import { FrigateEvent, FrigateEventChange } from './frigate/types';
+import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, subscribeToEvents, getEventClipURL, getEventHlsURL } from './frigate/api';
 
-const CARD_VERSION = '2.0.2';
+const CARD_VERSION = '2.1.3';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -516,6 +516,191 @@ export class FrigateEventsCard extends LitElement {
     ).join(', ');
   }
 
+  private _isValidBoundingBox(box: unknown): box is FrigateBoundingBox {
+    return Array.isArray(box) &&
+      box.length === 4 &&
+      box.every(value => typeof value === 'number' && Number.isFinite(value)) &&
+      (
+        (box[2] > box[0] && box[3] > box[1]) ||
+        (box[2] > 0 && box[3] > 0)
+      );
+  }
+
+  private _isNormalizedBox(box: FrigateBoundingBox): boolean {
+    return box.every(value => value >= 0 && value <= 1);
+  }
+
+  private _getEventBoundingBoxCandidate(event: FrigateEvent): { source: string; box: FrigateBoundingBox } | undefined {
+    const candidates: { source: string; box: unknown }[] = [
+      { source: 'data.snapshot.box', box: event.data?.snapshot?.box },
+      { source: 'data.box', box: event.data?.box },
+      { source: 'box', box: event.box },
+      { source: 'data.snapshot.region', box: event.data?.snapshot?.region },
+      { source: 'data.region', box: event.data?.region },
+      { source: 'region', box: event.region },
+    ];
+
+    return candidates.find(candidate => this._isValidBoundingBox(candidate.box)) as { source: string; box: FrigateBoundingBox } | undefined;
+  }
+
+  private _getEventBoundingBox(event: FrigateEvent): FrigateBoundingBox | undefined {
+    return this._getEventBoundingBoxCandidate(event)?.box;
+  }
+
+  private _getBoxCenter(box: FrigateBoundingBox, videoWidth: number, videoHeight: number): { x: number; y: number } {
+    const [a, b, c, d] = box;
+
+    if (this._isNormalizedBox(box)) {
+      const isCenterWidthHeight = a + (c / 2) > 1 || b + (d / 2) > 1;
+      const normalizedX = isCenterWidthHeight ? a : a + (c / 2);
+      const normalizedY = isCenterWidthHeight ? b : b + (d / 2);
+
+      return {
+        x: normalizedX * videoWidth,
+        y: normalizedY * videoHeight,
+      };
+    }
+
+    return {
+      x: (a + c) / 2,
+      y: (b + d) / 2,
+    };
+  }
+
+  private _getValidPathData(event: FrigateEvent): FrigatePathPoint[] {
+    return (event.data?.path_data || []).filter(point =>
+      Array.isArray(point) &&
+      point.length === 2 &&
+      Array.isArray(point[0]) &&
+      point[0].length === 2 &&
+      point[0].every(value => typeof value === 'number' && Number.isFinite(value)) &&
+      typeof point[1] === 'number' &&
+      Number.isFinite(point[1])
+    );
+  }
+
+  private _getNearestPathPoint(event: FrigateEvent, video: HTMLVideoElement): { x: number; y: number } | undefined {
+    const pathData = this._getValidPathData(event);
+    if (!pathData.length || !event.start_time) return undefined;
+
+    const playbackTime = event.start_time + video.currentTime;
+    const nearestPoint = pathData.reduce((nearest, point) => {
+      return Math.abs(point[1] - playbackTime) < Math.abs(nearest[1] - playbackTime) ? point : nearest;
+    }, pathData[0]);
+
+    return {
+      x: nearestPoint[0][0] * video.videoWidth,
+      y: nearestPoint[0][1] * video.videoHeight,
+    };
+  }
+
+  private _calculateObjectPositionForPoint(
+    point: { x: number; y: number },
+    video: HTMLVideoElement
+  ): string | undefined {
+    const videoWidth = video.videoWidth;
+    const videoHeight = video.videoHeight;
+    const containerWidth = video.clientWidth;
+    const containerHeight = video.clientHeight;
+
+    if (!videoWidth || !videoHeight || !containerWidth || !containerHeight) {
+      return undefined;
+    }
+
+    const scale = Math.max(containerWidth / videoWidth, containerHeight / videoHeight);
+    const renderedWidth = videoWidth * scale;
+    const renderedHeight = videoHeight * scale;
+    const clamp = (value: number): number => Math.min(100, Math.max(0, value));
+
+    const positionForAxis = (
+      containerSize: number,
+      renderedSize: number,
+      objectCenter: number
+    ): number => {
+      if (Math.abs(renderedSize - containerSize) < 0.5) {
+        return 50;
+      }
+
+      const rawPosition = ((containerSize / 2) - (objectCenter * scale)) / (containerSize - renderedSize) * 100;
+      return clamp(rawPosition);
+    };
+
+    const x = positionForAxis(containerWidth, renderedWidth, point.x);
+    const y = positionForAxis(containerHeight, renderedHeight, point.y);
+
+    return `${x.toFixed(2)}% ${y.toFixed(2)}%`;
+  }
+
+  private _calculateObjectPosition(
+    box: FrigateBoundingBox,
+    video: HTMLVideoElement
+  ): string | undefined {
+    if (!video.videoWidth || !video.videoHeight) return undefined;
+
+    return this._calculateObjectPositionForPoint(
+      this._getBoxCenter(box, video.videoWidth, video.videoHeight),
+      video
+    );
+  }
+
+  private _updateHoverVideoObjectPosition(video: HTMLVideoElement, frigateEvent: FrigateEvent): string {
+    const pathPoint = this._getNearestPathPoint(frigateEvent, video);
+    const boxCandidate = this._getEventBoundingBoxCandidate(frigateEvent);
+    const objectPosition = pathPoint
+      ? this._calculateObjectPositionForPoint(pathPoint, video)
+      : boxCandidate
+        ? this._calculateObjectPosition(boxCandidate.box, video)
+        : undefined;
+
+    video.style.objectPosition = objectPosition || '50% 50%';
+    return pathPoint ? 'data.path_data' : boxCandidate?.source ?? 'center';
+  }
+
+  private _handleHoverVideoMetadata(event: Event, frigateEvent: FrigateEvent): void {
+    const video = event.currentTarget;
+    if (!(video instanceof HTMLVideoElement)) return;
+
+    const cropSource = this._updateHoverVideoObjectPosition(video, frigateEvent);
+
+    if (this._config?.debug) {
+      const boxCandidate = this._getEventBoundingBoxCandidate(frigateEvent);
+      console.debug('Frigate Events Card: hover crop debug', {
+        eventId: frigateEvent.id,
+        camera: frigateEvent.camera,
+        label: frigateEvent.label,
+        cropSource,
+        chosenBoxSource: boxCandidate?.source ?? null,
+        chosenBox: boxCandidate?.box ?? null,
+        pathDataPoints: this._getValidPathData(frigateEvent).length,
+        candidateBoxes: {
+          dataSnapshotBox: frigateEvent.data?.snapshot?.box,
+          dataBox: frigateEvent.data?.box,
+          box: frigateEvent.box,
+          dataSnapshotRegion: frigateEvent.data?.snapshot?.region,
+          dataRegion: frigateEvent.data?.region,
+          region: frigateEvent.region,
+        },
+        objectPosition: video.style.objectPosition,
+        videoSize: {
+          width: video.videoWidth,
+          height: video.videoHeight,
+        },
+        tileSize: {
+          width: video.clientWidth,
+          height: video.clientHeight,
+        },
+        event: frigateEvent,
+      });
+    }
+  }
+
+  private _handleHoverVideoTimeUpdate(event: Event, frigateEvent: FrigateEvent): void {
+    const video = event.currentTarget;
+    if (!(video instanceof HTMLVideoElement)) return;
+
+    this._updateHoverVideoObjectPosition(video, frigateEvent);
+  }
+
   private _getLabelIcon(label: string): string {
     return LABEL_ICONS[label.toLowerCase()] || '📷';
   }
@@ -589,12 +774,14 @@ export class FrigateEventsCard extends LitElement {
           loading="lazy"
         />
         ${playVideoOnHover && isHovered
-          ? html`<video 
-                   autoplay 
-                   muted 
+          ? html`<video
+                   autoplay
+                   muted
                    .muted=${true}
-                   loop 
-                   playsinline 
+                   loop
+                   playsinline
+                   @loadedmetadata=${(ev: Event) => this._handleHoverVideoMetadata(ev, event)}
+                   @timeupdate=${(ev: Event) => this._handleHoverVideoTimeUpdate(ev, event)}
                    style="position: absolute; top: 0; left: 0; z-index: 2; width: 100%; height: 100%; object-fit: cover; pointer-events: none;"
                  >
                    <source src="${clipUrl}" type="video/mp4">

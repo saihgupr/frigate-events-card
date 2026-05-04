@@ -1,6 +1,6 @@
 {
     "name": "frigate-events-card",
-    "version": "2.0.2",
+    "version": "2.1.3",
     "description": "A simple Lovelace card for displaying recent Frigate events",
     "main": "frigate-events-card.js",
     "type": "module",
