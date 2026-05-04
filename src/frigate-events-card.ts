@@ -7,7 +7,7 @@ import { HomeAssistant, LovelaceCardConfig } from './ha/types';
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, subscribeToEvents, getEventClipURL, getEventHlsURL } from './frigate/api';
 
-const CARD_VERSION = '2.1.8';
+const CARD_VERSION = '2.1.9';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -466,20 +466,7 @@ export class FrigateEventsCard extends LitElement {
       <div class="frigate-events-modal-content">
         <div class="frigate-events-modal-image-container">
           ${showVideo
-            ? `<video autoplay muted controls playsinline 
-                      ontimeupdate="
-                        const skip = ${this._config?.video_skip_seconds || 0}; 
-                        const endSkip = ${this._config?.video_end_skip_seconds || 0};
-                        if (!this.duration || !isFinite(this.duration)) return;
-                        if (endSkip > 0) {
-                          const endTime = Math.max(skip, this.duration - endSkip);
-                          if (this.currentTime >= endTime - 0.1) {
-                            this.pause();
-                            this.currentTime = endTime;
-                          }
-                        }
-                      "
-                      style="width: 100%; height: auto; display: block;">
+            ? `<video autoplay muted controls playsinline style="width: 100%; height: auto; display: block;">
                  <source src="${clipUrl}" type="video/mp4">
                  <source src="${hlsUrl}" type="application/x-mpegURL">
                </video>`
