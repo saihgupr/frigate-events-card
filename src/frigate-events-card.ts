@@ -7,11 +7,14 @@ import { HomeAssistant, LovelaceCardConfig } from './ha/types';
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, subscribeToEvents, getEventClipURL, getEventHlsURL } from './frigate/api';
 
-const CARD_VERSION = '2.1.4';
+const CARD_VERSION = '2.1.6';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
 const FALLBACK_POLL_INTERVAL = 10000; // 10 seconds
+const HOVER_CROP_SMOOTHING = 0.055;
+
+type ObjectPositionPercent = { x: number; y: number };
 
 interface FrigateEventsCardConfig extends LovelaceCardConfig {
   frigate_client_id?: string;
@@ -73,6 +76,7 @@ export class FrigateEventsCard extends LitElement {
   private _pollInterval?: number;
   private _boundVisibilityHandler?: () => void;
   private _modalContainer?: HTMLDivElement;
+  private _hoverVideoCropPositions = new WeakMap<HTMLVideoElement, ObjectPositionPercent>();
   private static _stylesInjected = false;
 
   /**
@@ -609,8 +613,9 @@ export class FrigateEventsCard extends LitElement {
 
       const span = nextPoint[1] - previousPoint[1];
       const progress = span > 0 ? (playbackTime - previousPoint[1]) / span : 0;
-      const x = previousPoint[0][0] + ((nextPoint[0][0] - previousPoint[0][0]) * progress);
-      const y = previousPoint[0][1] + ((nextPoint[0][1] - previousPoint[0][1]) * progress);
+      const easedProgress = progress * progress * (3 - (2 * progress));
+      const x = previousPoint[0][0] + ((nextPoint[0][0] - previousPoint[0][0]) * easedProgress);
+      const y = previousPoint[0][1] + ((nextPoint[0][1] - previousPoint[0][1]) * easedProgress);
 
       return {
         x: x * video.videoWidth,
@@ -624,10 +629,10 @@ export class FrigateEventsCard extends LitElement {
     };
   }
 
-  private _calculateObjectPositionForPoint(
+  private _calculateObjectPositionPercentForPoint(
     point: { x: number; y: number },
     video: HTMLVideoElement
-  ): string | undefined {
+  ): ObjectPositionPercent | undefined {
     const videoWidth = video.videoWidth;
     const videoHeight = video.videoHeight;
     const containerWidth = video.clientWidth;
@@ -658,31 +663,54 @@ export class FrigateEventsCard extends LitElement {
     const x = positionForAxis(containerWidth, renderedWidth, point.x);
     const y = positionForAxis(containerHeight, renderedHeight, point.y);
 
-    return `${x.toFixed(2)}% ${y.toFixed(2)}%`;
+    return { x, y };
   }
 
-  private _calculateObjectPosition(
+  private _formatObjectPosition(position: ObjectPositionPercent): string {
+    return `${position.x.toFixed(2)}% ${position.y.toFixed(2)}%`;
+  }
+
+  private _calculateObjectPositionPercent(
     box: FrigateBoundingBox,
     video: HTMLVideoElement
-  ): string | undefined {
+  ): ObjectPositionPercent | undefined {
     if (!video.videoWidth || !video.videoHeight) return undefined;
 
-    return this._calculateObjectPositionForPoint(
+    return this._calculateObjectPositionPercentForPoint(
       this._getBoxCenter(box, video.videoWidth, video.videoHeight),
       video
     );
+  }
+
+  private _smoothObjectPosition(video: HTMLVideoElement, target: ObjectPositionPercent): ObjectPositionPercent {
+    const current = this._hoverVideoCropPositions.get(video);
+    const smoothed = current
+      ? {
+        x: current.x + ((target.x - current.x) * HOVER_CROP_SMOOTHING),
+        y: current.y + ((target.y - current.y) * HOVER_CROP_SMOOTHING),
+      }
+      : target;
+
+    this._hoverVideoCropPositions.set(video, smoothed);
+    return smoothed;
   }
 
   private _updateHoverVideoObjectPosition(video: HTMLVideoElement, frigateEvent: FrigateEvent): string {
     const pathPoint = this._getInterpolatedPathPoint(frigateEvent, video);
     const boxCandidate = this._getEventBoundingBoxCandidate(frigateEvent);
     const objectPosition = pathPoint
-      ? this._calculateObjectPositionForPoint(pathPoint, video)
+      ? this._calculateObjectPositionPercentForPoint(pathPoint, video)
       : boxCandidate
-        ? this._calculateObjectPosition(boxCandidate.box, video)
+        ? this._calculateObjectPositionPercent(boxCandidate.box, video)
         : undefined;
 
-    video.style.objectPosition = objectPosition || '50% 50%';
+    if (!objectPosition) {
+      this._hoverVideoCropPositions.delete(video);
+      video.style.objectPosition = '50% 50%';
+      return 'center';
+    }
+
+    video.style.objectPosition = this._formatObjectPosition(this._smoothObjectPosition(video, objectPosition));
     return pathPoint ? 'data.path_data' : boxCandidate?.source ?? 'center';
   }
 
