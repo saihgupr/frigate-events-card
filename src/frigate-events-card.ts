@@ -7,7 +7,7 @@ import { HomeAssistant, LovelaceCardConfig } from './ha/types';
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, subscribeToEvents, getEventClipURL, getEventHlsURL } from './frigate/api';
 
-const CARD_VERSION = '2.1.3';
+const CARD_VERSION = '2.1.4';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -579,18 +579,48 @@ export class FrigateEventsCard extends LitElement {
     );
   }
 
-  private _getNearestPathPoint(event: FrigateEvent, video: HTMLVideoElement): { x: number; y: number } | undefined {
+  private _getInterpolatedPathPoint(event: FrigateEvent, video: HTMLVideoElement): { x: number; y: number } | undefined {
     const pathData = this._getValidPathData(event);
     if (!pathData.length || !event.start_time) return undefined;
 
     const playbackTime = event.start_time + video.currentTime;
-    const nearestPoint = pathData.reduce((nearest, point) => {
-      return Math.abs(point[1] - playbackTime) < Math.abs(nearest[1] - playbackTime) ? point : nearest;
-    }, pathData[0]);
+    const firstPoint = pathData[0];
+    const lastPoint = pathData[pathData.length - 1];
+
+    if (playbackTime <= firstPoint[1]) {
+      return {
+        x: firstPoint[0][0] * video.videoWidth,
+        y: firstPoint[0][1] * video.videoHeight,
+      };
+    }
+
+    if (playbackTime >= lastPoint[1]) {
+      return {
+        x: lastPoint[0][0] * video.videoWidth,
+        y: lastPoint[0][1] * video.videoHeight,
+      };
+    }
+
+    for (let i = 1; i < pathData.length; i++) {
+      const previousPoint = pathData[i - 1];
+      const nextPoint = pathData[i];
+
+      if (playbackTime > nextPoint[1]) continue;
+
+      const span = nextPoint[1] - previousPoint[1];
+      const progress = span > 0 ? (playbackTime - previousPoint[1]) / span : 0;
+      const x = previousPoint[0][0] + ((nextPoint[0][0] - previousPoint[0][0]) * progress);
+      const y = previousPoint[0][1] + ((nextPoint[0][1] - previousPoint[0][1]) * progress);
+
+      return {
+        x: x * video.videoWidth,
+        y: y * video.videoHeight,
+      };
+    }
 
     return {
-      x: nearestPoint[0][0] * video.videoWidth,
-      y: nearestPoint[0][1] * video.videoHeight,
+      x: lastPoint[0][0] * video.videoWidth,
+      y: lastPoint[0][1] * video.videoHeight,
     };
   }
 
@@ -644,7 +674,7 @@ export class FrigateEventsCard extends LitElement {
   }
 
   private _updateHoverVideoObjectPosition(video: HTMLVideoElement, frigateEvent: FrigateEvent): string {
-    const pathPoint = this._getNearestPathPoint(frigateEvent, video);
+    const pathPoint = this._getInterpolatedPathPoint(frigateEvent, video);
     const boxCandidate = this._getEventBoundingBoxCandidate(frigateEvent);
     const objectPosition = pathPoint
       ? this._calculateObjectPositionForPoint(pathPoint, video)
@@ -654,6 +684,17 @@ export class FrigateEventsCard extends LitElement {
 
     video.style.objectPosition = objectPosition || '50% 50%';
     return pathPoint ? 'data.path_data' : boxCandidate?.source ?? 'center';
+  }
+
+  private _startHoverVideoTracking(video: HTMLVideoElement, frigateEvent: FrigateEvent): void {
+    const update = (): void => {
+      if (!video.isConnected || this._hoveredEventId !== frigateEvent.id) return;
+
+      this._updateHoverVideoObjectPosition(video, frigateEvent);
+      requestAnimationFrame(update);
+    };
+
+    requestAnimationFrame(update);
   }
 
   private _handleHoverVideoMetadata(event: Event, frigateEvent: FrigateEvent): void {
@@ -692,13 +733,8 @@ export class FrigateEventsCard extends LitElement {
         event: frigateEvent,
       });
     }
-  }
 
-  private _handleHoverVideoTimeUpdate(event: Event, frigateEvent: FrigateEvent): void {
-    const video = event.currentTarget;
-    if (!(video instanceof HTMLVideoElement)) return;
-
-    this._updateHoverVideoObjectPosition(video, frigateEvent);
+    this._startHoverVideoTracking(video, frigateEvent);
   }
 
   private _getLabelIcon(label: string): string {
@@ -781,7 +817,6 @@ export class FrigateEventsCard extends LitElement {
                    loop
                    playsinline
                    @loadedmetadata=${(ev: Event) => this._handleHoverVideoMetadata(ev, event)}
-                   @timeupdate=${(ev: Event) => this._handleHoverVideoTimeUpdate(ev, event)}
                    style="position: absolute; top: 0; left: 0; z-index: 2; width: 100%; height: 100%; object-fit: cover; pointer-events: none;"
                  >
                    <source src="${clipUrl}" type="video/mp4">
