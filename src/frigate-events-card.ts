@@ -7,7 +7,7 @@ import { HomeAssistant, LovelaceCardConfig } from './ha/types';
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, subscribeToEvents, getEventClipURL, getEventHlsURL } from './frigate/api';
 
-const CARD_VERSION = '2.1.16';
+const CARD_VERSION = '2.1.19';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -33,10 +33,11 @@ interface FrigateEventsCardConfig extends LovelaceCardConfig {
   video_on_hover?: boolean;
   offset?: number;
   reverse?: boolean;
-  video_skip_seconds?: number;
-  video_end_skip_seconds?: number;
+  video_skip_seconds?: number | Record<string, number>;
+  video_start_padding?: number | Record<string, number>;
+  video_end_skip_seconds?: number | Record<string, number>;
   debug?: boolean;
-  video_position_offset_x?: number | Record<string, number>;
+  tracking_pan_delay?: number | Record<string, number>;
   tracking_smoothing?: number;
 }
 
@@ -435,8 +436,46 @@ export class FrigateEventsCard extends LitElement {
     FrigateEventsCard._stylesInjected = true;
   }
 
-  private _getVideoTimeParam(): string {
-    const skipSeconds = this._config?.video_skip_seconds || 0;
+  private _getConfigValueForEvent(
+    config: number | Record<string, number> | undefined,
+    event: FrigateEvent,
+    defaultValue: number
+  ): number {
+    if (config === undefined || config === null) return defaultValue;
+    if (typeof config === 'number') return config;
+
+    const label = event.label;
+    const zones = event.zones || [];
+
+    // Try specific label:zone or zone:label first
+    for (const zone of zones) {
+      const key1 = `${label}:${zone}`;
+      if (config[key1] !== undefined) return config[key1];
+      
+      const key2 = `${zone}:${label}`;
+      if (config[key2] !== undefined) return config[key2];
+    }
+
+    // Try label only
+    if (config[label] !== undefined) return config[label];
+
+    // Try zone only
+    for (const zone of zones) {
+      if (config[zone] !== undefined) return config[zone];
+    }
+
+    // Default
+    if (config['default'] !== undefined) return config['default'];
+
+    return defaultValue;
+  }
+
+  private _getVideoTimeParam(event: FrigateEvent): string {
+    const skipSeconds = this._getConfigValueForEvent(
+      this._config?.video_skip_seconds || this._config?.video_start_padding,
+      event,
+      0
+    );
     return skipSeconds > 0 ? `#t=${skipSeconds}` : '';
   }
 
@@ -462,7 +501,7 @@ export class FrigateEventsCard extends LitElement {
 
     // Build modal content
     const showVideo = this._config?.video && event.has_clip;
-    const timeParam = this._getVideoTimeParam();
+    const timeParam = this._getVideoTimeParam(event);
     const clipUrl = getEventClipURL(clientId, event.id, event.camera) + timeParam;
     const hlsUrl = getEventHlsURL(clientId, event.id, event.camera) + timeParam;
 
@@ -602,8 +641,14 @@ export class FrigateEventsCard extends LitElement {
     const pathData = this._getValidPathData(event);
     if (!pathData.length || !event.start_time) return undefined;
 
+    const skipSeconds = this._getConfigValueForEvent(this._config?.video_skip_seconds || this._config?.video_start_padding, event, 0);
     const timeOffset = this._getTrackingTimeOffset(event);
-    const playbackTime = event.start_time + video.currentTime + timeOffset;
+    
+    // Calculate playback time relative to event start
+    // video.currentTime is absolute position in clip (starts at skipSeconds if using #t=)
+    // (video.currentTime - skipSeconds) is time elapsed since event start
+    // Subtracting timeOffset (positive = lag, negative = lead) shifts tracking
+    const playbackTime = event.start_time + (video.currentTime - skipSeconds) - timeOffset;
     const firstPoint = pathData[0];
     const lastPoint = pathData[pathData.length - 1];
 
@@ -739,34 +784,7 @@ export class FrigateEventsCard extends LitElement {
   }
 
   private _getTrackingTimeOffset(frigateEvent: FrigateEvent): number {
-    const config = this._config?.video_position_offset_x;
-    if (config === undefined) return 0;
-    if (typeof config === 'number') return config / 1000;
-
-    const label = frigateEvent.label;
-    const zones = frigateEvent.zones || [];
-
-    // Try specific label:zone or zone:label first
-    for (const zone of zones) {
-      const key1 = `${label}:${zone}`;
-      if (config[key1] !== undefined) return config[key1] / 1000;
-      
-      const key2 = `${zone}:${label}`;
-      if (config[key2] !== undefined) return config[key2] / 1000;
-    }
-
-    // Try label only
-    if (config[label] !== undefined) return config[label] / 1000;
-
-    // Try zone only
-    for (const zone of zones) {
-      if (config[zone] !== undefined) return config[zone] / 1000;
-    }
-
-    // Default
-    if (config['default'] !== undefined) return config['default'] / 1000;
-
-    return 0;
+    return this._getConfigValueForEvent(this._config?.tracking_pan_delay, frigateEvent, 0) / 1000;
   }
 
   private _updateHoverVideoObjectPosition(video: HTMLVideoElement, frigateEvent: FrigateEvent): string {
@@ -792,7 +810,7 @@ export class FrigateEventsCard extends LitElement {
     
     let source = pathPoint ? 'data.path_data' : boxCandidate?.source ?? 'center';
     if (timeOffset !== 0) {
-      source += ` (${timeOffset > 0 ? '+' : ''}${timeOffset}s offset)`;
+      source += ` (${timeOffset > 0 ? '+' : ''}${timeOffset}s delay)`;
     }
 
     if (this._config?.debug && pathPoint) {
@@ -800,7 +818,9 @@ export class FrigateEventsCard extends LitElement {
       if (pathData.length) {
         const start = pathData[0][1] - (frigateEvent.start_time || 0);
         const end = pathData[pathData.length - 1][1] - (frigateEvent.start_time || 0);
-        const currentRel = video.currentTime + timeOffset;
+        const skipSeconds = this._getConfigValueForEvent(this._config?.video_skip_seconds || this._config?.video_start_padding, frigateEvent, 0);
+        // Correct relative tracking time: (V - skip) - offset
+        const currentRel = (video.currentTime - skipSeconds) - timeOffset;
         source += ` [V:${video.currentTime.toFixed(1)}s, P:${currentRel.toFixed(1)}s, Range:${start.toFixed(1)}-${end.toFixed(1)}s]`;
       }
     }
@@ -859,10 +879,10 @@ export class FrigateEventsCard extends LitElement {
     this._startHoverVideoTracking(video, frigateEvent);
   }
 
-  private _handleVideoTimeUpdate(event: Event): void {
+  private _handleVideoTimeUpdate(event: Event, frigateEvent: FrigateEvent): void {
     const video = event.currentTarget as HTMLVideoElement;
-    const skipSeconds = this._config?.video_skip_seconds || 0;
-    const endSkipSeconds = this._config?.video_end_skip_seconds || 0;
+    const skipSeconds = this._getConfigValueForEvent(this._config?.video_skip_seconds || this._config?.video_start_padding, frigateEvent, 0);
+    const endSkipSeconds = this._getConfigValueForEvent(this._config?.video_end_skip_seconds, frigateEvent, 0);
 
     if (!video.duration || !isFinite(video.duration)) return;
 
@@ -936,7 +956,7 @@ export class FrigateEventsCard extends LitElement {
 
     const isHovered = this._hoveredEventId === event.id;
     const playVideoOnHover = this._config?.video_on_hover && event.has_clip;
-    const timeParam = this._getVideoTimeParam();
+    const timeParam = this._getVideoTimeParam(event);
     const clipUrl = getEventClipURL(clientId, event.id, event.camera) + timeParam;
     const hlsUrl = getEventHlsURL(clientId, event.id, event.camera) + timeParam;
 
@@ -960,7 +980,7 @@ export class FrigateEventsCard extends LitElement {
                    loop
                    playsinline
                    @loadedmetadata=${(ev: Event) => this._handleHoverVideoMetadata(ev, event)}
-                   @timeupdate=${(ev: Event) => this._handleVideoTimeUpdate(ev)}
+                   @timeupdate=${(ev: Event) => this._handleVideoTimeUpdate(ev, event)}
                    style="position: absolute; top: 0; left: 0; z-index: 2; width: 100%; height: 100%; object-fit: cover; pointer-events: none;"
                  >
                    <source src="${clipUrl}" type="video/mp4">

@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.1.19] - 2026-05-05
+- Fixed: Corrected tracking synchronization logic by accounting for `video_start_padding` and `video_skip_seconds`. Tracking data now aligns perfectly with video playback time.
+- Fixed: Resolved an issue where hierarchical configuration values (e.g., `car`, `person:front_driveway`) were not being correctly applied to video skip settings.
+- Added: Re-implemented `_getConfigValueForEvent` to provide robust, hierarchical configuration lookups across all event-specific settings.
+- Debug: Fixed debug overlay timestamps to accurately show relative tracking offsets.
+
+## [2.1.17] - 2026-05-05
+- Renamed `video_position_offset_x` back to `tracking_pan_delay` to correctly reflect its purpose as a temporal delay for tracking synchronization.
+- Removed unused spatial offset terminology in favor of temporal delay.
+
 ## [2.1.16] - 2026-05-05
 - Enhanced tracking synchronization with reciprocal key support (e.g., `zone:label` as well as `label:zone`).
 - Added `tracking_smoothing` configuration to fine-tune camera responsiveness.
