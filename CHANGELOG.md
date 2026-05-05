@@ -1,8 +1,20 @@
 # Changelog
 
-## [2.1.12] - 2026-05-05
+## [2.1.16] - 2026-05-05
+- Enhanced tracking synchronization with reciprocal key support (e.g., `zone:label` as well as `label:zone`).
+- Added `tracking_smoothing` configuration to fine-tune camera responsiveness.
+- Improved debug overlay with real-time playback synchronization data.
+- Increased default tracking smoothing for better responsiveness.
+
+## [2.1.14] - 2026-05-05
+- Replaced `tracking_pan_delays` with more flexible `video_position_offset_x` configuration.
+- Supported hierarchical offsets: `label:zone`, `label`, `zone`, and `default`.
+- Optimized "Lazy Tracking" comfort zone to 20% to further reduce jitter.
+
+## [2.1.13] - 2026-05-05
 
 ### Added
+- Feature: Added `tracking_pan_delays` configuration option. Allows specifying a delay in seconds before auto-tracking pans start for specific object types or zones (e.g. `front_driveway:car: 2`). This helps sync the pan with the video when Frigate's detection data is ahead of the video stream.
 - Feature: Implemented "lazy tracking" for hover video crops. The view now stays static as long as the tracked object remains within a 20% comfort zone, reducing unnecessary camera movement and jitter.
 
 ## [2.0.2] - 2026-04-28
