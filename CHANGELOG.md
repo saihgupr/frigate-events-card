@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.1.12] - 2026-05-05
+
+### Added
+- Feature: Implemented "lazy tracking" for hover video crops. The view now stays static as long as the tracked object remains within a 20% comfort zone, reducing unnecessary camera movement and jitter.
+
 ## [2.0.2] - 2026-04-28
 
 ### Added
