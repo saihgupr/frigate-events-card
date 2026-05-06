@@ -1,5 +1,8 @@
 # Changelog
 
+## [2.1.24] - 2026-05-06
+- Changed: Renamed `video_skip_seconds` configuration to `video_start_skip_seconds` for clarity.
+
 ## [2.1.23] - 2026-05-06
 - Changed: `tracking_smoothing` default value is now `1.0` (smoothest).
 
@@ -14,7 +17,7 @@
 - Changed: `tracking_pan_delay` now uses milliseconds for finer control.
 
 ## [2.1.19] - 2026-05-05
-- Fixed: Corrected tracking synchronization logic by accounting for `video_start_padding` and `video_skip_seconds`. Tracking data now aligns perfectly with video playback time.
+- Fixed: Corrected tracking synchronization logic by accounting for `video_start_padding` and `video_start_skip_seconds`. Tracking data now aligns perfectly with video playback time.
 - Fixed: Resolved an issue where hierarchical configuration values (e.g., `car`, `person:front_driveway`) were not being correctly applied to video skip settings.
 - Added: Re-implemented `_getConfigValueForEvent` to provide robust, hierarchical configuration lookups across all event-specific settings.
 - Debug: Fixed debug overlay timestamps to accurately show relative tracking offsets.

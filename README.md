@@ -68,7 +68,7 @@ video: true
 video_on_hover: true
 
 # Optional: Video timing offsets (seconds or per-label/zone map)
-video_skip_seconds: 1
+video_start_skip_seconds: 1
 video_end_skip_seconds: 2
 
 # Optional: Tracking synchronization (milliseconds or per-label/zone map)
@@ -107,7 +107,7 @@ debug: true
 | `show_camera` | boolean | `false` | Show camera name |
 | `video` | boolean | `false` | Whether to play video clips instead of snapshots in the gallery and modal. |
 | `video_on_hover` | boolean | `false` | Play video clips automatically when hovering over an event snapshot in the gallery. |
-| `video_skip_seconds` | number \| map | `0` | Number of seconds to skip from the beginning of video clips. Supports per-label/zone map. |
+| `video_start_skip_seconds` | number \| map | `0` | Number of seconds to skip from the beginning of video clips. Supports per-label/zone map. |
 | `video_end_skip_seconds` | number \| map | `0` | Number of seconds to skip from the end of video clips. Supports per-label/zone map. |
 | `tracking_pan_delay` | number \| map | `0` | Millisecond delay to synchronize video pan with object movement. Supports per-label/zone map (e.g., `person:front_door`). |
 | `tracking_smoothing` | number | `1.0` | Smoothness of camera panning in hover previews (0.0 to 1.0). 1.0 uses a wide time window for a soft glide, 0.0 is an instant rigid snap. |

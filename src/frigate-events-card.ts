@@ -7,7 +7,7 @@ import { HomeAssistant, LovelaceCardConfig } from './ha/types';
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, subscribeToEvents, getEventClipURL, getEventHlsURL } from './frigate/api';
 
-const CARD_VERSION = '2.1.23';
+const CARD_VERSION = '2.1.25';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -33,7 +33,7 @@ interface FrigateEventsCardConfig extends LovelaceCardConfig {
   video_on_hover?: boolean;
   offset?: number;
   reverse?: boolean;
-  video_skip_seconds?: number | Record<string, number>;
+  video_start_skip_seconds?: number | Record<string, number>;
   video_start_padding?: number | Record<string, number>;
   video_end_skip_seconds?: number | Record<string, number>;
   debug?: boolean;
@@ -52,7 +52,7 @@ const DEFAULT_CONFIG: Partial<FrigateEventsCardConfig> = {
   video_on_hover: false,
   offset: 0,
   reverse: false,
-  video_skip_seconds: 0,
+  video_start_skip_seconds: 0,
   video_end_skip_seconds: 0,
   debug: false,
   tracking_smoothing: HOVER_CROP_DEFAULT_SMOOTHING,
@@ -472,7 +472,7 @@ export class FrigateEventsCard extends LitElement {
 
   private _getVideoTimeParam(event: FrigateEvent): string {
     const skipSeconds = this._getConfigValueForEvent(
-      this._config?.video_skip_seconds || this._config?.video_start_padding,
+      this._config?.video_start_skip_seconds || this._config?.video_start_padding,
       event,
       0
     );
@@ -685,7 +685,7 @@ export class FrigateEventsCard extends LitElement {
   private _getSmoothedPathPoint(event: FrigateEvent, video: HTMLVideoElement): { x: number; y: number } | undefined {
     if (!event.start_time) return undefined;
 
-    const skipSeconds = this._getConfigValueForEvent(this._config?.video_skip_seconds || this._config?.video_start_padding, event, 0);
+    const skipSeconds = this._getConfigValueForEvent(this._config?.video_start_skip_seconds || this._config?.video_start_padding, event, 0);
     const timeOffset = this._getTrackingTimeOffset(event);
     const playbackTime = event.start_time + (video.currentTime - skipSeconds) - timeOffset;
 
@@ -847,7 +847,7 @@ export class FrigateEventsCard extends LitElement {
       if (pathData.length) {
         const start = pathData[0][1] - (frigateEvent.start_time || 0);
         const end = pathData[pathData.length - 1][1] - (frigateEvent.start_time || 0);
-        const skipSeconds = this._getConfigValueForEvent(this._config?.video_skip_seconds || this._config?.video_start_padding, frigateEvent, 0);
+        const skipSeconds = this._getConfigValueForEvent(this._config?.video_start_skip_seconds || this._config?.video_start_padding, frigateEvent, 0);
         // Correct relative tracking time: (V - skip) - offset
         const currentRel = (video.currentTime - skipSeconds) - timeOffset;
         source += ` [V:${video.currentTime.toFixed(1)}s, P:${currentRel.toFixed(1)}s, Range:${start.toFixed(1)}-${end.toFixed(1)}s]`;
@@ -910,7 +910,7 @@ export class FrigateEventsCard extends LitElement {
 
   private _handleVideoTimeUpdate(event: Event, frigateEvent: FrigateEvent): void {
     const video = event.currentTarget as HTMLVideoElement;
-    const skipSeconds = this._getConfigValueForEvent(this._config?.video_skip_seconds || this._config?.video_start_padding, frigateEvent, 0);
+    const skipSeconds = this._getConfigValueForEvent(this._config?.video_start_skip_seconds || this._config?.video_start_padding, frigateEvent, 0);
     const endSkipSeconds = this._getConfigValueForEvent(this._config?.video_end_skip_seconds, frigateEvent, 0);
 
     if (!video.duration || !isFinite(video.duration)) return;
