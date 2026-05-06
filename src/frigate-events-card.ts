@@ -7,12 +7,12 @@ import { HomeAssistant, LovelaceCardConfig } from './ha/types';
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, subscribeToEvents, getEventClipURL, getEventHlsURL } from './frigate/api';
 
-const CARD_VERSION = '2.1.20';
+const CARD_VERSION = '2.1.23';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
 const FALLBACK_POLL_INTERVAL = 10000; // 10 seconds
-const HOVER_CROP_DEFAULT_SMOOTHING = 0.08;
+const HOVER_CROP_DEFAULT_SMOOTHING = 0.5; // 0.0 is jerky, 1.0 is smoothest
 const HOVER_CROP_MARGIN_PERCENT = 0.20; // 20% margin on each side of the container
 
 
@@ -637,18 +637,10 @@ export class FrigateEventsCard extends LitElement {
     );
   }
 
-  private _getInterpolatedPathPoint(event: FrigateEvent, video: HTMLVideoElement): { x: number; y: number } | undefined {
+  private _getInterpolatedPathPoint(event: FrigateEvent, video: HTMLVideoElement, playbackTime: number): { x: number; y: number } | undefined {
     const pathData = this._getValidPathData(event);
-    if (!pathData.length || !event.start_time) return undefined;
+    if (!pathData.length) return undefined;
 
-    const skipSeconds = this._getConfigValueForEvent(this._config?.video_skip_seconds || this._config?.video_start_padding, event, 0);
-    const timeOffset = this._getTrackingTimeOffset(event);
-    
-    // Calculate playback time relative to event start
-    // video.currentTime is absolute position in clip (starts at skipSeconds if using #t=)
-    // (video.currentTime - skipSeconds) is time elapsed since event start
-    // Subtracting timeOffset (positive = lag, negative = lead) shifts tracking
-    const playbackTime = event.start_time + (video.currentTime - skipSeconds) - timeOffset;
     const firstPoint = pathData[0];
     const lastPoint = pathData[pathData.length - 1];
 
@@ -687,6 +679,49 @@ export class FrigateEventsCard extends LitElement {
     return {
       x: lastPoint[0][0] * video.videoWidth,
       y: lastPoint[0][1] * video.videoHeight,
+    };
+  }
+
+  private _getSmoothedPathPoint(event: FrigateEvent, video: HTMLVideoElement): { x: number; y: number } | undefined {
+    if (!event.start_time) return undefined;
+
+    const skipSeconds = this._getConfigValueForEvent(this._config?.video_skip_seconds || this._config?.video_start_padding, event, 0);
+    const timeOffset = this._getTrackingTimeOffset(event);
+    const playbackTime = event.start_time + (video.currentTime - skipSeconds) - timeOffset;
+
+    const userSmoothing = this._config?.tracking_smoothing ?? HOVER_CROP_DEFAULT_SMOOTHING;
+    
+    // If smoothing is 0, just return the exact point
+    if (userSmoothing <= 0.01) {
+      return this._getInterpolatedPathPoint(event, video, playbackTime);
+    }
+
+    // Map tracking_smoothing (0.0 to 1.0) to a time window (e.g. 0 to 2.0 seconds)
+    // 0.5 smoothing = 1.0 second window, which averages keyframes 0.5s ahead and behind
+    const windowDuration = userSmoothing * 2.0; 
+    const halfWindow = windowDuration / 2;
+    
+    // Sample multiple points across the window to compute an average
+    const sampleCount = 10;
+    let totalX = 0;
+    let totalY = 0;
+    let validSamples = 0;
+
+    for (let i = 0; i <= sampleCount; i++) {
+      const sampleTime = (playbackTime - halfWindow) + (windowDuration * (i / sampleCount));
+      const point = this._getInterpolatedPathPoint(event, video, sampleTime);
+      if (point) {
+        totalX += point.x;
+        totalY += point.y;
+        validSamples++;
+      }
+    }
+
+    if (validSamples === 0) return undefined;
+
+    return {
+      x: totalX / validSamples,
+      y: totalY / validSamples
     };
   }
 
@@ -768,27 +803,12 @@ export class FrigateEventsCard extends LitElement {
     );
   }
 
-  private _smoothObjectPosition(video: HTMLVideoElement, target: ObjectPositionPercent): ObjectPositionPercent {
-    const current = this._hoverVideoCropPositions.get(video);
-    const smoothing = this._config?.tracking_smoothing ?? HOVER_CROP_DEFAULT_SMOOTHING;
-    
-    const smoothed = current
-      ? {
-        x: current.x + ((target.x - current.x) * smoothing),
-        y: current.y + ((target.y - current.y) * smoothing),
-      }
-      : target;
-
-    this._hoverVideoCropPositions.set(video, smoothed);
-    return smoothed;
-  }
-
   private _getTrackingTimeOffset(frigateEvent: FrigateEvent): number {
     return this._getConfigValueForEvent(this._config?.tracking_pan_delay, frigateEvent, 0) / 1000;
   }
 
   private _updateHoverVideoObjectPosition(video: HTMLVideoElement, frigateEvent: FrigateEvent): string {
-    const pathPoint = this._getInterpolatedPathPoint(frigateEvent, video);
+    const pathPoint = this._getSmoothedPathPoint(frigateEvent, video);
     const boxCandidate = this._getEventBoundingBoxCandidate(frigateEvent);
     const current = this._hoverVideoCropPositions.get(video);
     const timeOffset = this._getTrackingTimeOffset(frigateEvent);
@@ -805,7 +825,16 @@ export class FrigateEventsCard extends LitElement {
       return 'center';
     }
 
-    const smoothed = this._smoothObjectPosition(video, objectPosition);
+    // Apply a fast follow-ease to prevent a hard 1-frame snap when tracking begins
+    const smoothing = 0.15;
+    const smoothed = current
+      ? {
+          x: current.x + ((objectPosition.x - current.x) * smoothing),
+          y: current.y + ((objectPosition.y - current.y) * smoothing),
+        }
+      : objectPosition;
+
+    this._hoverVideoCropPositions.set(video, smoothed);
     video.style.objectPosition = this._formatObjectPosition(smoothed);
     
     let source = pathPoint ? 'data.path_data' : boxCandidate?.source ?? 'center';
