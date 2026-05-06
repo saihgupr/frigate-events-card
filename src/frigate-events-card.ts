@@ -12,7 +12,7 @@ const CARD_VERSION = '2.1.23';
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
 const FALLBACK_POLL_INTERVAL = 10000; // 10 seconds
-const HOVER_CROP_DEFAULT_SMOOTHING = 0.5; // 0.0 is jerky, 1.0 is smoothest
+const HOVER_CROP_DEFAULT_SMOOTHING = 1.0; // 0.0 is jerky, 1.0 is smoothest
 const HOVER_CROP_MARGIN_PERCENT = 0.20; // 20% margin on each side of the container
 
 

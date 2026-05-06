@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.1.23] - 2026-05-06
+- Changed: `tracking_smoothing` default value is now `1.0` (smoothest).
+
+## [2.1.22] - 2026-05-06
+- Refactored: Re-implemented `tracking_smoothing` with a true moving-average time window over raw Frigate keyframes to provide a stable, soft glide motion instead of a single-frame exponential moving average.
+
+## [2.1.21] - 2026-05-06
+- Changed: Mapped `tracking_smoothing` config value from an exponential scale to a 0.0 - 1.0 range, where 1.0 is smoothest and 0.0 is rigid.
+
 ## [2.1.20] - 2026-05-06
 - Documentation: Updated README with latest configuration options including `tracking_pan_delay` and `tracking_smoothing`.
 - Changed: `tracking_pan_delay` now uses milliseconds for finer control.
