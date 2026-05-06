@@ -121,9 +121,6 @@ video_on_hover: true
 | `cameras` | list | all | Filter to specific cameras |
 | `labels` | list | all | Filter to specific labels (person, car, etc.) |
 | `zones` | list | all | Filter to specific Frigate zones |
-| `show_label` | boolean | `true` | Show detection label |
-| `show_timestamp` | boolean | `true` | Show event time |
-| `show_camera` | boolean | `false` | Show camera name |
 | `video` | boolean | `false` | Whether to play video clips instead of snapshots in the gallery and modal. |
 | `video_on_hover` | boolean | `false` | Play video clips automatically when hovering over an event snapshot in the gallery. |
 | `video_start_skip_seconds` | number \| map | `0` | Number of seconds to skip from the beginning of video clips. Supports per-label/zone map. |
