@@ -7,7 +7,7 @@ import { HomeAssistant, LovelaceCardConfig } from './ha/types';
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, subscribeToEvents, getEventClipURL, getEventHlsURL } from './frigate/api';
 
-const CARD_VERSION = '2.1.25';
+const CARD_VERSION = '2.1.26';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -49,7 +49,7 @@ const DEFAULT_CONFIG: Partial<FrigateEventsCardConfig> = {
   show_camera: false,
   title: 'Frigate Events',
   video: false,
-  video_on_hover: false,
+  video_on_hover: true,
   offset: 0,
   reverse: false,
   video_start_skip_seconds: 0,

@@ -122,7 +122,7 @@ video_on_hover: true
 | `labels` | list | all | Filter to specific labels (person, car, etc.) |
 | `zones` | list | all | Filter to specific Frigate zones |
 | `video` | boolean | `false` | Whether to play video clips instead of snapshots in the gallery and modal. |
-| `video_on_hover` | boolean | `false` | Play video clips automatically when hovering over an event snapshot in the gallery. |
+| `video_on_hover` | boolean | `true` | Play video clips automatically when hovering over an event snapshot in the gallery. |
 | `video_start_skip_seconds` | number \| map | `0` | Number of seconds to skip from the beginning of video clips. Supports per-label/zone map. |
 | `video_end_skip_seconds` | number \| map | `0` | Number of seconds to skip from the end of video clips. Supports per-label/zone map. |
 | `tracking_pan_delay` | number \| map | `0` | Millisecond delay to synchronize video pan with object movement. Supports per-label/zone map (e.g., `person:front_door`). |

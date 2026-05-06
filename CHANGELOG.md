@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.26] - 2026-05-06
+- Changed: `video_on_hover` is now enabled (`true`) by default.
+- Documentation: Removed non-functional options `show_camera`, `show_label`, and `show_timestamp` from the README.
+
+## [2.1.25] - 2026-05-06
+- Added: Example configuration section in README for advanced tracking settings.
+
 ## [2.1.24] - 2026-05-06
 - Changed: Renamed `video_skip_seconds` configuration to `video_start_skip_seconds` for clarity.
 
