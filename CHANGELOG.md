@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.1.20] - 2026-05-06
+- Documentation: Updated README with latest configuration options including `tracking_pan_delay` and `tracking_smoothing`.
+- Changed: `tracking_pan_delay` now uses milliseconds for finer control.
+
 ## [2.1.19] - 2026-05-05
 - Fixed: Corrected tracking synchronization logic by accounting for `video_start_padding` and `video_skip_seconds`. Tracking data now aligns perfectly with video playback time.
 - Fixed: Resolved an issue where hierarchical configuration values (e.g., `car`, `person:front_driveway`) were not being correctly applied to video skip settings.

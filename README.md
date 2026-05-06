@@ -66,8 +66,20 @@ zones:
 # Optional: Video playback settings
 video: true
 video_on_hover: true
+
+# Optional: Video timing offsets (seconds or per-label/zone map)
 video_skip_seconds: 1
 video_end_skip_seconds: 2
+
+# Optional: Tracking synchronization (milliseconds or per-label/zone map)
+tracking_pan_delay:
+  car: -1500
+  person: -3000
+  person:front_door: 500
+  default: 0
+
+# Optional: Tracking smoothness (0.0 to 1.0)
+tracking_smoothing: 0.5
 
 # Optional: Layout overrides
 reverse: true
@@ -95,8 +107,10 @@ debug: true
 | `show_camera` | boolean | `false` | Show camera name |
 | `video` | boolean | `false` | Whether to play video clips instead of snapshots in the gallery and modal. |
 | `video_on_hover` | boolean | `false` | Play video clips automatically when hovering over an event snapshot in the gallery. |
-| `video_skip_seconds` | number | `0` | Number of seconds to skip from the beginning of video clips. |
-| `video_end_skip_seconds` | number | `0` | Number of seconds to skip from the end of video clips. |
+| `video_skip_seconds` | number \| map | `0` | Number of seconds to skip from the beginning of video clips. Supports per-label/zone map. |
+| `video_end_skip_seconds` | number \| map | `0` | Number of seconds to skip from the end of video clips. Supports per-label/zone map. |
+| `tracking_pan_delay` | number \| map | `0` | Millisecond delay to synchronize video pan with object movement. Supports per-label/zone map (e.g., `person:front_door`). |
+| `tracking_smoothing` | number | `0.08` | Smoothness of camera panning in hover previews (0.0 to 1.0). Higher values are more responsive. |
 | `reverse` | boolean | `false` | Reverses the rendering order of the timeline (events populate right-to-left instead of left-to-right). |
 | `offset` | number | `0` | Number of recent events to skip/hide from the start of the list. Useful for excluding the newest event if it's already shown in another card. |
 | `daily_clear_time` | string | none | Optional. Time to reset the display daily (24hr format, e.g., "04:00"). If set, events before this time are hidden and shown as grey placeholders. If omitted, no daily reset occurs. |
