@@ -92,6 +92,25 @@ daily_clear_time: "04:00"
 debug: true
 ```
 
+### Example: Advanced Tracking Configuration
+
+This example shows a real-world configuration for fine-tuning video clip endpoints and tracking synchronization based on detection labels.
+
+```yaml
+type: custom:frigate-events-card
+video_end_skip_seconds:
+  car: 3
+  person: 6
+  default: 2
+tracking_pan_delay:
+  car: -1500
+  person: -3000
+  default: 0
+video: true
+video_on_hover: true
+```
+
+
 ## Configuration Options
 
 | Option | Type | Default | Description |
