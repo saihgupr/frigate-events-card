@@ -3,7 +3,7 @@
 A simple Lovelace card for displaying recent Frigate detection events in a horizontal gallery
 
 ![Demo](images/snapshots/demo.gif)
-![Screenshot](https://github.com/saihgupr/frigate-events-card/blob/main/images/snapshots/screenshot_5.png)
+![Screenshot](https://github.com/saihgupr/frigate-events-card/blob/main/images/snapshots/screenshot_6.png)
 ![Screenshot](https://github.com/saihgupr/frigate-events-card/blob/main/images/snapshots/screenshot_3.png)
 ![Screenshot](https://github.com/saihgupr/frigate-events-card/blob/main/images/snapshots/screenshot_4.png)
 
