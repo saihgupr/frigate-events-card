@@ -1,4 +1,8 @@
 # Changelog
+ 
+## [Unreleased]
+- Improved compatibility with Home Assistant's new Sections view by implementing proper grid layout options and ensuring the card correctly spans full width.
+
 
 ## [2.1.26] - 2026-05-06
 - Changed: `video_on_hover` is now enabled (`true`) by default.

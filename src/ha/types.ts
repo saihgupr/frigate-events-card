@@ -23,8 +23,18 @@ export interface LovelaceCardConfig {
     [key: string]: unknown;
 }
 
+export interface LovelaceLayoutOptions {
+    grid_rows?: number;
+    grid_columns?: number;
+    grid_min_rows?: number;
+    grid_max_rows?: number;
+    grid_min_columns?: number;
+    grid_max_columns?: number;
+}
+
 export interface LovelaceCard extends HTMLElement {
     hass?: HomeAssistant;
     getCardSize(): number | Promise<number>;
     setConfig(config: LovelaceCardConfig): void;
+    getLayoutOptions?(): LovelaceLayoutOptions;
 }

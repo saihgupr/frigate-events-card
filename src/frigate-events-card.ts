@@ -3,7 +3,7 @@
  */
 import { LitElement, html, css, PropertyValues, TemplateResult, CSSResult } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
-import { HomeAssistant, LovelaceCardConfig } from './ha/types';
+import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/types';
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, subscribeToEvents, getEventClipURL, getEventHlsURL } from './frigate/api';
 
@@ -131,6 +131,13 @@ export class FrigateEventsCard extends LitElement {
 
   public getCardSize(): number {
     return 3;
+  }
+
+  public getLayoutOptions(): LovelaceLayoutOptions {
+    return {
+      grid_columns: 4,
+      grid_rows: 1,
+    };
   }
 
   protected async firstUpdated(): Promise<void> {
@@ -1039,6 +1046,7 @@ export class FrigateEventsCard extends LitElement {
         overflow: hidden;
         background: transparent;
         box-shadow: none;
+        width: 100%;
       }
 
       .content {
