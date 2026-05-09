@@ -1,0 +1,202 @@
+author:	saihgupr
+association:	owner
+edited:	false
+status:	none
+--
+I've implemented a fix for the libnvidia-ml.so.1 missing library error in the fix/nvidia-library-mapping branch. This version adds dynamic discovery and bind-mounting of host NVIDIA driver libraries into the LXC container. It also adds a host-side check to verify that drivers are correctly installed on the Proxmox host before starting the configuration.
+
+You can test it by running: `bash <(curl -s https://raw.githubusercontent.com/saihgupr/frigate-proxmox-script/fix/nvidia-library-mapping/install.sh)`
+--
+author:	timvdalen
+association:	none
+edited:	false
+status:	none
+--
+Thanks! I'll test this over the next few days when I get a moment to do so!
+--
+author:	timvdalen
+association:	none
+edited:	false
+status:	none
+--
+The script completes successfully now, but frigate doesn't seem to come up. I'll report back later when I have more time to debug!
+--
+author:	BornInThe50s
+association:	none
+edited:	true
+status:	none
+--
+I have the same issue with the [install script](https://raw.githubusercontent.com/saihgupr/frigate-proxmox-script/main/install.sh) error at the end, & the same issue in that the[ 'fix'](https://raw.githubusercontent.com/saihgupr/frigate-proxmox-script/fix/nvidia-library-mapping/install.sh) script installs successfully. But, although the LXC starts up, Frigate doesn't.
+
+Proxmox 9.1.7
+HP Proliant ML110 G6, 16gb, Xeon X3450
+Nvidia GTX 745 GPU (NVIDIA-Linux-x86_64-580.126.09.run installed on Proxmox)
+Latest Frigate per the script.
+
+I may be wrong, but it doesn't look like it's downloading/installing Docker or Frigate in the fix script?
+
+<img width="797" height="912" alt="Image" src="https://github.com/user-attachments/assets/1b465c15-224e-4dcb-81b2-2300ad5b42a3" />
+
+EDIT
+
+I've run the script twice now. On both attempts I couldn't access the Console or SSH even though I selected to enable SSH and provided a Root password? So I'm unable to access the LXC to see if Docker or Frigate are installed 🤷‍♂️
+--
+author:	saihgupr
+association:	owner
+edited:	false
+status:	none
+--
+Found the problem with the nvidia libs. It was only mapping the symlinks and not the actual library files into the container. I fixed it to resolve the links properly now. Give the fix/nvidia-lib-missing-issue30 branch a shot and see if it starts up.
+--
+author:	BornInThe50s
+association:	none
+edited:	false
+status:	none
+--
+Hi, Ive just tried the install script from here - [https://github.com/saihgupr/frigate-proxmox-script/tree/fix/nvidia-lib-missing-issue30]( https://github.com/saihgupr/frigate-proxmox-script/tree/fix/nvidia-lib-missing-issue30) - but it seems to point to the same install scripts as the main branch here - [https://github.com/saihgupr/frigate-proxmox-script](https://github.com/saihgupr/frigate-proxmox-script) 
+It errors with the original error
+
+<img width="1433" height="178" alt="Image" src="https://github.com/user-attachments/assets/71001d4c-f8c9-4581-817e-35436d9d7a7b" />
+
+I downloaded the 'install.sh' from [https://github.com/saihgupr/frigate-proxmox-script/tree/fix/nvidia-lib-missing-issue30]( https://github.com/saihgupr/frigate-proxmox-script/tree/fix/nvidia-lib-missing-issue30) to the Proxmox server and manually ran 'bash install.sh' - this is the error I got... 
+
+<img width="890" height="480" alt="Image" src="https://github.com/user-attachments/assets/e4394f93-0085-4cab-8e94-30903938b4f5" />
+--
+author:	saihgupr
+association:	owner
+edited:	false
+status:	none
+--
+Hey, thanks for the detailed logs. I found a couple of bugs here. First, there was a flaw in the hardware detection that caused the script to exit early if it didn't find a Google Coral.
+
+More importantly, for the NVIDIA error, I've updated the library mapping to be much more thorough. It now scans multiple system paths on the host and automatically updates the container's library cache (ldconfig) on startup.
+
+Give it a shot with the latest branch:
+`bash <(curl -s https://raw.githubusercontent.com/saihgupr/frigate-proxmox-script/fix/storage-pool-detection-issue26-34/install.sh)`
+
+Let me know if that clears up the 'libnvidia-ml.so.1' error!
+--
+author:	BornInThe50s
+association:	none
+edited:	false
+status:	none
+--
+Hi, I've given the latest script a go. I freshly reloaded another computer with Proxmox 9, updated it and installed the Coral drivers using this guide
+
+https://rovingclimber.com/2025/08/08/coral-tpu-driver-install-for-proxmox-9-0-debian-13/
+
+Nvidia drivers version NVIDIA-Linux-x86_64.-580.159.03.run (latest available for my humble GTX745) Rebooted and all the devices are present on the Proxmox host.
+
+<img width="616" height="257" alt="Image" src="https://github.com/user-attachments/assets/eb9d5f09-4897-4b67-ac50-2a233ecba51e" />
+
+The install script ran faultlessly, but didn't detect the Coral or Nvidia cards. It did detect - a Generic VAAPI - which is really interesting as this PC doesn't have a built in graphics card, and solely relies on the PCIe Nvidia GTX 745. Plus, Frigate couldn't find it to use it lol
+
+<img width="517" height="132" alt="Image" src="https://github.com/user-attachments/assets/c984276f-b02e-47d7-bc3b-5ff1dd46da01" />
+
+I'll give the script another go on my other PC when I have a few mins and get back to you as this maybe an issue with this particular pc...I've enclosed the log file, and nvidia-smi runs as expected.
+
+[frigate-install-20260430-124811.log](https://github.com/user-attachments/files/27242954/frigate-install-20260430-124811.log)
+
+
+--
+author:	BornInThe50s
+association:	none
+edited:	false
+status:	none
+--
+I used the script on my other computer with the NVidia GTX 745 in it. The script ran without issue, detected the Coral and NVidia card. Setup and checked passthrough. Installed the NVidia Container toolkit and rebooted Frigate 😊
+When I added a camera to Frigate, things went wrong. The Frigate .conf file has `ffmpeg:
+  hwaccel_args: preset-nvidia
+` in it. When I checked the Frigate log files, it had found and loaded the Coral, no GPU errors were logged apart from this. Which stops the camera from being streamed/recorded etc.
+
+`2026-05-02 12:30:09.971620450  [2026-05-02 12:30:09] watchdog.front_garden          ERROR   : The following ffmpeg logs include the last 100 lines prior to exit.
+2026-05-02 12:30:09.972084638  [2026-05-02 12:30:09] ffmpeg.front_garden.detect     ERROR   : [AVHWDeviceContext @ 0x62fafe365ac0] Cannot load libcuda.so.1
+2026-05-02 12:30:09.972415410  [2026-05-02 12:30:09] ffmpeg.front_garden.detect     ERROR   : [AVHWDeviceContext @ 0x62fafe365ac0] Could not dynamically load CUDA
+2026-05-02 12:30:09.972838243  [2026-05-02 12:30:09] ffmpeg.front_garden.detect     ERROR   : Device creation failed: -1.
+2026-05-02 12:30:09.973257833  [2026-05-02 12:30:09] ffmpeg.front_garden.detect     ERROR   : [vist#0:1/h264 @ 0x62fafe31e480] [dec:h264 @ 0x62fafe35e000] No device available for decoder: device type cuda needed for codec h264.
+2026-05-02 12:30:09.973619881  [2026-05-02 12:30:09] ffmpeg.front_garden.detect     ERROR   : [vist#0:1/h264 @ 0x62fafe31e480] [dec:h264 @ 0x62fafe35e000] Hardware device setup failed for decoder: Operation not permitted
+2026-05-02 12:30:09.973984289  [2026-05-02 12:30:09] ffmpeg.front_garden.detect     ERROR   : [vost#0:0/rawvideo @ 0x62fafe357a40] Error initializing a simple filtergraph
+2026-05-02 12:30:09.974365750  [2026-05-02 12:30:09] ffmpeg.front_garden.detect     ERROR   : Error opening output file pipe:.
+2026-05-02 12:30:09.974693969  [2026-05-02 12:30:09] ffmpeg.front_garden.detect     ERROR   : Error opening output files: Operation not permitted
+2026-05-02 12:30:09.975087194  [2026-05-02 12:30:09] watchdog.front_garden          INFO    : Restarting ffmpeg...
+`
+
+I checked my card is CUDA compatible with nvidia-smi
+
+<img width="940" height="402" alt="Image" src="https://github.com/user-attachments/assets/5c5a7cf9-bc34-4994-83d0-9562f20ff200" />
+
+This is the LXC .conf file
+
+`arch: amd64
+cores: 4
+features: nesting=1,keyctl=1,fuse=1
+hostname: frigate
+memory: 4096
+net0: name=eth0,bridge=vmbr0,hwaddr=BC:24:11:C9:EA:FC,ip=dhcp,type=veth
+onboot: 1
+ostype: debian
+parent: snapshot_20260502_110054
+rootfs: local-lvm:vm-102-disk-0,size=32G
+startup: order=1,up=30
+swap: 512
+timezone: host
+lxc.cgroup2.devices.allow: c 226:* rwm
+lxc.mount.entry: /dev/dri dev/dri none bind,optional,create=dir
+lxc.apparmor.profile: unconfined
+lxc.cgroup2.devices.allow: c 120:* rwm
+lxc.mount.entry: /dev/apex_0 dev/apex_0 none bind,optional,create=file
+lxc.cgroup2.devices.allow: c 195:* rwm
+lxc.cgroup2.devices.allow: c 508:* rwm
+lxc.cgroup2.devices.allow: c 511:* rwm
+lxc.mount.entry: /dev/nvidia0 dev/nvidia0 none bind,optional,create=file
+lxc.mount.entry: /dev/nvidiactl dev/nvidiactl none bind,optional,create=file
+lxc.mount.entry: /dev/nvidia-modeset dev/nvidia-modeset none bind,optional,create=file
+lxc.mount.entry: /dev/nvidia-uvm dev/nvidia-uvm none bind,optional,create=file
+lxc.mount.entry: /dev/nvidia-uvm-tools dev/nvidia-uvm-tools none bind,optional,create=file
+lxc.mount.entry: /lib/x86_64-linux-gnu/libnvidia-ml.so.1 lib/x86_64-linux-gnu/libnvidia-ml.so.1 none bind,optional,create=file
+lxc.mount.entry: /usr/lib/x86_64-linux-gnu/libnvidia-ml.so.580.126.09 usr/lib/x86_64-linux-gnu/libnvidia-ml.so.580.126.09 none bind,op>
+lxc.mount.entry: /usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1 usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1 none bind,optional,create=file
+lxc.mount.entry: /lib/x86_64-linux-gnu/libcuda.so.1 lib/x86_64-linux-gnu/libcuda.so.1 none bind,optional,create=file
+lxc.mount.entry: /usr/lib/x86_64-linux-gnu/libcuda.so.580.126.09 usr/lib/x86_64-linux-gnu/libcuda.so.580.126.09 none bind,optional,cre>
+lxc.mount.entry: /usr/lib/x86_64-linux-gnu/libcuda.so.1 usr/lib/x86_64-linux-gnu/libcuda.so.1 none bind,optional,create=file
+lxc.mount.entry: /lib/x86_64-linux-gnu/libnvidia-ptxjitcompiler.so.1 lib/x86_64-linux-gnu/libnvidia-ptxjitcompiler.so.1 none bind,opti>
+lxc.mount.entry: /usr/lib/x86_64-linux-gnu/libnvidia-ptxjitcompiler.so.580.126.09 usr/lib/x86_64-linux-gnu/libnvidia-ptxjitcompiler.so>
+lxc.mount.entry: /usr/lib/x86_64-linux-gnu/libnvidia-ptxjitcompiler.so.1 usr/lib/x86_64-linux-gnu/libnvidia-ptxjitcompiler.so.1 none b>
+lxc.mount.entry: /lib/x86_64-linux-gnu/libnvidia-allocator.so.1 lib/x86_64-linux-gnu/libnvidia-allocator.so.1 none bind,optional,creat>
+lxc.mount.entry: /usr/lib/x86_64-linux-gnu/libnvidia-allocator.so.580.126.09 usr/lib/x86_64-linux-gnu/libnvidia-allocator.so.580.126.0>
+lxc.mount.entry: /usr/lib/x86_64-linux-gnu/libnvidia-allocator.so.1 usr/lib/x86_64-linux-gnu/libnvidia-allocator.so.1 none bind,option>
+lxc.mount.entry: /lib/x86_64-linux-gnu/libnvidia-cfg.so.1 lib/x86_64-linux-gnu/libnvidia-cfg.so.1 none bind,optional,create=file
+lxc.mount.entry: /usr/lib/x86_64-linux-gnu/libnvidia-cfg.so.580.126.09 usr/lib/x86_64-linux-gnu/libnvidia-cfg.so.580.126.09 none bind,>
+lxc.mount.entry: /usr/lib/x86_64-linux-gnu/libnvidia-cfg.so.1 usr/lib/x86_64-linux-gnu/libnvidia-cfg.so.1 none bind,optional,create=fi>
+lxc.mount.entry: /lib/x86_64-linux-gnu/libnvidia-encode.so.1 lib/x86_64-linux-gnu/libnvidia-encode.so.1 none bind,optional,create=file
+lxc.mount.entry: /usr/lib/x86_64-linux-gnu/libnvidia-encode.so.580.126.09 usr/lib/x86_64-linux-gnu/libnvidia-encode.so.580.126.09 none>
+lxc.mount.entry: /usr/lib/x86_64-linux-gnu/libnvidia-encode.so.1 usr/lib/x86_64-linux-gnu/libnvidia-encode.so.1 none bind,optional,cre>
+lxc.mount.entry: /lib/x86_64-linux-gnu/libnvcuvid.so.1 lib/x86_64-linux-gnu/libnvcuvid.so.1 none bind,optional,create=file
+lxc.mount.entry: /usr/lib/x86_64-linux-gnu/libnvcuvid.so.580.126.09 usr/lib/x86_64-linux-gnu/libnvcuvid.so.580.126.09 none bind,option>
+lxc.mount.entry: /usr/lib/x86_64-linux-gnu/libnvcuvid.so.1 usr/lib/x86_64-linux-gnu/libnvcuvid.so.1 none bind,optional,create=file
+lxc.mount.entry: tmpfs dev/shm tmpfs rw,nosuid,nodev,create=dir,size=512M 0 0`
+
+Getting close 😉 libcuda.so.1 doesn't want to play nice.
+
+Oh, love what you've done with the Proxmox Notes section - very useful 👍Definately a Coffee in it if you manage to sort it out 😊
+--
+author:	saihgupr
+association:	owner
+edited:	false
+status:	none
+--
+I've pushed a fix to the `fix/nvidia-lib-missing-issue30` branch.
+
+It adds the missing `libnvidia-fatbinaryloader.so.1` and `libnvidia-rtcore.so.1` libraries and switches to dynamic detection for the device major numbers. This should fix the `libcuda` error and make the passthrough more reliable across different hosts.
+
+Let me know if that works!
+--
+author:	BornInThe50s
+association:	none
+edited:	false
+status:	none
+--
+Hi, I gave the install.sh a try using this link  - https://github.com/saihgupr/frigate-proxmox-script/blob/fix/nvidia-lib-missing-issue30/install.sh I copied the link off the install.sh, hope it's the correct one as it was last edited 8 hours ago.
+
+Unfortunately it errored with the Storage Pool issue in my previous post - https://github.com/saihgupr/frigate-proxmox-script/issues/30#issuecomment-4329242427
+--
