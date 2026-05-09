@@ -47,15 +47,15 @@ export function getEventSnapshotURL(
 /**
  * Get video clip URL for an event
  */
-export function getEventClipURL(clientId: string, eventId: string, camera: string): string {
-    return `/api/frigate/${encodeURIComponent(clientId)}/notifications/${encodeURIComponent(eventId)}/${encodeURIComponent(camera)}/clip.mp4`;
+export function getEventClipURL(clientId: string, eventId: string): string {
+    return `/api/frigate/${encodeURIComponent(clientId)}/notifications/${encodeURIComponent(eventId)}/clip.mp4`;
 }
 
 /**
  * Get HLS playlist URL for an event (Safari/iOS fallback)
  */
-export function getEventHlsURL(clientId: string, eventId: string, camera: string): string {
-    return `/api/frigate/${encodeURIComponent(clientId)}/notifications/${encodeURIComponent(eventId)}/${encodeURIComponent(camera)}/master.m3u8`;
+export function getEventHlsURL(clientId: string, eventId: string): string {
+    return `/api/frigate/${encodeURIComponent(clientId)}/notifications/${encodeURIComponent(eventId)}/master.m3u8`;
 }
 
 /**
