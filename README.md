@@ -15,6 +15,7 @@ A simple Lovelace card for displaying recent Frigate detection events in a horiz
 - **Rich Media**: High-quality snapshots with optional zooming.
 - **Video Playback**: Natively stream MP4 and HLS (`.m3u8`) event clips directly in your browser.
 - **Hover Previews**: Instantly play video clips when hovering over any event in the gallery.
+- **Scrollable Gallery**: Optional horizontal scroll mode with arrow navigation and hidden scrollbar for a clean, native feel.
 - **Customizable Layout**: Reverse the rendering order or offset the timeline to build the exact dashboard you want.
 - **Daily Reset**: Optional automated clearing for a fresh daily view.
 - **Interactive**: Detailed modal view with full event information.
@@ -90,6 +91,19 @@ daily_clear_time: "04:00"
 
 # Optional: Debugging
 debug: true
+```
+
+### Example: Scrollable Timeline
+
+This example creates a horizontally scrollable gallery showing 6 thumbnails at a time, loading up to 40 total events.
+
+```yaml
+type: custom:frigate-events-card
+frigate_client_id: frigate
+event_count: 6
+scroll: true
+scroll_limit: 40
+video_on_hover: true
 ```
 
 ### Example: Advanced Tracking Configuration

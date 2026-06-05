@@ -1,8 +1,12 @@
 # Changelog
  
 ## [Unreleased]
-- Added: Horizontal scrollability support for the timeline card with `scroll` and `scroll_limit` options, including hover-triggered navigation arrows on desktop.
-- Improved compatibility with Home Assistant's new Sections view by implementing proper grid layout options and ensuring the card correctly spans full width.
+
+## [2.1.31] - 2026-06-05
+- Added: Horizontal scrolling gallery mode via new `scroll` and `scroll_limit` config options. When enabled, `event_count` controls the number of visible thumbnails and hover-triggered navigation arrows appear on desktop.
+- Fixed: Scrollbar is now hidden on all browsers (WebKit and Firefox) in scroll mode for a clean, native-feeling gallery.
+- Fixed: Placeholder tile count no longer overflows the visible viewport in scroll mode, preventing excessive blank/black tiles at the end of the timeline.
+- Improved: Compatibility with Home Assistant's Sections view — the card now uses proper grid layout options and spans full width correctly.
 
 
 ## [2.1.26] - 2026-05-06
