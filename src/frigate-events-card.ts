@@ -39,6 +39,8 @@ interface FrigateEventsCardConfig extends LovelaceCardConfig {
   debug?: boolean;
   tracking_pan_delay?: number | Record<string, number>;
   tracking_smoothing?: number;
+  scroll?: boolean;
+  scroll_limit?: number;
 }
 
 const DEFAULT_CONFIG: Partial<FrigateEventsCardConfig> = {
@@ -56,6 +58,8 @@ const DEFAULT_CONFIG: Partial<FrigateEventsCardConfig> = {
   video_end_skip_seconds: 0,
   debug: false,
   tracking_smoothing: HOVER_CROP_DEFAULT_SMOOTHING,
+  scroll: false,
+  scroll_limit: 20,
 };
 
 // Label to icon mapping
@@ -214,9 +218,12 @@ export class FrigateEventsCard extends LitElement {
     this._error = undefined;
 
     try {
-      const eventCount = this._config.event_count || 5;
+      const isScroll = !!this._config.scroll;
+      const visibleCount = this._config.event_count || 5;
+      const scrollLimit = this._config.scroll_limit || 20;
+      const limit = isScroll ? scrollLimit : visibleCount;
       const offset = this._config.offset || 0;
-      const fetchLimit = eventCount + offset;
+      const fetchLimit = limit + offset;
 
       const events = await getEvents(this.hass, {
         instance_id: this._config.frigate_client_id,
@@ -944,7 +951,10 @@ export class FrigateEventsCard extends LitElement {
       return html`<ha-card>No configuration</ha-card>`;
     }
 
-    const eventCount = this._config.event_count || 5;
+    const isScroll = !!this._config.scroll;
+    const visibleCount = this._config.event_count || 5;
+    const scrollLimit = this._config.scroll_limit || 20;
+    const limit = isScroll ? scrollLimit : visibleCount;
 
     // Filter events based on daily clear time
     let visibleEvents = this._events;
@@ -955,8 +965,8 @@ export class FrigateEventsCard extends LitElement {
 
     // Limit to event count and calculate placeholders
     const offset = this._config.offset || 0;
-    const eventsToShow = visibleEvents.slice(offset, offset + eventCount);
-    const placeholderCount = eventCount - eventsToShow.length;
+    const eventsToShow = visibleEvents.slice(offset, offset + limit);
+    const placeholderCount = limit - eventsToShow.length;
 
     let renderedEvents = eventsToShow.map(event => this._renderEvent(event));
     let renderedPlaceholders = Array(placeholderCount).fill(0).map(() => html`<div class="placeholder"></div>`);
@@ -975,10 +985,16 @@ export class FrigateEventsCard extends LitElement {
         : this._error
           ? html``
           : html`
-                  <div class="events" style="--event-count: ${eventCount}">
-                    ${allItems}
-                  </div>
-                `}
+              <div class="events-container">
+                ${isScroll ? html`
+                  <button class="scroll-btn prev" @click=${() => this._scroll('left')}>◀</button>
+                  <button class="scroll-btn next" @click=${() => this._scroll('right')}>▶</button>
+                ` : ''}
+                <div class="events ${isScroll ? 'scrollable' : ''}" style="--visible-count: ${visibleCount}; --event-count: ${limit};">
+                  ${allItems}
+                </div>
+              </div>
+            `}
         </div>
       </ha-card>
     `;
@@ -1028,6 +1044,16 @@ export class FrigateEventsCard extends LitElement {
   }
 
 
+  private _scroll(direction: 'left' | 'right'): void {
+    const container = this.renderRoot.querySelector('.events');
+    if (!container) return;
+    const scrollAmount = container.clientWidth * 0.8;
+    container.scrollBy({
+      left: direction === 'left' ? -scrollAmount : scrollAmount,
+      behavior: 'smooth'
+    });
+  }
+
   private _capitalize(str: string): string {
     return str.charAt(0).toUpperCase() + str.slice(1);
   }
@@ -1057,10 +1083,92 @@ export class FrigateEventsCard extends LitElement {
         min-height: 80px;
       }
 
+      .events-container {
+        position: relative;
+        width: 100%;
+      }
+
+      .scroll-btn {
+        position: absolute;
+        top: 50%;
+        transform: translateY(-50%);
+        z-index: 10;
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        background: rgba(0, 0, 0, 0.5);
+        color: white;
+        border: none;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        opacity: 0;
+        transition: opacity 0.3s, background-color 0.2s, transform 0.2s;
+        backdrop-filter: blur(4px);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+      }
+
+      .scroll-btn.prev {
+        left: 8px;
+      }
+
+      .scroll-btn.next {
+        right: 8px;
+      }
+
+      .events-container:hover .scroll-btn {
+        opacity: 1;
+      }
+
+      .scroll-btn:hover {
+        background: rgba(0, 0, 0, 0.8);
+        transform: translateY(-50%) scale(1.1);
+      }
+
+      .scroll-btn:active {
+        transform: translateY(-50%) scale(0.95);
+      }
+
       .events {
         display: grid;
-        grid-template-columns: repeat(var(--event-count, 5), 1fr);
+        grid-template-columns: repeat(var(--visible-count, 5), 1fr);
         gap: 9px;
+      }
+
+      .events.scrollable {
+        display: flex;
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        overflow-y: hidden;
+        scroll-snap-type: x mandatory;
+        -webkit-overflow-scrolling: touch;
+        scroll-behavior: smooth;
+        grid-template-columns: none;
+      }
+
+      .events.scrollable::-webkit-scrollbar {
+        height: 4px;
+      }
+
+      .events.scrollable::-webkit-scrollbar-track {
+        background: transparent;
+      }
+
+      .events.scrollable::-webkit-scrollbar-thumb {
+        background: var(--scrollbar-thumb-color, rgba(255, 255, 255, 0.2));
+        border-radius: 4px;
+      }
+
+      .events.scrollable::-webkit-scrollbar-thumb:hover {
+        background: var(--scrollbar-thumb-hover-color, rgba(255, 255, 255, 0.4));
+      }
+
+      .events.scrollable .event,
+      .events.scrollable .placeholder {
+        flex: 0 0 calc((100% - (var(--visible-count, 5) - 1) * 9px) / var(--visible-count, 5));
+        scroll-snap-align: start;
+        box-sizing: border-box;
       }
 
       .event {

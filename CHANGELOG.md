@@ -1,6 +1,7 @@
 # Changelog
  
 ## [Unreleased]
+- Added: Horizontal scrollability support for the timeline card with `scroll` and `scroll_limit` options, including hover-triggered navigation arrows on desktop.
 - Improved compatibility with Home Assistant's new Sections view by implementing proper grid layout options and ensuring the card correctly spans full width.
 
 

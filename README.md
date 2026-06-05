@@ -116,7 +116,7 @@ video_on_hover: true
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `frigate_client_id` | string | `frigate` | Your Frigate instance ID |
-| `event_count` | number | `5` | Number of events to display |
+| `event_count` | number | `5` | Number of events to display. When `scroll` is enabled, this is the number of events visible at once in the viewport. |
 | `title` | string | `Frigate Events` | Card title |
 | `cameras` | list | all | Filter to specific cameras |
 | `labels` | list | all | Filter to specific labels (person, car, etc.) |
@@ -130,6 +130,8 @@ video_on_hover: true
 | `reverse` | boolean | `false` | Reverses the rendering order of the timeline (events populate right-to-left instead of left-to-right). |
 | `offset` | number | `0` | Number of recent events to skip/hide from the start of the list. Useful for excluding the newest event if it's already shown in another card. |
 | `daily_clear_time` | string | none | Optional. Time to reset the display daily (24hr format, e.g., "04:00"). If set, events before this time are hidden and shown as grey placeholders. If omitted, no daily reset occurs. |
+| `scroll` | boolean | `false` | Enable horizontal scrolling gallery. When enabled, `event_count` sets the visible thumbnail count at once. |
+| `scroll_limit` | number | `20` | Total number of events to load in the scrollable timeline. |
 | `debug` | boolean | `false` | Enable debug mode to display the current card version number above snapshots. |
 
 ## Requirements
