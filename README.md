@@ -145,6 +145,7 @@ video_on_hover: true
 | `offset` | number | `0` | Number of recent events to skip/hide from the start of the list. Useful for excluding the newest event if it's already shown in another card. |
 | `daily_clear_time` | string | none | Optional. Time to reset the display daily (24hr format, e.g., "04:00"). If set, events before this time are hidden and shown as grey placeholders. If omitted, no daily reset occurs. |
 | `scroll` | boolean | `false` | Enable horizontal scrolling gallery. When enabled, `event_count` sets the visible thumbnail count at once. |
+| `show_scroll_arrows` | boolean | `false` | Show previous/next navigation arrows over the scrollable gallery. Only applies when `scroll` is enabled. |
 | `scroll_limit` | number | `20` | Total number of events to load in the scrollable timeline. |
 | `debug` | boolean | `false` | Enable debug mode to display the current card version number above snapshots. |
 

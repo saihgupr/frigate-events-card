@@ -7,7 +7,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, subscribeToEvents, getEventClipURL, getEventHlsURL } from './frigate/api';
 
-const CARD_VERSION = '2.1.30';
+const CARD_VERSION = '2.1.32';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -41,6 +41,7 @@ interface FrigateEventsCardConfig extends LovelaceCardConfig {
   tracking_smoothing?: number;
   scroll?: boolean;
   scroll_limit?: number;
+  show_scroll_arrows?: boolean;
 }
 
 const DEFAULT_CONFIG: Partial<FrigateEventsCardConfig> = {
@@ -60,6 +61,7 @@ const DEFAULT_CONFIG: Partial<FrigateEventsCardConfig> = {
   tracking_smoothing: HOVER_CROP_DEFAULT_SMOOTHING,
   scroll: false,
   scroll_limit: 20,
+  show_scroll_arrows: false,
 };
 
 // Label to icon mapping
@@ -952,6 +954,7 @@ export class FrigateEventsCard extends LitElement {
     }
 
     const isScroll = !!this._config.scroll;
+    const showScrollArrows = isScroll && !!this._config.show_scroll_arrows;
     const visibleCount = this._config.event_count || 5;
     const scrollLimit = this._config.scroll_limit || 20;
     const limit = isScroll ? scrollLimit : visibleCount;
@@ -986,7 +989,7 @@ export class FrigateEventsCard extends LitElement {
           ? html``
           : html`
               <div class="events-container">
-                ${isScroll ? html`
+                ${showScrollArrows ? html`
                   <button class="scroll-btn prev" @click=${() => this._scroll('left')}>◀</button>
                   <button class="scroll-btn next" @click=${() => this._scroll('right')}>▶</button>
                 ` : ''}

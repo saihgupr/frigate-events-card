@@ -2,6 +2,9 @@
  
 ## [Unreleased]
 
+## [2.1.32] - 2026-06-09
+- Added: `show_scroll_arrows` config option (default: `false`) to control the visibility of navigation arrows in scroll mode.
+
 ## [2.1.31] - 2026-06-05
 - Added: Horizontal scrolling gallery mode via new `scroll` and `scroll_limit` config options. When enabled, `event_count` controls the number of visible thumbnails and hover-triggered navigation arrows appear on desktop.
 - Fixed: Scrollbar is now hidden on all browsers (WebKit and Firefox) in scroll mode for a clean, native-feeling gallery.
