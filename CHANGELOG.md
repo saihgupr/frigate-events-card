@@ -2,6 +2,9 @@
  
 ## [Unreleased]
 
+## [2.1.33] - 2026-06-09
+- Fixed: Resolved an issue in scroll mode where placeholder tiles (black boxes) would fill the entire scroll limit at the end of the scrollable list when using `daily_clear_time`.
+
 ## [2.1.32] - 2026-06-09
 - Added: `show_scroll_arrows` config option (default: `false`) to control the visibility of navigation arrows in scroll mode.
 
