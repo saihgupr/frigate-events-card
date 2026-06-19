@@ -7,7 +7,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, subscribeToEvents, getEventClipURL, getEventHlsURL } from './frigate/api';
 
-const CARD_VERSION = '2.1.34';
+const CARD_VERSION = '2.1.35';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -142,7 +142,6 @@ export class FrigateEventsCard extends LitElement {
   public getLayoutOptions(): LovelaceLayoutOptions {
     return {
       grid_columns: 4,
-      grid_rows: 1,
     };
   }
 
@@ -1139,6 +1138,7 @@ export class FrigateEventsCard extends LitElement {
         display: grid;
         grid-template-columns: repeat(var(--visible-count, 5), 1fr);
         gap: 9px;
+        align-items: start;
       }
 
       .events.scrollable {
@@ -1152,6 +1152,7 @@ export class FrigateEventsCard extends LitElement {
         grid-template-columns: none;
         -ms-overflow-style: none;
         scrollbar-width: none;
+        align-items: start;
       }
 
       .events.scrollable::-webkit-scrollbar {
