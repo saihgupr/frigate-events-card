@@ -7,7 +7,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, subscribeToEvents, getEventClipURL, getEventHlsURL } from './frigate/api';
 
-const CARD_VERSION = '2.1.44';
+const CARD_VERSION = '2.1.46';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -30,6 +30,7 @@ interface FrigateEventsCardConfig extends LovelaceCardConfig {
   show_date?: boolean;
   show_accuracy?: boolean;
   show_duration?: boolean;
+  show_description?: boolean;
   title?: string;
   daily_clear_time?: string; // Format: "HH:MM" (24-hour), e.g., "04:00"
   video?: boolean;
@@ -56,6 +57,7 @@ const DEFAULT_CONFIG: Partial<FrigateEventsCardConfig> = {
   show_date: false,
   show_accuracy: false,
   show_duration: true,
+  show_description: true,
   title: 'Frigate Events',
   video: false,
   video_on_hover: true,
@@ -573,6 +575,7 @@ export class FrigateEventsCard extends LitElement {
 
     const showDuration = this._config?.show_duration !== false;
     const showAccuracy = !!this._config?.show_accuracy;
+    const showDescription = this._config?.show_description !== false;
 
     // Build modal content html
     this._modalContainer.innerHTML = `
@@ -598,7 +601,7 @@ export class FrigateEventsCard extends LitElement {
               ${showAccuracy && scoreText ? `<div class="frigate-events-modal-score">${scoreText}</div>` : ''}
             </div>
             
-            ${event.description
+            ${showDescription && event.description
               ? `<div class="frigate-events-modal-info-center">
                    <div class="frigate-events-modal-description">${event.description}</div>
                  </div>`

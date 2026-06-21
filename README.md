@@ -169,6 +169,7 @@ The most common settings to get you started:
 | `show_date` | boolean | `false` | Show the date in the event details modal popup. |
 | `show_accuracy` | boolean | `false` | Show the detection accuracy score percentage in the details modal popup (placed below the camera name). |
 | `show_duration` | boolean | `true` | Show the event duration (e.g., `9s` or `Ongoing`) in the details modal popup. |
+| `show_description` | boolean | `true` | Show the GenAI event description (if available) in the details modal popup. |
 | `debug` | boolean | `false` | Enable debug mode to display the current card version number above snapshots. |
 
 </details>

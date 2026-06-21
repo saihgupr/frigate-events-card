@@ -1,5 +1,9 @@
 # Changelog
  
+## [2.1.46] - 2026-06-21
+- Added: `show_description` config option (default: `true`) to optionally toggle visibility of GenAI event descriptions in the details modal.
+- Improved: Reorganized the Configuration Options in the README into clean Basic and collapsible Advanced settings to make the list less daunting for new users.
+
 ## [2.1.44] - 2026-06-21
 - Changed: Moved the optional accuracy score (e.g. `96%`) to render on Line 3 in the left column (directly under `Wyze Camera`) instead of the right column.
 
