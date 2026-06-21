@@ -17,6 +17,7 @@ export interface FrigateEventData {
     snapshot?: FrigateSnapshotData | null;
     top_score?: number | null;
     score?: number | null;
+    description?: string | null;
 }
 
 export interface FrigateEvent {

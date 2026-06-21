@@ -7,7 +7,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, subscribeToEvents, getEventClipURL, getEventHlsURL } from './frigate/api';
 
-const CARD_VERSION = '2.1.53';
+const CARD_VERSION = '2.1.58';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -351,6 +351,8 @@ export class FrigateEventsCard extends LitElement {
 
       .frigate-events-modal-content {
         position: relative;
+        width: fit-content;
+        min-width: 450px;
         max-width: 90%;
         max-height: 90%;
         background: var(--card-background-color, #1c1c1c);
@@ -413,6 +415,9 @@ export class FrigateEventsCard extends LitElement {
         display: flex;
         flex-direction: column;
         gap: 12px;
+        width: 0;
+        min-width: 100%;
+        box-sizing: border-box;
       }
 
       .frigate-events-modal-info-top {
@@ -490,11 +495,35 @@ export class FrigateEventsCard extends LitElement {
         line-height: 1.2;
       }
 
+      .frigate-events-modal-description-row {
+        border-top: 1px solid var(--divider-color, rgba(255, 255, 255, 0.15));
+        padding-top: 12px;
+        margin-top: 4px;
+        width: 100%;
+        max-height: 90px;
+        overflow-y: auto;
+      }
+
+      .frigate-events-modal-description-row::-webkit-scrollbar {
+        width: 6px;
+      }
+      .frigate-events-modal-description-row::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      .frigate-events-modal-description-row::-webkit-scrollbar-thumb {
+        background-color: rgba(255, 255, 255, 0.15);
+        border-radius: 3px;
+      }
+      .frigate-events-modal-description-row::-webkit-scrollbar-thumb:hover {
+        background-color: rgba(255, 255, 255, 0.35);
+      }
+
       .frigate-events-modal-description {
         font-size: 13px;
-        line-height: 1.4;
+        line-height: 1.5;
         color: var(--primary-text-color, #e0e0e0);
         font-style: italic;
+        white-space: pre-wrap;
       }
     `;
     document.head.appendChild(style);
@@ -547,6 +576,8 @@ export class FrigateEventsCard extends LitElement {
   private _showModal(): void {
     if (!this._selectedEvent) return;
 
+    console.log('Frigate Events Card: event clicked =', this._selectedEvent);
+
     this._injectModalStyles();
     this._removeModal(); // Clean up any existing modal
 
@@ -590,11 +621,11 @@ export class FrigateEventsCard extends LitElement {
       <div class="frigate-events-modal-content">
         <div class="frigate-events-modal-image-container">
           ${showVideo
-            ? `<video autoplay muted controls playsinline style="width: 100%; height: auto; display: block;">
+            ? `<video autoplay muted controls playsinline>
                  <source src="${clipUrl}" type="video/mp4">
                  <source src="${hlsUrl}" type="application/x-mpegURL">
                </video>`
-            : `<img src="${snapshotUrl}" alt="${event.label}" style="width: 100%; height: auto; display: block;" />`
+            : `<img src="${snapshotUrl}" alt="${event.label}" />`
           }          <button class="frigate-events-modal-close">x</button>
         </div>
         <div class="frigate-events-modal-info">
@@ -612,19 +643,18 @@ export class FrigateEventsCard extends LitElement {
               ${showAccuracy && scoreText ? `<div class="frigate-events-modal-score">${scoreText}</div>` : ''}
             </div>
             
-            ${showDescription && event.description
-              ? `<div class="frigate-events-modal-info-center">
-                   <div class="frigate-events-modal-description">${event.description}</div>
-                 </div>`
-              : ''
-            }
-            
             <div class="frigate-events-modal-info-right">
               <div class="frigate-events-modal-time">${rightLine1}</div>
               ${showZones && zones ? `<div class="frigate-events-modal-zones">${zones}</div>` : ''}
               ${showDuration ? `<div class="frigate-events-modal-duration">${duration}</div>` : ''}
             </div>
           </div>
+          ${showDescription && (event.description || event.data?.description)
+            ? `<div class="frigate-events-modal-description-row">
+                 <div class="frigate-events-modal-description">${event.description || event.data?.description}</div>
+               </div>`
+            : ''
+          }
         </div>
       </div>
     `;
