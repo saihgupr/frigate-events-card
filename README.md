@@ -132,6 +132,7 @@ video_on_hover: true
 | `frigate_client_id` | string | `frigate` | Your Frigate instance ID |
 | `event_count` | number | `5` | Number of events to display. When `scroll` is enabled, this is the number of events visible at once in the viewport. |
 | `title` | string | `Frigate Events` | Card title |
+| `show_date` | boolean | `false` | Show the date in the event details modal popup. |
 | `cameras` | list | all | Filter to specific cameras |
 | `labels` | list | all | Filter to specific labels (person, car, etc.) |
 | `zones` | list | all | Filter to specific Frigate zones |

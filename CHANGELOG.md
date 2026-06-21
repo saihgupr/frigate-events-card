@@ -1,6 +1,12 @@
 # Changelog
  
-## [Unreleased]
+## [2.1.38] - 2026-06-21
+- Added: `show_date` option (default `false`) to toggle date visibility in details modal.
+- Fixed: Extracted detection score from `data.top_score` and `data.score` objects to resolve missing accuracy percentages in modern Frigate versions.
+- Improved: Enforced hour formatting without leading zeroes (e.g. `5:35:54 PM`) and capitalized AM/PM string in event details modal.
+
+## [2.1.37] - 2026-06-21
+- Added: Display event date, detection score badge, and AI-generated description (if available) inside the event details modal popup.
 
 ## [2.1.34] - 2026-06-09
 - Fixed: Completely hid the scrollbar in scrollable gallery mode for all modern browsers.

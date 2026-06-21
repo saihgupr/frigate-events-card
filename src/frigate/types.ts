@@ -15,6 +15,8 @@ export interface FrigateEventData {
     region?: FrigateBoundingBox;
     path_data?: FrigatePathPoint[];
     snapshot?: FrigateSnapshotData | null;
+    top_score?: number | null;
+    score?: number | null;
 }
 
 export interface FrigateEvent {
@@ -32,6 +34,7 @@ export interface FrigateEvent {
     box?: FrigateBoundingBox;
     region?: FrigateBoundingBox;
     data?: FrigateEventData | null;
+    description?: string | null;
 }
 
 export interface FrigateEventChange {
