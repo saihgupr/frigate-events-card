@@ -127,30 +127,52 @@ video_on_hover: true
 
 ## Configuration Options
 
+### Basic Settings
+
+The most common settings to get you started:
+
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `frigate_client_id` | string | `frigate` | Your Frigate instance ID |
-| `event_count` | number | `5` | Number of events to display. When `scroll` is enabled, this is the number of events visible at once in the viewport. |
 | `title` | string | `Frigate Events` | Card title |
-| `show_date` | boolean | `false` | Show the date in the event details modal popup. |
-| `show_accuracy` | boolean | `false` | Show the detection accuracy score percentage in the details modal popup (placed below duration). |
-| `show_duration` | boolean | `true` | Show the event duration (e.g., `9s` or `Ongoing`) in the details modal popup. |
+| `event_count` | number | `5` | Number of events to display. When `scroll` is enabled, this is the number of events visible at once in the viewport. |
 | `cameras` | list | all | Filter to specific cameras |
 | `labels` | list | all | Filter to specific labels (person, car, etc.) |
 | `zones` | list | all | Filter to specific Frigate zones |
 | `video` | boolean | `false` | Whether to play video clips instead of snapshots in the gallery and modal. |
 | `video_on_hover` | boolean | `true` | Play video clips automatically when hovering over an event snapshot in the gallery. |
+| `scroll` | boolean | `false` | Enable horizontal scrolling gallery. When enabled, `event_count` sets the visible thumbnail count at once. |
+
+<details>
+<summary><strong>Advanced Settings</strong> (Click to expand)</summary>
+
+### Advanced Video & Tracking Settings
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
 | `video_start_skip_seconds` | number \| map | `0` | Number of seconds to skip from the beginning of video clips. Supports per-label/zone map. |
 | `video_end_skip_seconds` | number \| map | `0` | Number of seconds to skip from the end of video clips. Supports per-label/zone map. |
 | `tracking_pan_delay` | number \| map | `0` | Millisecond delay to synchronize video pan with object movement. Supports per-label/zone map (e.g., `person:front_door`). |
 | `tracking_smoothing` | number | `1.0` | Smoothness of camera panning in hover previews (0.0 to 1.0). 1.0 uses a wide time window for a soft glide, 0.0 is an instant rigid snap. |
-| `reverse` | boolean | `false` | Reverses the rendering order of the timeline (events populate right-to-left instead of left-to-right). |
-| `offset` | number | `0` | Number of recent events to skip/hide from the start of the list. Useful for excluding the newest event if it's already shown in another card. |
-| `daily_clear_time` | string | none | Optional. Time to reset the display daily (24hr format, e.g., "04:00"). If set, events before this time are hidden and shown as grey placeholders. If omitted, no daily reset occurs. |
-| `scroll` | boolean | `false` | Enable horizontal scrolling gallery. When enabled, `event_count` sets the visible thumbnail count at once. |
+
+### Advanced Layout & Timeline Settings
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
 | `show_scroll_arrows` | boolean | `false` | Show previous/next navigation arrows over the scrollable gallery. Only applies when `scroll` is enabled. |
 | `scroll_limit` | number | `20` | Total number of events to load in the scrollable timeline. |
+| `reverse` | boolean | `false` | Reverses the rendering order of the timeline (events populate right-to-left instead of left-to-right). |
+| `offset` | number | `0` | Number of recent events to skip/hide from the start of the list. Useful for excluding the newest event if it's already shown in another card. |
+| `daily_clear_time` | string | none | Optional. Time to reset the display daily (24hr format, e.g., "04:00"). If set, events before this time are hidden and shown as grey placeholders. |
+
+### Advanced Detail Modal & Debug Settings
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `show_date` | boolean | `false` | Show the date in the event details modal popup. |
+| `show_accuracy` | boolean | `false` | Show the detection accuracy score percentage in the details modal popup (placed below the camera name). |
+| `show_duration` | boolean | `true` | Show the event duration (e.g., `9s` or `Ongoing`) in the details modal popup. |
 | `debug` | boolean | `false` | Enable debug mode to display the current card version number above snapshots. |
+
+</details>
+
 
 ## Requirements
 
