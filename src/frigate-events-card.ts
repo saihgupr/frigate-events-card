@@ -7,7 +7,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, subscribeToEvents, getEventClipURL, getEventHlsURL } from './frigate/api';
 
-const CARD_VERSION = '2.1.42';
+const CARD_VERSION = '2.1.44';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -427,11 +427,23 @@ export class FrigateEventsCard extends LitElement {
         flex: 1;
       }
 
+      .frigate-events-modal-info-center {
+        display: flex;
+        flex: 2;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        min-width: 0;
+        padding: 0 16px;
+        align-self: center;
+      }
+
       .frigate-events-modal-info-right {
         display: flex;
         flex-direction: column;
         align-items: flex-end;
         gap: 4px;
+        flex: 1;
         flex-shrink: 0;
         text-align: right;
       }
@@ -472,11 +484,8 @@ export class FrigateEventsCard extends LitElement {
 
       .frigate-events-modal-description {
         font-size: 13px;
-        line-height: 1.45;
+        line-height: 1.4;
         color: var(--primary-text-color, #e0e0e0);
-        padding-top: 10px;
-        border-top: 1px solid rgba(255, 255, 255, 0.08);
-        margin-top: 4px;
         font-style: italic;
       }
     `;
@@ -586,18 +595,22 @@ export class FrigateEventsCard extends LitElement {
               <div class="frigate-events-modal-camera">
                 ${this._formatCameraName(event.camera)}
               </div>
+              ${showAccuracy && scoreText ? `<div class="frigate-events-modal-score">${scoreText}</div>` : ''}
             </div>
+            
+            ${event.description
+              ? `<div class="frigate-events-modal-info-center">
+                   <div class="frigate-events-modal-description">${event.description}</div>
+                 </div>`
+              : ''
+            }
+            
             <div class="frigate-events-modal-info-right">
               <div class="frigate-events-modal-time">${rightLine1}</div>
               ${zones ? `<div class="frigate-events-modal-zones">${zones}</div>` : ''}
               ${showDuration ? `<div class="frigate-events-modal-duration">${duration}</div>` : ''}
-              ${showAccuracy && scoreText ? `<div class="frigate-events-modal-score">${scoreText}</div>` : ''}
             </div>
           </div>
-          ${event.description
-            ? `<div class="frigate-events-modal-description">${event.description}</div>`
-            : ''
-          }
         </div>
       </div>
     `;

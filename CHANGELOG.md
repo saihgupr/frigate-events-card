@@ -1,5 +1,12 @@
 # Changelog
  
+## [2.1.44] - 2026-06-21
+- Changed: Moved the optional accuracy score (e.g. `96%`) to render on Line 3 in the left column (directly under `Wyze Camera`) instead of the right column.
+
+## [2.1.43] - 2026-06-21
+- Changed: Moved the AI-generated description to the center area of the bottom metadata bar (between left and right metadata blocks).
+- Improved: Center-aligned the description text and styled it to automatically wrap to multiple lines for a highly integrated look.
+
 ## [2.1.42] - 2026-06-21
 - Improved: Increased font sizes of the object label (`24px`) and event time (`20px`) inside details modal for better visual prominence.
 - Added: `show_accuracy` option (default `false`) to toggle rendering of accuracy score; when enabled, score is shown on the right side below the duration line.
