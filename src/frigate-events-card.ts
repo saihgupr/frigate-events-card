@@ -7,7 +7,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, subscribeToEvents, getEventClipURL, getEventHlsURL } from './frigate/api';
 
-const CARD_VERSION = '2.1.38';
+const CARD_VERSION = '2.1.42';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -28,6 +28,8 @@ interface FrigateEventsCardConfig extends LovelaceCardConfig {
   show_timestamp?: boolean;
   show_camera?: boolean;
   show_date?: boolean;
+  show_accuracy?: boolean;
+  show_duration?: boolean;
   title?: string;
   daily_clear_time?: string; // Format: "HH:MM" (24-hour), e.g., "04:00"
   video?: boolean;
@@ -52,6 +54,8 @@ const DEFAULT_CONFIG: Partial<FrigateEventsCardConfig> = {
   show_timestamp: true,
   show_camera: false,
   show_date: false,
+  show_accuracy: false,
+  show_duration: true,
   title: 'Frigate Events',
   video: false,
   video_on_hover: true,
@@ -412,75 +416,66 @@ export class FrigateEventsCard extends LitElement {
         justify-content: space-between;
         align-items: flex-start;
         gap: 16px;
+        width: 100%;
       }
 
       .frigate-events-modal-info-left {
-        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
         min-width: 0;
+        flex: 1;
       }
 
       .frigate-events-modal-info-right {
-        text-align: right;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 4px;
         flex-shrink: 0;
+        text-align: right;
       }
 
       .frigate-events-modal-label {
-        font-size: 20px;
+        font-size: 24px;
         font-weight: 600;
         color: var(--primary-text-color, #fff);
         margin-bottom: 2px;
       }
 
-      .frigate-events-modal-score {
-        font-size: 14px;
-        font-weight: 500;
-        color: var(--secondary-text-color, #aaa);
-        margin-left: 8px;
-        background: var(--secondary-background-color, rgba(255, 255, 255, 0.1));
-        padding: 2px 6px;
-        border-radius: 4px;
-        vertical-align: middle;
-      }
-
       .frigate-events-modal-camera {
-        font-size: 14px;
+        font-size: 13px;
         color: var(--secondary-text-color, #aaa);
-      }
-
-      .frigate-events-modal-date {
-        font-size: 14px;
-        color: var(--primary-text-color, #fff);
-        font-weight: 500;
-        margin-bottom: 2px;
       }
 
       .frigate-events-modal-time {
-        font-size: 14px;
-        color: var(--primary-text-color, #fff);
+        font-size: 20px;
         font-weight: 500;
-        margin-bottom: 2px;
+        color: var(--primary-text-color, #fff);
+        line-height: 1.2;
+      }
+
+      .frigate-events-modal-zones {
+        font-size: 13px;
+        color: var(--secondary-text-color, #aaa);
       }
 
       .frigate-events-modal-duration {
         font-size: 13px;
         color: var(--secondary-text-color, #aaa);
-        margin-bottom: 2px;
       }
 
-      .frigate-events-modal-zones {
-        font-size: 12px;
+      .frigate-events-modal-score {
+        font-size: 13px;
         color: var(--secondary-text-color, #aaa);
-        opacity: 0.8;
       }
 
       .frigate-events-modal-description {
-        font-size: 13.5px;
+        font-size: 13px;
         line-height: 1.45;
         color: var(--primary-text-color, #e0e0e0);
-        background: rgba(255, 255, 255, 0.04);
-        padding: 12px;
-        border-radius: 8px;
-        border-left: 3px solid var(--accent-color, var(--primary-color, #3b82f6));
+        padding-top: 10px;
+        border-top: 1px solid rgba(255, 255, 255, 0.08);
         margin-top: 4px;
         font-style: italic;
       }
@@ -559,9 +554,16 @@ export class FrigateEventsCard extends LitElement {
     const hlsUrl = getEventHlsURL(clientId, event.id) + timeParam;
 
     const topScore = event.data?.top_score ?? event.top_score ?? event.data?.score;
-    const scoreBadge = topScore !== undefined && topScore !== null
-      ? `<span class="frigate-events-modal-score">${Math.round(topScore * 100)}%</span>`
+    const scoreText = topScore !== undefined && topScore !== null
+      ? `${Math.round(topScore * 100)}%`
       : '';
+
+    const timeStr = this._formatTime(event.start_time);
+    const dateStr = this._config?.show_date ? `${this._formatDate(event.start_time)} · ` : '';
+    const rightLine1 = `${dateStr}${timeStr}`;
+
+    const showDuration = this._config?.show_duration !== false;
+    const showAccuracy = !!this._config?.show_accuracy;
 
     // Build modal content html
     this._modalContainer.innerHTML = `
@@ -578,17 +580,18 @@ export class FrigateEventsCard extends LitElement {
         <div class="frigate-events-modal-info">
           <div class="frigate-events-modal-info-top">
             <div class="frigate-events-modal-info-left">
-              <div class="frigate-events-modal-label">${this._capitalize(event.label)} ${scoreBadge}</div>
-              <div class="frigate-events-modal-camera">${this._formatCameraName(event.camera)}</div>
+              <div class="frigate-events-modal-label">
+                ${this._capitalize(event.label)}
+              </div>
+              <div class="frigate-events-modal-camera">
+                ${this._formatCameraName(event.camera)}
+              </div>
             </div>
             <div class="frigate-events-modal-info-right">
-              ${this._config?.show_date
-                ? `<div class="frigate-events-modal-date">${this._formatDate(event.start_time)}</div>`
-                : ''
-              }
-              <div class="frigate-events-modal-time">${this._formatTime(event.start_time)}</div>
-              <div class="frigate-events-modal-duration">${duration}</div>
+              <div class="frigate-events-modal-time">${rightLine1}</div>
               ${zones ? `<div class="frigate-events-modal-zones">${zones}</div>` : ''}
+              ${showDuration ? `<div class="frigate-events-modal-duration">${duration}</div>` : ''}
+              ${showAccuracy && scoreText ? `<div class="frigate-events-modal-score">${scoreText}</div>` : ''}
             </div>
           </div>
           ${event.description

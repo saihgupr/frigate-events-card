@@ -1,5 +1,24 @@
 # Changelog
  
+## [2.1.42] - 2026-06-21
+- Improved: Increased font sizes of the object label (`24px`) and event time (`20px`) inside details modal for better visual prominence.
+- Added: `show_accuracy` option (default `false`) to toggle rendering of accuracy score; when enabled, score is shown on the right side below the duration line.
+- Added: `show_duration` option (default `true`) to toggle rendering of event duration (e.g. `9s` or `Ongoing`) on the right side.
+
+## [2.1.41] - 2026-06-21
+- Changed: Moved the detection accuracy percentage to the camera line (e.g. `Wyze Camera · 96%`) for a cleaner top-level header.
+- Improved: Positioned the duration (e.g. `9s`) to be displayed clearly below the locations line.
+
+## [2.1.40] - 2026-06-21
+- Changed: Completely redesigned the details modal metadata section with a clean, text-only minimal layout.
+- Removed: Emojis, borders, and background chip elements to prevent an over-designed "AI look".
+- Improved: Unified layout into two baseline-aligned rows, utilizing middle dot (`·`) dividers for secondary inline metadata (e.g. `9s · Front A, Front B`).
+
+## [2.1.39] - 2026-06-21
+- Improved: Redesigned the event details modal metadata panel layout using a clean, modern grid.
+- Added: Rounded chip badges with modern border borders/backgrounds for Time, Date, and Duration metrics.
+- Added: Integrated category icons (📹 for Camera, 📍 for Zones) to enhance readability and visual alignment.
+
 ## [2.1.38] - 2026-06-21
 - Added: `show_date` option (default `false`) to toggle date visibility in details modal.
 - Fixed: Extracted detection score from `data.top_score` and `data.score` objects to resolve missing accuracy percentages in modern Frigate versions.

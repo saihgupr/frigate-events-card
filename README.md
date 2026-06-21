@@ -133,6 +133,8 @@ video_on_hover: true
 | `event_count` | number | `5` | Number of events to display. When `scroll` is enabled, this is the number of events visible at once in the viewport. |
 | `title` | string | `Frigate Events` | Card title |
 | `show_date` | boolean | `false` | Show the date in the event details modal popup. |
+| `show_accuracy` | boolean | `false` | Show the detection accuracy score percentage in the details modal popup (placed below duration). |
+| `show_duration` | boolean | `true` | Show the event duration (e.g., `9s` or `Ongoing`) in the details modal popup. |
 | `cameras` | list | all | Filter to specific cameras |
 | `labels` | list | all | Filter to specific labels (person, car, etc.) |
 | `zones` | list | all | Filter to specific Frigate zones |
