@@ -7,7 +7,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, subscribeToEvents, getEventClipURL, getEventHlsURL } from './frigate/api';
 
-const CARD_VERSION = '2.1.50';
+const CARD_VERSION = '2.1.53';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -56,12 +56,12 @@ const DEFAULT_CONFIG: Partial<FrigateEventsCardConfig> = {
   show_timestamp: true,
   show_date: false,
   show_accuracy: false,
-  show_duration: true,
+  show_duration: false,
   show_description: true,
   show_camera_name: true,
   show_zones: true,
   title: 'Frigate Events',
-  video: false,
+  video: true,
   video_on_hover: true,
   offset: 0,
   reverse: false,
@@ -69,7 +69,7 @@ const DEFAULT_CONFIG: Partial<FrigateEventsCardConfig> = {
   video_end_skip_seconds: 0,
   debug: false,
   tracking_smoothing: HOVER_CROP_DEFAULT_SMOOTHING,
-  scroll: false,
+  scroll: true,
   scroll_limit: 20,
   show_scroll_arrows: false,
 };
@@ -579,7 +579,7 @@ export class FrigateEventsCard extends LitElement {
     const dateStr = this._config?.show_date ? `${this._formatDate(event.start_time)} · ` : '';
     const rightLine1 = `${dateStr}${timeStr}`;
 
-    const showDuration = this._config?.show_duration !== false;
+    const showDuration = !!this._config?.show_duration;
     const showAccuracy = !!this._config?.show_accuracy;
     const showDescription = this._config?.show_description !== false;
     const showCameraName = this._config?.show_camera_name !== false;

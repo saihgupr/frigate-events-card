@@ -1,5 +1,14 @@
 # Changelog
  
+## [2.1.53] - 2026-06-21
+- Changed: Enabled video clip playback by default (`video: true`).
+
+## [2.1.52] - 2026-06-21
+- Changed: Enabled show_duration by default to `false` in details modal config.
+
+## [2.1.51] - 2026-06-21
+- Changed: Enabled horizontal gallery scroll mode by default (`scroll: true`).
+
 ## [2.1.50] - 2026-06-21
 - Improved: Adjusted details modal font size for both object label and event time to match at `20px` (using the time element as the guide).
 

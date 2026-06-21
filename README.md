@@ -139,9 +139,9 @@ The most common settings to get you started:
 | `cameras` | list | all | Filter to specific cameras |
 | `labels` | list | all | Filter to specific labels (person, car, etc.) |
 | `zones` | list | all | Filter to specific Frigate zones |
-| `video` | boolean | `false` | Whether to play video clips instead of snapshots in the gallery and modal. |
+| `video` | boolean | `true` | Whether to play video clips instead of snapshots in the gallery and modal. |
 | `video_on_hover` | boolean | `true` | Play video clips automatically when hovering over an event snapshot in the gallery. |
-| `scroll` | boolean | `false` | Enable horizontal scrolling gallery. When enabled, `event_count` sets the visible thumbnail count at once. |
+| `scroll` | boolean | `true` | Enable horizontal scrolling gallery. When enabled, `event_count` sets the visible thumbnail count at once. |
 
 <details>
 <summary><strong>Advanced Settings</strong> (Click to expand)</summary>
@@ -168,7 +168,7 @@ The most common settings to get you started:
 |--------|------|---------|-------------|
 | `show_date` | boolean | `false` | Show the date in the event details modal popup. |
 | `show_accuracy` | boolean | `false` | Show the detection accuracy score percentage in the details modal popup (placed below the camera name). |
-| `show_duration` | boolean | `true` | Show the event duration (e.g., `9s` or `Ongoing`) in the details modal popup. |
+| `show_duration` | boolean | `false` | Show the event duration (e.g., `9s` or `Ongoing`) in the details modal popup. |
 | `show_description` | boolean | `true` | Show the GenAI event description (if available) in the details modal popup. |
 | `show_camera_name` | boolean | `true` | Show the camera name in the event details modal popup. |
 | `show_zones` | boolean | `true` | Show the physical zones (locations) in the event details modal popup. |
