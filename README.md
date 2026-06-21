@@ -170,6 +170,8 @@ The most common settings to get you started:
 | `show_accuracy` | boolean | `false` | Show the detection accuracy score percentage in the details modal popup (placed below the camera name). |
 | `show_duration` | boolean | `true` | Show the event duration (e.g., `9s` or `Ongoing`) in the details modal popup. |
 | `show_description` | boolean | `true` | Show the GenAI event description (if available) in the details modal popup. |
+| `show_camera_name` | boolean | `true` | Show the camera name in the event details modal popup. |
+| `show_zones` | boolean | `true` | Show the physical zones (locations) in the event details modal popup. |
 | `debug` | boolean | `false` | Enable debug mode to display the current card version number above snapshots. |
 
 </details>

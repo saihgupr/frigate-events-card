@@ -1,5 +1,17 @@
 # Changelog
  
+## [2.1.50] - 2026-06-21
+- Improved: Adjusted details modal font size for both object label and event time to match at `20px` (using the time element as the guide).
+
+## [2.1.49] - 2026-06-21
+- Improved: Adjusted event time font size to `24px` in the details modal, matching the object label's font size on the left.
+
+## [2.1.48] - 2026-06-21
+- Added: `show_camera_name` (default: `true`) and `show_zones` (default: `true`) configuration options to allow optionally hiding the camera name and physical zones (locations) in the details modal.
+
+## [2.1.47] - 2026-06-21
+- Improved: Matched line spacing of the left column (label, camera, and accuracy) in the details modal with the right column (time, zones, and duration) by removing margin-bottom and applying a uniform line-height of 1.2 across all metadata elements.
+
 ## [2.1.46] - 2026-06-21
 - Added: `show_description` config option (default: `true`) to optionally toggle visibility of GenAI event descriptions in the details modal.
 - Improved: Reorganized the Configuration Options in the README into clean Basic and collapsible Advanced settings to make the list less daunting for new users.

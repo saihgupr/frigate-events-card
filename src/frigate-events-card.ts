@@ -7,7 +7,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, subscribeToEvents, getEventClipURL, getEventHlsURL } from './frigate/api';
 
-const CARD_VERSION = '2.1.46';
+const CARD_VERSION = '2.1.50';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -26,11 +26,12 @@ interface FrigateEventsCardConfig extends LovelaceCardConfig {
   zones?: string[];
   show_label?: boolean;
   show_timestamp?: boolean;
-  show_camera?: boolean;
   show_date?: boolean;
   show_accuracy?: boolean;
   show_duration?: boolean;
   show_description?: boolean;
+  show_camera_name?: boolean;
+  show_zones?: boolean;
   title?: string;
   daily_clear_time?: string; // Format: "HH:MM" (24-hour), e.g., "04:00"
   video?: boolean;
@@ -53,11 +54,12 @@ const DEFAULT_CONFIG: Partial<FrigateEventsCardConfig> = {
   event_count: 5,
   show_label: true,
   show_timestamp: true,
-  show_camera: false,
   show_date: false,
   show_accuracy: false,
   show_duration: true,
   show_description: true,
+  show_camera_name: true,
+  show_zones: true,
   title: 'Frigate Events',
   video: false,
   video_on_hover: true,
@@ -451,15 +453,16 @@ export class FrigateEventsCard extends LitElement {
       }
 
       .frigate-events-modal-label {
-        font-size: 24px;
+        font-size: 20px;
         font-weight: 600;
         color: var(--primary-text-color, #fff);
-        margin-bottom: 2px;
+        line-height: 1.2;
       }
 
       .frigate-events-modal-camera {
         font-size: 13px;
         color: var(--secondary-text-color, #aaa);
+        line-height: 1.2;
       }
 
       .frigate-events-modal-time {
@@ -472,16 +475,19 @@ export class FrigateEventsCard extends LitElement {
       .frigate-events-modal-zones {
         font-size: 13px;
         color: var(--secondary-text-color, #aaa);
+        line-height: 1.2;
       }
 
       .frigate-events-modal-duration {
         font-size: 13px;
         color: var(--secondary-text-color, #aaa);
+        line-height: 1.2;
       }
 
       .frigate-events-modal-score {
         font-size: 13px;
         color: var(--secondary-text-color, #aaa);
+        line-height: 1.2;
       }
 
       .frigate-events-modal-description {
@@ -576,6 +582,8 @@ export class FrigateEventsCard extends LitElement {
     const showDuration = this._config?.show_duration !== false;
     const showAccuracy = !!this._config?.show_accuracy;
     const showDescription = this._config?.show_description !== false;
+    const showCameraName = this._config?.show_camera_name !== false;
+    const showZones = this._config?.show_zones !== false;
 
     // Build modal content html
     this._modalContainer.innerHTML = `
@@ -595,9 +603,12 @@ export class FrigateEventsCard extends LitElement {
               <div class="frigate-events-modal-label">
                 ${this._capitalize(event.label)}
               </div>
-              <div class="frigate-events-modal-camera">
-                ${this._formatCameraName(event.camera)}
-              </div>
+              ${showCameraName
+                ? `<div class="frigate-events-modal-camera">
+                     ${this._formatCameraName(event.camera)}
+                   </div>`
+                : ''
+              }
               ${showAccuracy && scoreText ? `<div class="frigate-events-modal-score">${scoreText}</div>` : ''}
             </div>
             
@@ -610,7 +621,7 @@ export class FrigateEventsCard extends LitElement {
             
             <div class="frigate-events-modal-info-right">
               <div class="frigate-events-modal-time">${rightLine1}</div>
-              ${zones ? `<div class="frigate-events-modal-zones">${zones}</div>` : ''}
+              ${showZones && zones ? `<div class="frigate-events-modal-zones">${zones}</div>` : ''}
               ${showDuration ? `<div class="frigate-events-modal-duration">${duration}</div>` : ''}
             </div>
           </div>
