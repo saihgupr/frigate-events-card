@@ -28,17 +28,18 @@ export function getEventThumbnailURL(clientId: string, eventId: string): string 
 }
 
 /**
- * Get snapshot URL for an event (with bounding box)
+ * Get snapshot URL for an event
  */
 export function getEventSnapshotURL(
     clientId: string,
     eventId: string,
-    options?: { bbox?: boolean; crop?: boolean; timestamp?: boolean }
+    options?: { bbox?: boolean; crop?: boolean; timestamp?: boolean; cacheBust?: string | number }
 ): string {
     const params = new URLSearchParams();
     if (options?.bbox) params.set('bbox', '1');
     if (options?.crop) params.set('crop', '1');
     if (options?.timestamp) params.set('timestamp', '1');
+    if (options?.cacheBust) params.set('h', String(options.cacheBust));
 
     const queryString = params.toString();
     return `/api/frigate/${encodeURIComponent(clientId)}/notifications/${encodeURIComponent(eventId)}/snapshot.jpg${queryString ? '?' + queryString : ''}`;

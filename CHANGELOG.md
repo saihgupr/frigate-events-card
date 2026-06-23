@@ -1,5 +1,10 @@
 # Changelog
- 
+
+## [2.1.61] - 2026-06-23
+- Added: `show_bounding_box` configuration option (default: `true`) to allow toggling bounding boxes on event snapshots.
+- Improved: Implemented dynamic snapshot cache-busting using the event's `end_time` to automatically load the finalized, clean snapshot when an active event completes.
+- Developer: Integrated automatic live WebSocket resource updating directly into `deploy.sh`.
+
 ## [2.1.53] - 2026-06-21
 - Changed: Enabled video clip playback by default (`video: true`).
 

@@ -7,7 +7,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, subscribeToEvents, getEventClipURL, getEventHlsURL } from './frigate/api';
 
-const CARD_VERSION = '2.1.58';
+const CARD_VERSION = '2.1.61';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -32,6 +32,7 @@ interface FrigateEventsCardConfig extends LovelaceCardConfig {
   show_description?: boolean;
   show_camera_name?: boolean;
   show_zones?: boolean;
+  show_bounding_box?: boolean;
   title?: string;
   daily_clear_time?: string; // Format: "HH:MM" (24-hour), e.g., "04:00"
   video?: boolean;
@@ -60,6 +61,7 @@ const DEFAULT_CONFIG: Partial<FrigateEventsCardConfig> = {
   show_description: true,
   show_camera_name: true,
   show_zones: true,
+  show_bounding_box: true,
   title: 'Frigate Events',
   video: true,
   video_on_hover: true,
@@ -584,8 +586,9 @@ export class FrigateEventsCard extends LitElement {
     const event = this._selectedEvent;
     const clientId = this._config?.frigate_client_id || 'frigate';
     const snapshotUrl = getEventSnapshotURL(clientId, event.id, {
-      bbox: true,
-      timestamp: true
+      bbox: this._config?.show_bounding_box !== false,
+      timestamp: true,
+      cacheBust: event.end_time || undefined
     });
     const duration = this._formatDuration(event.start_time, event.end_time);
     const zones = this._formatZones(event.zones);
@@ -1124,8 +1127,9 @@ export class FrigateEventsCard extends LitElement {
   private _renderEvent(event: FrigateEvent): TemplateResult {
     const clientId = this._config?.frigate_client_id || 'frigate';
     const snapshotUrl = getEventSnapshotURL(clientId, event.id, {
-      bbox: true,
-      crop: true
+      bbox: this._config?.show_bounding_box !== false,
+      crop: true,
+      cacheBust: event.end_time || undefined
     });
 
     const isHovered = this._hoveredEventId === event.id;
