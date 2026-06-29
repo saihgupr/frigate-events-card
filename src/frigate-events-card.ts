@@ -7,7 +7,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, subscribeToEvents, getEventClipURL, getEventHlsURL } from './frigate/api';
 
-const CARD_VERSION = '2.1.61';
+const CARD_VERSION = '2.1.62';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -599,7 +599,7 @@ export class FrigateEventsCard extends LitElement {
     this._modalContainer.addEventListener('click', () => this._handleModalClose());
 
     // Build modal content
-    const showVideo = this._config?.video && event.has_clip;
+    const showVideo = !!this._config?.video;
     const timeParam = this._getVideoTimeParam(event);
     const clipUrl = getEventClipURL(clientId, event.id) + timeParam;
     const hlsUrl = getEventHlsURL(clientId, event.id) + timeParam;
@@ -1133,7 +1133,7 @@ export class FrigateEventsCard extends LitElement {
     });
 
     const isHovered = this._hoveredEventId === event.id;
-    const playVideoOnHover = this._config?.video_on_hover && event.has_clip;
+    const playVideoOnHover = !!this._config?.video_on_hover;
     const timeParam = this._getVideoTimeParam(event);
     const clipUrl = getEventClipURL(clientId, event.id) + timeParam;
     const hlsUrl = getEventHlsURL(clientId, event.id) + timeParam;
