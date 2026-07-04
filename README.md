@@ -12,13 +12,16 @@ A simple Lovelace card for displaying recent Frigate detection events in a horiz
 - **Fast & Lightweight**: Minified and optimized for quick loading.
 - **Live Updates**: Instantly shows new events via WebSocket.
 - **Responsive**: Auto-adjusting grid layout that works great on mobile.
+- **Sections View Ready**: Fully compatible with Home Assistant's Sections view, rendering full-width and scaling properly.
 - **Rich Media**: High-quality snapshots with optional zooming.
+- **Bounding Boxes**: Toggle the visibility of Frigate's detection bounding box overlays on event snapshots.
 - **Video Playback**: Natively stream MP4 and HLS (`.m3u8`) event clips directly in your browser.
 - **Hover Previews**: Instantly play video clips when hovering over any event, with smooth auto-tracking that pans and follows the detected object throughout the clip.
 - **Scrollable Gallery**: Optional horizontal scroll mode with arrow navigation and hidden scrollbar for a clean, native feel.
 - **Customizable Layout**: Reverse the rendering order or offset the timeline to build the exact dashboard you want.
 - **Daily Reset**: Optional automated clearing for a fresh daily view.
-- **Interactive**: Detailed modal view with full event information.
+- **Interactive Details Modal**: Deep-dive popup displaying full event information, including AI-generated descriptions (if available), duration, date, camera, zones, and accuracy.
+- **Configurable Modal Metadata**: Fine-grained visibility controls to show/hide specific metadata elements (like date, duration, or camera name) in the details popup.
 
 ## Installation
 
@@ -81,6 +84,22 @@ tracking_pan_delay:
 
 # Optional: Tracking smoothness (0.0 to 1.0)
 tracking_smoothing: 0.5
+
+# Optional: Scrollable gallery settings
+scroll: true
+scroll_limit: 40
+show_scroll_arrows: true
+
+# Optional: Bounding box overlay (snapshots)
+show_bounding_box: true
+
+# Optional: Detail modal metadata visibility toggles
+show_description: true
+show_date: true
+show_accuracy: true
+show_duration: true
+show_camera_name: true
+show_zones: true
 
 # Optional: Layout overrides
 reverse: true
