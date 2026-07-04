@@ -14,7 +14,8 @@ A simple Lovelace card for displaying recent Frigate detection events in a horiz
 - **Responsive**: Auto-adjusting grid layout that works great on mobile.
 - **Rich Media**: High-quality snapshots with optional zooming.
 - **Video Playback**: Natively stream MP4 and HLS (`.m3u8`) event clips directly in your browser.
-- **Hover Previews**: Instantly play video clips when hovering over any event in the gallery.
+- **Hover Previews**: Instantly play video clips when hovering over any event, with smooth auto-tracking that pans and follows the detected object throughout the clip.
+- **Scrollable Gallery**: Optional horizontal scroll mode with arrow navigation and hidden scrollbar for a clean, native feel.
 - **Customizable Layout**: Reverse the rendering order or offset the timeline to build the exact dashboard you want.
 - **Daily Reset**: Optional automated clearing for a fresh daily view.
 - **Interactive**: Detailed modal view with full event information.
@@ -92,6 +93,19 @@ daily_clear_time: "04:00"
 debug: true
 ```
 
+### Example: Scrollable Timeline
+
+This example creates a horizontally scrollable gallery showing 6 thumbnails at a time, loading up to 40 total events.
+
+```yaml
+type: custom:frigate-events-card
+frigate_client_id: frigate
+event_count: 6
+scroll: true
+scroll_limit: 40
+video_on_hover: true
+```
+
 ### Example: Advanced Tracking Configuration
 
 This example shows a real-world configuration for fine-tuning video clip endpoints and tracking synchronization based on detection labels.
@@ -113,24 +127,56 @@ video_on_hover: true
 
 ## Configuration Options
 
+### Basic Settings
+
+The most common settings to get you started:
+
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `frigate_client_id` | string | `frigate` | Your Frigate instance ID |
-| `event_count` | number | `5` | Number of events to display |
 | `title` | string | `Frigate Events` | Card title |
+| `event_count` | number | `5` | Number of events to display. When `scroll` is enabled, this is the number of events visible at once in the viewport. |
 | `cameras` | list | all | Filter to specific cameras |
 | `labels` | list | all | Filter to specific labels (person, car, etc.) |
 | `zones` | list | all | Filter to specific Frigate zones |
-| `video` | boolean | `false` | Whether to play video clips instead of snapshots in the gallery and modal. |
+| `video` | boolean | `true` | Whether to play video clips instead of snapshots in the gallery and modal. |
 | `video_on_hover` | boolean | `true` | Play video clips automatically when hovering over an event snapshot in the gallery. |
+| `scroll` | boolean | `true` | Enable horizontal scrolling gallery. When enabled, `event_count` sets the visible thumbnail count at once. |
+
+<details>
+<summary><strong>Advanced Settings</strong> (Click to expand)</summary>
+
+### Advanced Video & Tracking Settings
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
 | `video_start_skip_seconds` | number \| map | `0` | Number of seconds to skip from the beginning of video clips. Supports per-label/zone map. |
 | `video_end_skip_seconds` | number \| map | `0` | Number of seconds to skip from the end of video clips. Supports per-label/zone map. |
 | `tracking_pan_delay` | number \| map | `0` | Millisecond delay to synchronize video pan with object movement. Supports per-label/zone map (e.g., `person:front_door`). |
 | `tracking_smoothing` | number | `1.0` | Smoothness of camera panning in hover previews (0.0 to 1.0). 1.0 uses a wide time window for a soft glide, 0.0 is an instant rigid snap. |
+
+### Advanced Layout & Timeline Settings
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `show_scroll_arrows` | boolean | `false` | Show previous/next navigation arrows over the scrollable gallery. Only applies when `scroll` is enabled. |
+| `scroll_limit` | number | `20` | Total number of events to load in the scrollable timeline. |
 | `reverse` | boolean | `false` | Reverses the rendering order of the timeline (events populate right-to-left instead of left-to-right). |
 | `offset` | number | `0` | Number of recent events to skip/hide from the start of the list. Useful for excluding the newest event if it's already shown in another card. |
-| `daily_clear_time` | string | none | Optional. Time to reset the display daily (24hr format, e.g., "04:00"). If set, events before this time are hidden and shown as grey placeholders. If omitted, no daily reset occurs. |
+| `daily_clear_time` | string | none | Optional. Time to reset the display daily (24hr format, e.g., "04:00"). If set, events before this time are hidden and shown as grey placeholders. |
+
+### Advanced Detail Modal & Debug Settings
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `show_date` | boolean | `false` | Show the date in the event details modal popup. |
+| `show_accuracy` | boolean | `false` | Show the detection accuracy score percentage in the details modal popup (placed below the camera name). |
+| `show_duration` | boolean | `false` | Show the event duration (e.g., `9s` or `Ongoing`) in the details modal popup. |
+| `show_description` | boolean | `true` | Show the GenAI event description (if available) in the details modal popup. |
+| `show_camera_name` | boolean | `true` | Show the camera name in the event details modal popup. |
+| `show_zones` | boolean | `true` | Show the physical zones (locations) in the event details modal popup. |
+| `show_bounding_box` | boolean | `true` | Show the detection bounding box overlays on event snapshots. |
 | `debug` | boolean | `false` | Enable debug mode to display the current card version number above snapshots. |
+
+</details>
+
 
 ## Requirements
 
