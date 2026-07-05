@@ -176,7 +176,10 @@ The most common settings to get you started:
 ### Advanced Layout & Timeline Settings
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `show_scroll_arrows` | boolean | `false` | Show previous/next navigation arrows over the scrollable gallery. Only applies when `scroll` is enabled. |
+| `layout` | string | `row` | Layout mode for the events: `row` (horizontal row) or `grid` (multi-row grid layout). |
+| `grid_columns` | number | none | Number of columns in `grid` layout. If not set, defaults to auto-responsive wrapping (`repeat(auto-fill, minmax(120px, 1fr))`). |
+| `grid_max_height` | string | `400px` | Maximum height of the grid container (e.g. `500px`) when vertical scrolling is enabled (`scroll: true`). |
+| `show_scroll_arrows` | boolean | `false` | Show previous/next navigation arrows over the scrollable gallery. Only applies when `scroll` is enabled in `row` layout. |
 | `scroll_limit` | number | `20` | Total number of events to load in the scrollable timeline. |
 | `reverse` | boolean | `false` | Reverses the rendering order of the timeline (events populate right-to-left instead of left-to-right). |
 | `offset` | number | `0` | Number of recent events to skip/hide from the start of the list. Useful for excluding the newest event if it's already shown in another card. |
