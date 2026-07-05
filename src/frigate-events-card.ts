@@ -37,6 +37,7 @@ interface FrigateEventsCardConfig extends LovelaceCardConfig {
   daily_clear_time?: string; // Format: "HH:MM" (24-hour), e.g., "04:00"
   video?: boolean;
   video_on_hover?: boolean;
+  muted?: boolean;
   offset?: number;
   reverse?: boolean;
   video_start_skip_seconds?: number | Record<string, number>;
@@ -65,6 +66,7 @@ const DEFAULT_CONFIG: Partial<FrigateEventsCardConfig> = {
   title: 'Frigate Events',
   video: true,
   video_on_hover: true,
+  muted: true,
   offset: 0,
   reverse: false,
   video_start_skip_seconds: 0,
@@ -624,7 +626,7 @@ export class FrigateEventsCard extends LitElement {
       <div class="frigate-events-modal-content">
         <div class="frigate-events-modal-image-container">
           ${showVideo
-            ? `<video autoplay muted controls playsinline>
+            ? `<video autoplay ${this._config?.muted ? 'muted' : ''} controls playsinline>
                  <source src="${clipUrl}" type="video/mp4">
                  <source src="${hlsUrl}" type="application/x-mpegURL">
                </video>`

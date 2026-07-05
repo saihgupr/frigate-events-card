@@ -168,6 +168,7 @@ The most common settings to get you started:
 ### Advanced Video & Tracking Settings
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
+| `muted` | boolean | `true` | Mute video clip audio when viewing/expanding clips in the details modal. |
 | `video_start_skip_seconds` | number \| map | `0` | Number of seconds to skip from the beginning of video clips. Supports per-label/zone map. |
 | `video_end_skip_seconds` | number \| map | `0` | Number of seconds to skip from the end of video clips. Supports per-label/zone map. |
 | `tracking_pan_delay` | number \| map | `0` | Millisecond delay to synchronize video pan with object movement. Supports per-label/zone map (e.g., `person:front_door`). |
