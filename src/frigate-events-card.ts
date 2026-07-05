@@ -90,7 +90,7 @@ const LABEL_ICONS: Record<string, string> = {
   boat: '🚤',
 };
 
-@customElement('frigate-events-card')
+@customElement('frigate-events-card-dev')
 export class FrigateEventsCard extends LitElement {
   @property({ attribute: false }) public hass?: HomeAssistant;
   @state() private _config?: FrigateEventsCardConfig;
@@ -103,6 +103,7 @@ export class FrigateEventsCard extends LitElement {
   private _unsubscribe?: () => void;
   private _pollInterval?: number;
   private _boundVisibilityHandler?: () => void;
+  private _boundKeyDownHandler?: (e: KeyboardEvent) => void;
   private _modalContainer?: HTMLDivElement;
   private _hoverVideoCropPositions = new WeakMap<HTMLVideoElement, ObjectPositionPercent>();
   private static _stylesInjected = false;
@@ -411,6 +412,40 @@ export class FrigateEventsCard extends LitElement {
         background: rgba(0, 0, 0, 0.8);
       }
 
+      .frigate-events-modal-nav {
+        position: absolute;
+        top: 50%;
+        transform: translateY(-50%);
+        background: rgba(0, 0, 0, 0.5);
+        color: white;
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 20px;
+        cursor: pointer;
+        transition: background 0.2s, opacity 0.2s;
+        backdrop-filter: blur(4px);
+        border: none;
+        font-family: inherit;
+        z-index: 10;
+        user-select: none;
+      }
+
+      .frigate-events-modal-nav:hover {
+        background: rgba(0, 0, 0, 0.8);
+      }
+
+      .frigate-events-modal-nav.prev {
+        left: 10px;
+      }
+
+      .frigate-events-modal-nav.next {
+        right: 10px;
+      }
+
       .frigate-events-modal-info {
         padding: 16px;
         background: var(--card-background-color, #1c1c1c);
@@ -575,6 +610,54 @@ export class FrigateEventsCard extends LitElement {
     return skipSeconds > 0 ? `#t=${skipSeconds}` : '';
   }
 
+  private _getEventsToShow(): FrigateEvent[] {
+    if (!this._config) return [];
+    const isScroll = !!this._config.scroll;
+    const visibleCount = this._config.event_count || 5;
+    const scrollLimit = this._config.scroll_limit || 20;
+    const limit = isScroll ? scrollLimit : visibleCount;
+
+    let visibleEvents = this._events;
+    const resetTimestamp = this._getDailyResetTimestamp();
+    if (resetTimestamp !== null) {
+      visibleEvents = this._events.filter(e => (e.start_time || 0) > resetTimestamp);
+    }
+
+    const offset = this._config.offset || 0;
+    const eventsToShow = visibleEvents.slice(offset, offset + limit);
+    return this._config.reverse ? [...eventsToShow].reverse() : eventsToShow;
+  }
+
+  private _navigateToEvent(direction: 'next' | 'prev'): void {
+    if (!this._selectedEvent) return;
+    const orderedEvents = this._getEventsToShow();
+    const currentIndex = orderedEvents.findIndex(e => e.id === this._selectedEvent?.id);
+    if (currentIndex === -1) return;
+
+    let newIndex = currentIndex;
+    if (direction === 'next') {
+      newIndex = currentIndex + 1;
+    } else if (direction === 'prev') {
+      newIndex = currentIndex - 1;
+    }
+
+    if (newIndex >= 0 && newIndex < orderedEvents.length) {
+      this._selectedEvent = orderedEvents[newIndex];
+      this._showModal();
+    }
+  }
+
+  private _handleKeyDown(e: KeyboardEvent): void {
+    if (!this._selectedEvent) return;
+    if (e.key === 'ArrowRight') {
+      this._navigateToEvent('next');
+    } else if (e.key === 'ArrowLeft') {
+      this._navigateToEvent('prev');
+    } else if (e.key === 'Escape') {
+      this._handleModalClose();
+    }
+  }
+
   private _showModal(): void {
     if (!this._selectedEvent) return;
 
@@ -619,17 +702,32 @@ export class FrigateEventsCard extends LitElement {
     const showCameraName = this._config?.show_camera_name !== false;
     const showZones = this._config?.show_zones !== false;
 
+    // Check next/prev events
+    const orderedEvents = this._getEventsToShow();
+    const currentIndex = orderedEvents.findIndex(e => e.id === event.id);
+    const hasPrev = currentIndex > 0;
+    const hasNext = currentIndex !== -1 && currentIndex < orderedEvents.length - 1;
+
+    const prevBtnHtml = hasPrev
+      ? `<button class="frigate-events-modal-nav prev" title="Previous event">◀</button>`
+      : '';
+    const nextBtnHtml = hasNext
+      ? `<button class="frigate-events-modal-nav next" title="Next event">▶</button>`
+      : '';
+
     // Build modal content html
     this._modalContainer.innerHTML = `
       <div class="frigate-events-modal-content">
         <div class="frigate-events-modal-image-container">
+          ${prevBtnHtml}
           ${showVideo
             ? `<video autoplay muted controls playsinline>
                  <source src="${clipUrl}" type="video/mp4">
                  <source src="${hlsUrl}" type="application/x-mpegURL">
                </video>`
             : `<img src="${snapshotUrl}" alt="${event.label}" />`
-          }          <button class="frigate-events-modal-close">x</button>
+          }          ${nextBtnHtml}
+          <button class="frigate-events-modal-close">x</button>
         </div>
         <div class="frigate-events-modal-info">
           <div class="frigate-events-modal-info-top">
@@ -670,6 +768,26 @@ export class FrigateEventsCard extends LitElement {
     const closeBtn = this._modalContainer.querySelector('.frigate-events-modal-close');
     closeBtn?.addEventListener('click', () => this._handleModalClose());
 
+    // Navigation button handlers
+    if (hasPrev) {
+      const prevBtn = this._modalContainer.querySelector('.frigate-events-modal-nav.prev');
+      prevBtn?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._navigateToEvent('prev');
+      });
+    }
+    if (hasNext) {
+      const nextBtn = this._modalContainer.querySelector('.frigate-events-modal-nav.next');
+      nextBtn?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._navigateToEvent('next');
+      });
+    }
+
+    // Bind keydown listener
+    this._boundKeyDownHandler = (e: KeyboardEvent) => this._handleKeyDown(e);
+    window.addEventListener('keydown', this._boundKeyDownHandler);
+
     // Append to document body
     document.body.appendChild(this._modalContainer);
   }
@@ -678,6 +796,10 @@ export class FrigateEventsCard extends LitElement {
     if (this._modalContainer && this._modalContainer.parentNode) {
       this._modalContainer.parentNode.removeChild(this._modalContainer);
       this._modalContainer = undefined;
+    }
+    if (this._boundKeyDownHandler) {
+      window.removeEventListener('keydown', this._boundKeyDownHandler);
+      this._boundKeyDownHandler = undefined;
     }
   }
 
