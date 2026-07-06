@@ -7,7 +7,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, subscribeToEvents, getEventClipURL, getEventHlsURL } from './frigate/api';
 
-const CARD_VERSION = '2.2.10';
+const CARD_VERSION = '2.2.11';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -444,18 +444,23 @@ export class FrigateEventsCard extends LitElement {
         line-height: 1;
       }
 
+      .frigate-events-modal-nav svg {
+        width: 22px;
+        height: 22px;
+        fill: currentColor;
+        display: block;
+      }
+
       .frigate-events-modal-nav:hover {
         background: rgba(0, 0, 0, 0.8);
       }
 
       .frigate-events-modal-nav.prev {
         left: 10px;
-        padding-right: 3px;
       }
 
       .frigate-events-modal-nav.next {
         right: 10px;
-        padding-left: 3px;
       }
 
       .frigate-events-modal-info {
@@ -729,10 +734,18 @@ export class FrigateEventsCard extends LitElement {
 
     const showNav = !!this._config?.show_modal_navigation;
     const prevBtnHtml = (showNav && hasPrev)
-      ? `<button class="frigate-events-modal-nav prev" title="Previous event">◀</button>`
+      ? `<button class="frigate-events-modal-nav prev" title="Previous event">
+           <svg viewBox="0 0 24 24">
+             <path d="M15,6L9,12L15,18Z" fill="currentColor"/>
+           </svg>
+         </button>`
       : '';
     const nextBtnHtml = (showNav && hasNext)
-      ? `<button class="frigate-events-modal-nav next" title="Next event">▶</button>`
+      ? `<button class="frigate-events-modal-nav next" title="Next event">
+           <svg viewBox="0 0 24 24">
+             <path d="M9,6L15,12L9,18Z" fill="currentColor"/>
+           </svg>
+         </button>`
       : '';
     const container = this._modalContainer;
     if (!container) return;
@@ -1285,8 +1298,16 @@ export class FrigateEventsCard extends LitElement {
           : html`
               <div class="events-container">
                 ${showScrollArrows ? html`
-                  <button class="scroll-btn prev" @click=${() => this._scroll('left')}>◀</button>
-                  <button class="scroll-btn next" @click=${() => this._scroll('right')}>▶</button>
+                  <button class="scroll-btn prev" @click=${() => this._scroll('left')} aria-label="Previous">
+                    <svg viewBox="0 0 24 24">
+                      <path d="M15,6L9,12L15,18Z" fill="currentColor"/>
+                    </svg>
+                  </button>
+                  <button class="scroll-btn next" @click=${() => this._scroll('right')} aria-label="Next">
+                    <svg viewBox="0 0 24 24">
+                      <path d="M9,6L15,12L9,18Z" fill="currentColor"/>
+                    </svg>
+                  </button>
                 ` : ''}
                 <div class="${eventsClasses}" style="${eventsStyle}">
                   ${allItems}
@@ -1414,6 +1435,13 @@ export class FrigateEventsCard extends LitElement {
 
       .scroll-btn.next {
         right: 8px;
+      }
+
+      .scroll-btn svg {
+        width: 18px;
+        height: 18px;
+        fill: currentColor;
+        display: block;
       }
 
       .events-container:hover .scroll-btn {
