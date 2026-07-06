@@ -7,7 +7,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, subscribeToEvents, getEventClipURL, getEventHlsURL } from './frigate/api';
 
-const CARD_VERSION = '2.2.4';
+const CARD_VERSION = '2.2.8';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -49,6 +49,7 @@ interface FrigateEventsCardConfig extends LovelaceCardConfig {
   scroll?: boolean;
   scroll_limit?: number;
   show_scroll_arrows?: boolean;
+  show_modal_navigation?: boolean;
   layout?: 'row' | 'grid';
   grid_columns?: number;
   grid_max_height?: string;
@@ -66,6 +67,7 @@ const DEFAULT_CONFIG: Partial<FrigateEventsCardConfig> = {
   show_camera_name: true,
   show_zones: true,
   show_bounding_box: true,
+  show_modal_navigation: false,
   title: 'Frigate Events',
   video: true,
   video_on_hover: true,
@@ -439,6 +441,7 @@ export class FrigateEventsCard extends LitElement {
         font-family: inherit;
         z-index: 10;
         user-select: none;
+        line-height: 1;
       }
 
       .frigate-events-modal-nav:hover {
@@ -447,10 +450,12 @@ export class FrigateEventsCard extends LitElement {
 
       .frigate-events-modal-nav.prev {
         left: 10px;
+        padding-right: 3px;
       }
 
       .frigate-events-modal-nav.next {
         right: 10px;
+        padding-left: 3px;
       }
 
       .frigate-events-modal-info {
@@ -715,10 +720,11 @@ export class FrigateEventsCard extends LitElement {
     const hasPrev = currentIndex > 0;
     const hasNext = currentIndex !== -1 && currentIndex < orderedEvents.length - 1;
 
-    const prevBtnHtml = hasPrev
+    const showNav = !!this._config?.show_modal_navigation;
+    const prevBtnHtml = (showNav && hasPrev)
       ? `<button class="frigate-events-modal-nav prev" title="Previous event">◀</button>`
       : '';
-    const nextBtnHtml = hasNext
+    const nextBtnHtml = (showNav && hasNext)
       ? `<button class="frigate-events-modal-nav next" title="Next event">▶</button>`
       : '';
 
@@ -782,14 +788,14 @@ export class FrigateEventsCard extends LitElement {
     closeBtn?.addEventListener('click', () => this._handleModalClose());
 
     // Navigation button handlers
-    if (hasPrev) {
+    if (showNav && hasPrev) {
       const prevBtn = this._modalContainer.querySelector('.frigate-events-modal-nav.prev');
       prevBtn?.addEventListener('click', (e) => {
         e.stopPropagation();
         this._navigateToEvent('prev');
       });
     }
-    if (hasNext) {
+    if (showNav && hasNext) {
       const nextBtn = this._modalContainer.querySelector('.frigate-events-modal-nav.next');
       nextBtn?.addEventListener('click', (e) => {
         e.stopPropagation();
