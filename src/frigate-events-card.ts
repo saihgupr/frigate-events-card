@@ -7,7 +7,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, subscribeToEvents, getEventClipURL, getEventHlsURL } from './frigate/api';
 
-const CARD_VERSION = '2.2.2';
+const CARD_VERSION = '2.2.3';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -1219,7 +1219,12 @@ export class FrigateEventsCard extends LitElement {
     // Limit to event count and calculate placeholders
     const offset = this._config.offset || 0;
     const eventsToShow = visibleEvents.slice(offset, offset + limit);
-    const placeholderCount = Math.max(0, visibleCount - eventsToShow.length);
+    let placeholderCount = Math.max(0, visibleCount - eventsToShow.length);
+    if (isGrid && this._config.grid_columns && placeholderCount > 0) {
+      const totalWithPlaceholders = eventsToShow.length + placeholderCount;
+      const roundedTotal = Math.ceil(totalWithPlaceholders / this._config.grid_columns) * this._config.grid_columns;
+      placeholderCount = roundedTotal - eventsToShow.length;
+    }
 
     let renderedEvents = eventsToShow.map(event => this._renderEvent(event));
     let renderedPlaceholders = Array(placeholderCount).fill(0).map(() => html`<div class="placeholder"></div>`);
