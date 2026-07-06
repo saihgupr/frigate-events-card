@@ -7,7 +7,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, subscribeToEvents, getEventClipURL, getEventHlsURL } from './frigate/api';
 
-const CARD_VERSION = '2.2.3';
+const CARD_VERSION = '2.2.4';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -766,6 +766,12 @@ export class FrigateEventsCard extends LitElement {
         </div>
       </div>
     `;
+
+    // Ensure video muted state is programmatically set to handle browser autoplay policies
+    const videoEl = this._modalContainer.querySelector('video');
+    if (videoEl) {
+      videoEl.muted = this._config?.muted !== false;
+    }
 
     // Stop propagation on content click
     const content = this._modalContainer.querySelector('.frigate-events-modal-content');
