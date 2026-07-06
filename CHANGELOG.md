@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.2.0] - 2026-07-06
+- Added: Vertical Grid Layout (`layout: grid`) supporting custom `grid_columns` and `grid_max_height` styles.
+- Added: Details modal navigation buttons (◀/▶) and keyboard shortcuts (`ArrowLeft`/`ArrowRight`/`Escape`) to easily cycle through events.
+- Added: `show_modal_navigation` config option (default: `false`) to toggle the visibility of the modal navigation arrows (keyboard navigation remains always-active).
+- Added: `muted` config option (default: `true`) to toggle muted state on videos to ensure browser autoplay compliance.
+- Improved: Grid layout placeholder padding is now automatically rounded up to the nearest multiple of `grid_columns` to keep the layout aligned.
+- Improved: Modal navigation now updates the existing DOM container in-place rather than destroying and recreating it, completely eliminating background flashing.
+- Improved: Visually centered Unicode triangle arrows within the modal navigation circular buttons.
+
 ## [2.1.61] - 2026-06-23
 - Added: `show_bounding_box` configuration option (default: `true`) to allow toggling bounding boxes on event snapshots.
 - Improved: Implemented dynamic snapshot cache-busting using the event's `end_time` to automatically load the finalized, clean snapshot when an active event completes.
