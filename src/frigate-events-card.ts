@@ -49,6 +49,9 @@ interface FrigateEventsCardConfig extends LovelaceCardConfig {
   scroll?: boolean;
   scroll_limit?: number;
   show_scroll_arrows?: boolean;
+  layout?: 'row' | 'grid';
+  grid_columns?: number;
+  grid_max_height?: string;
 }
 
 const DEFAULT_CONFIG: Partial<FrigateEventsCardConfig> = {
@@ -76,6 +79,8 @@ const DEFAULT_CONFIG: Partial<FrigateEventsCardConfig> = {
   scroll: true,
   scroll_limit: 20,
   show_scroll_arrows: false,
+  layout: 'row',
+  grid_max_height: '400px',
 };
 
 // Label to icon mapping
@@ -1197,11 +1202,12 @@ export class FrigateEventsCard extends LitElement {
       return html`<ha-card>No configuration</ha-card>`;
     }
 
-    const isScroll = !!this._config.scroll;
+    const isGrid = this._config.layout === 'grid';
+    const isScroll = !isGrid && !!this._config.scroll;
     const showScrollArrows = isScroll && !!this._config.show_scroll_arrows;
     const visibleCount = this._config.event_count || 5;
     const scrollLimit = this._config.scroll_limit || 20;
-    const limit = isScroll ? scrollLimit : visibleCount;
+    const limit = this._config.scroll ? scrollLimit : visibleCount;
 
     // Filter events based on daily clear time
     let visibleEvents = this._events;
@@ -1213,9 +1219,11 @@ export class FrigateEventsCard extends LitElement {
     // Limit to event count and calculate placeholders
     const offset = this._config.offset || 0;
     const eventsToShow = visibleEvents.slice(offset, offset + limit);
-    const placeholderCount = isScroll
-      ? Math.max(0, visibleCount - eventsToShow.length)
-      : limit - eventsToShow.length;
+    const placeholderCount = isGrid
+      ? 0
+      : isScroll
+        ? Math.max(0, visibleCount - eventsToShow.length)
+        : limit - eventsToShow.length;
 
     let renderedEvents = eventsToShow.map(event => this._renderEvent(event));
     let renderedPlaceholders = Array(placeholderCount).fill(0).map(() => html`<div class="placeholder"></div>`);
@@ -1224,6 +1232,23 @@ export class FrigateEventsCard extends LitElement {
     if (this._config.reverse) {
       allItems.reverse();
     }
+
+    const eventsClasses = [
+      'events',
+      isGrid ? 'grid' : '',
+      isGrid && this._config.scroll ? 'scrollable-y' : '',
+      !isGrid && this._config.scroll ? 'scrollable' : ''
+    ].filter(Boolean).join(' ');
+
+    const gridColumns = this._config.grid_columns;
+    const gridTemplateColumns = gridColumns
+      ? `repeat(${gridColumns}, 1fr)`
+      : `repeat(auto-fill, minmax(120px, 1fr))`;
+    const gridMaxHeight = this._config.grid_max_height || '400px';
+
+    const eventsStyle = isGrid
+      ? `grid-template-columns: ${gridTemplateColumns}; --grid-max-height: ${gridMaxHeight};`
+      : `--visible-count: ${visibleCount}; --event-count: ${limit};`;
 
     return html`
       <ha-card>
@@ -1239,7 +1264,7 @@ export class FrigateEventsCard extends LitElement {
                   <button class="scroll-btn prev" @click=${() => this._scroll('left')}>◀</button>
                   <button class="scroll-btn next" @click=${() => this._scroll('right')}>▶</button>
                 ` : ''}
-                <div class="events ${isScroll ? 'scrollable' : ''}" style="--visible-count: ${visibleCount}; --event-count: ${limit};">
+                <div class="${eventsClasses}" style="${eventsStyle}">
                   ${allItems}
                 </div>
               </div>
@@ -1410,6 +1435,37 @@ export class FrigateEventsCard extends LitElement {
         flex: 0 0 calc((100% - (var(--visible-count, 5) - 1) * 9px) / var(--visible-count, 5));
         scroll-snap-align: start;
         box-sizing: border-box;
+      }
+
+      .events.grid {
+        display: grid;
+        grid-template-columns: var(--grid-template-columns, repeat(auto-fill, minmax(120px, 1fr)));
+        gap: 9px;
+        align-items: start;
+      }
+
+      .events.grid.scrollable-y {
+        max-height: var(--grid-max-height, 400px);
+        overflow-y: auto;
+        overflow-x: hidden;
+        padding-right: 4px;
+      }
+
+      .events.grid.scrollable-y::-webkit-scrollbar {
+        width: 6px;
+      }
+
+      .events.grid.scrollable-y::-webkit-scrollbar-track {
+        background: transparent;
+      }
+
+      .events.grid.scrollable-y::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.2);
+        border-radius: 3px;
+      }
+
+      .events.grid.scrollable-y::-webkit-scrollbar-thumb:hover {
+        background: rgba(255, 255, 255, 0.4);
       }
 
       .event {
