@@ -7,7 +7,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, subscribeToEvents, getEventClipURL, getEventHlsURL } from './frigate/api';
 
-const CARD_VERSION = '2.2.8';
+const CARD_VERSION = '2.2.10';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -676,7 +676,12 @@ export class FrigateEventsCard extends LitElement {
     console.log('Frigate Events Card: event clicked =', this._selectedEvent);
 
     this._injectModalStyles();
-    this._removeModal(); // Clean up any existing modal
+    
+    const isUpdating = !!this._modalContainer;
+    if (isUpdating && this._boundKeyDownHandler) {
+      window.removeEventListener('keydown', this._boundKeyDownHandler);
+      this._boundKeyDownHandler = undefined;
+    }
 
     const event = this._selectedEvent;
     const clientId = this._config?.frigate_client_id || 'frigate';
@@ -688,10 +693,12 @@ export class FrigateEventsCard extends LitElement {
     const duration = this._formatDuration(event.start_time, event.end_time);
     const zones = this._formatZones(event.zones);
 
-    // Create modal container
-    this._modalContainer = document.createElement('div');
-    this._modalContainer.className = 'frigate-events-modal';
-    this._modalContainer.addEventListener('click', () => this._handleModalClose());
+    if (!isUpdating) {
+      // Create modal container
+      this._modalContainer = document.createElement('div');
+      this._modalContainer.className = 'frigate-events-modal';
+      this._modalContainer.addEventListener('click', () => this._handleModalClose());
+    }
 
     // Build modal content
     const showVideo = !!this._config?.video;
@@ -727,9 +734,11 @@ export class FrigateEventsCard extends LitElement {
     const nextBtnHtml = (showNav && hasNext)
       ? `<button class="frigate-events-modal-nav next" title="Next event">▶</button>`
       : '';
+    const container = this._modalContainer;
+    if (!container) return;
 
     // Build modal content html
-    this._modalContainer.innerHTML = `
+    container.innerHTML = `
       <div class="frigate-events-modal-content">
         <div class="frigate-events-modal-image-container">
           ${prevBtnHtml}
@@ -774,29 +783,29 @@ export class FrigateEventsCard extends LitElement {
     `;
 
     // Ensure video muted state is programmatically set to handle browser autoplay policies
-    const videoEl = this._modalContainer.querySelector('video');
+    const videoEl = container.querySelector('video');
     if (videoEl) {
       videoEl.muted = this._config?.muted !== false;
     }
 
     // Stop propagation on content click
-    const content = this._modalContainer.querySelector('.frigate-events-modal-content');
+    const content = container.querySelector('.frigate-events-modal-content');
     content?.addEventListener('click', (e) => e.stopPropagation());
 
     // Close button handler
-    const closeBtn = this._modalContainer.querySelector('.frigate-events-modal-close');
+    const closeBtn = container.querySelector('.frigate-events-modal-close');
     closeBtn?.addEventListener('click', () => this._handleModalClose());
 
     // Navigation button handlers
     if (showNav && hasPrev) {
-      const prevBtn = this._modalContainer.querySelector('.frigate-events-modal-nav.prev');
+      const prevBtn = container.querySelector('.frigate-events-modal-nav.prev');
       prevBtn?.addEventListener('click', (e) => {
         e.stopPropagation();
         this._navigateToEvent('prev');
       });
     }
     if (showNav && hasNext) {
-      const nextBtn = this._modalContainer.querySelector('.frigate-events-modal-nav.next');
+      const nextBtn = container.querySelector('.frigate-events-modal-nav.next');
       nextBtn?.addEventListener('click', (e) => {
         e.stopPropagation();
         this._navigateToEvent('next');
@@ -807,8 +816,10 @@ export class FrigateEventsCard extends LitElement {
     this._boundKeyDownHandler = (e: KeyboardEvent) => this._handleKeyDown(e);
     window.addEventListener('keydown', this._boundKeyDownHandler);
 
-    // Append to document body
-    document.body.appendChild(this._modalContainer);
+    // Append to document body only if it's a new modal
+    if (!isUpdating) {
+      document.body.appendChild(container);
+    }
   }
 
   private _removeModal(): void {
