@@ -5,7 +5,7 @@ import { LitElement, html, css, PropertyValues, TemplateResult, CSSResult } from
 import { customElement, property, state } from 'lit/decorators.js';
 import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/types';
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
-import { getEvents, getEventSnapshotURL, subscribeToEvents, getEventClipURL, getEventHlsURL } from './frigate/api';
+import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL } from './frigate/api';
 
 const CARD_VERSION = '2.2.11';
 
@@ -1255,7 +1255,7 @@ export class FrigateEventsCard extends LitElement {
     // Limit to event count and calculate placeholders
     const offset = this._config.offset || 0;
     const eventsToShow = visibleEvents.slice(offset, offset + limit);
-    let placeholderCount = Math.max(0, visibleCount - eventsToShow.length);
+    let placeholderCount = Math.max(0, (isScroll ? visibleCount : limit) - eventsToShow.length);
     if (isGrid && this._config.grid_columns && placeholderCount > 0) {
       const totalWithPlaceholders = eventsToShow.length + placeholderCount;
       const roundedTotal = Math.ceil(totalWithPlaceholders / this._config.grid_columns) * this._config.grid_columns;
@@ -1332,6 +1332,8 @@ export class FrigateEventsCard extends LitElement {
     const clipUrl = getEventClipURL(clientId, event.id) + timeParam;
     const hlsUrl = getEventHlsURL(clientId, event.id) + timeParam;
 
+    const thumbnailUrl = getEventThumbnailURL(clientId, event.id);
+
     return html`
       <div class="event"
         @click=${() => this._handleEventClick(event)}
@@ -1343,6 +1345,12 @@ export class FrigateEventsCard extends LitElement {
           src="${snapshotUrl}"
           alt="${event.label}"
           loading="lazy"
+          @error=${(e: Event) => {
+            const img = e.target as HTMLImageElement;
+            if (img && !img.src.includes('/thumbnail/')) {
+              img.src = thumbnailUrl;
+            }
+          }}
         />
         ${playVideoOnHover && isHovered
           ? html`<video
