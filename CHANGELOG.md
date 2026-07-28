@@ -1,8 +1,90 @@
 # Changelog
- 
+
 ## [Unreleased]
 - Fixed: Fallback snapshot image to event thumbnail if snapshot disabled or missing.
 
+## [2.2.0] - 2026-07-06
+- Added: Vertical Grid Layout (`layout: grid`) supporting custom `grid_columns` and `grid_max_height` styles.
+- Added: Details modal navigation buttons (◀/▶) and keyboard shortcuts (`ArrowLeft`/`ArrowRight`/`Escape`) to easily cycle through events.
+- Added: `show_modal_navigation` config option (default: `false`) to toggle the visibility of the modal navigation arrows (keyboard navigation remains always-active).
+- Added: `muted` config option (default: `true`) to toggle muted state on videos to ensure browser autoplay compliance.
+- Improved: Grid layout placeholder padding is now automatically rounded up to the nearest multiple of `grid_columns` to keep the layout aligned.
+- Improved: Modal navigation now updates the existing DOM container in-place rather than destroying and recreating it, completely eliminating background flashing.
+- Improved: Visually centered Unicode triangle arrows within the modal navigation circular buttons.
+
+## [2.1.61] - 2026-06-23
+- Added: `show_bounding_box` configuration option (default: `true`) to allow toggling bounding boxes on event snapshots.
+- Improved: Implemented dynamic snapshot cache-busting using the event's `end_time` to automatically load the finalized, clean snapshot when an active event completes.
+- Developer: Integrated automatic live WebSocket resource updating directly into `deploy.sh`.
+
+## [2.1.53] - 2026-06-21
+- Changed: Enabled video clip playback by default (`video: true`).
+
+## [2.1.52] - 2026-06-21
+- Changed: Enabled show_duration by default to `false` in details modal config.
+
+## [2.1.51] - 2026-06-21
+- Changed: Enabled horizontal gallery scroll mode by default (`scroll: true`).
+
+## [2.1.50] - 2026-06-21
+- Improved: Adjusted details modal font size for both object label and event time to match at `20px` (using the time element as the guide).
+
+## [2.1.49] - 2026-06-21
+- Improved: Adjusted event time font size to `24px` in the details modal, matching the object label's font size on the left.
+
+## [2.1.48] - 2026-06-21
+- Added: `show_camera_name` (default: `true`) and `show_zones` (default: `true`) configuration options to allow optionally hiding the camera name and physical zones (locations) in the details modal.
+
+## [2.1.47] - 2026-06-21
+- Improved: Matched line spacing of the left column (label, camera, and accuracy) in the details modal with the right column (time, zones, and duration) by removing margin-bottom and applying a uniform line-height of 1.2 across all metadata elements.
+
+## [2.1.46] - 2026-06-21
+- Added: `show_description` config option (default: `true`) to optionally toggle visibility of GenAI event descriptions in the details modal.
+- Improved: Reorganized the Configuration Options in the README into clean Basic and collapsible Advanced settings to make the list less daunting for new users.
+
+## [2.1.44] - 2026-06-21
+- Changed: Moved the optional accuracy score (e.g. `96%`) to render on Line 3 in the left column (directly under `Wyze Camera`) instead of the right column.
+
+## [2.1.43] - 2026-06-21
+- Changed: Moved the AI-generated description to the center area of the bottom metadata bar (between left and right metadata blocks).
+- Improved: Center-aligned the description text and styled it to automatically wrap to multiple lines for a highly integrated look.
+
+## [2.1.42] - 2026-06-21
+- Improved: Increased font sizes of the object label (`24px`) and event time (`20px`) inside details modal for better visual prominence.
+- Added: `show_accuracy` option (default `false`) to toggle rendering of accuracy score; when enabled, score is shown on the right side below the duration line.
+- Added: `show_duration` option (default `true`) to toggle rendering of event duration (e.g. `9s` or `Ongoing`) on the right side.
+
+## [2.1.41] - 2026-06-21
+- Changed: Moved the detection accuracy percentage to the camera line (e.g. `Wyze Camera · 96%`) for a cleaner top-level header.
+- Improved: Positioned the duration (e.g. `9s`) to be displayed clearly below the locations line.
+
+## [2.1.40] - 2026-06-21
+- Changed: Completely redesigned the details modal metadata section with a clean, text-only minimal layout.
+- Removed: Emojis, borders, and background chip elements to prevent an over-designed "AI look".
+- Improved: Unified layout into two baseline-aligned rows, utilizing middle dot (`·`) dividers for secondary inline metadata (e.g. `9s · Front A, Front B`).
+
+## [2.1.39] - 2026-06-21
+- Improved: Redesigned the event details modal metadata panel layout using a clean, modern grid.
+- Added: Rounded chip badges with modern border borders/backgrounds for Time, Date, and Duration metrics.
+- Added: Integrated category icons (📹 for Camera, 📍 for Zones) to enhance readability and visual alignment.
+
+## [2.1.38] - 2026-06-21
+- Added: `show_date` option (default `false`) to toggle date visibility in details modal.
+- Fixed: Extracted detection score from `data.top_score` and `data.score` objects to resolve missing accuracy percentages in modern Frigate versions.
+- Improved: Enforced hour formatting without leading zeroes (e.g. `5:35:54 PM`) and capitalized AM/PM string in event details modal.
+
+## [2.1.37] - 2026-06-21
+- Added: Display event date, detection score badge, and AI-generated description (if available) inside the event details modal popup.
+
+## [2.1.34] - 2026-06-09
+- Fixed: Completely hid the scrollbar in scrollable gallery mode for all modern browsers.
+
+## [2.1.33] - 2026-06-09
+- Fixed: Resolved an issue in scroll mode where placeholder tiles (black boxes) would fill the entire scroll limit at the end of the scrollable list when using `daily_clear_time`.
+
+## [2.1.32] - 2026-06-09
+- Added: `show_scroll_arrows` config option (default: `false`) to control the visibility of navigation arrows in scroll mode.
+>>>>>>> origin/develop
 
 ## [2.1.31] - 2026-06-05
 - Added: Horizontal scrolling gallery mode via new `scroll` and `scroll_limit` config options. When enabled, `event_count` controls the number of visible thumbnails and hover-triggered navigation arrows appear on desktop.

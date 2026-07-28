@@ -7,7 +7,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL } from './frigate/api';
 
-const CARD_VERSION = '2.1.31';
+const CARD_VERSION = '2.2.11';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -26,11 +26,18 @@ interface FrigateEventsCardConfig extends LovelaceCardConfig {
   zones?: string[];
   show_label?: boolean;
   show_timestamp?: boolean;
-  show_camera?: boolean;
+  show_date?: boolean;
+  show_accuracy?: boolean;
+  show_duration?: boolean;
+  show_description?: boolean;
+  show_camera_name?: boolean;
+  show_zones?: boolean;
+  show_bounding_box?: boolean;
   title?: string;
   daily_clear_time?: string; // Format: "HH:MM" (24-hour), e.g., "04:00"
   video?: boolean;
   video_on_hover?: boolean;
+  muted?: boolean;
   offset?: number;
   reverse?: boolean;
   video_start_skip_seconds?: number | Record<string, number>;
@@ -41,6 +48,11 @@ interface FrigateEventsCardConfig extends LovelaceCardConfig {
   tracking_smoothing?: number;
   scroll?: boolean;
   scroll_limit?: number;
+  show_scroll_arrows?: boolean;
+  show_modal_navigation?: boolean;
+  layout?: 'row' | 'grid';
+  grid_columns?: number;
+  grid_max_height?: string;
 }
 
 const DEFAULT_CONFIG: Partial<FrigateEventsCardConfig> = {
@@ -48,18 +60,29 @@ const DEFAULT_CONFIG: Partial<FrigateEventsCardConfig> = {
   event_count: 5,
   show_label: true,
   show_timestamp: true,
-  show_camera: false,
+  show_date: false,
+  show_accuracy: false,
+  show_duration: false,
+  show_description: true,
+  show_camera_name: true,
+  show_zones: true,
+  show_bounding_box: true,
+  show_modal_navigation: false,
   title: 'Frigate Events',
-  video: false,
+  video: true,
   video_on_hover: true,
+  muted: true,
   offset: 0,
   reverse: false,
   video_start_skip_seconds: 0,
   video_end_skip_seconds: 0,
   debug: false,
   tracking_smoothing: HOVER_CROP_DEFAULT_SMOOTHING,
-  scroll: false,
+  scroll: true,
   scroll_limit: 20,
+  show_scroll_arrows: false,
+  layout: 'row',
+  grid_max_height: '400px',
 };
 
 // Label to icon mapping
@@ -89,6 +112,7 @@ export class FrigateEventsCard extends LitElement {
   private _unsubscribe?: () => void;
   private _pollInterval?: number;
   private _boundVisibilityHandler?: () => void;
+  private _boundKeyDownHandler?: (e: KeyboardEvent) => void;
   private _modalContainer?: HTMLDivElement;
   private _hoverVideoCropPositions = new WeakMap<HTMLVideoElement, ObjectPositionPercent>();
   private static _stylesInjected = false;
@@ -140,7 +164,6 @@ export class FrigateEventsCard extends LitElement {
   public getLayoutOptions(): LovelaceLayoutOptions {
     return {
       grid_columns: 4,
-      grid_rows: 1,
     };
   }
 
@@ -340,6 +363,8 @@ export class FrigateEventsCard extends LitElement {
 
       .frigate-events-modal-content {
         position: relative;
+        width: fit-content;
+        min-width: 450px;
         max-width: 90%;
         max-height: 90%;
         background: var(--card-background-color, #1c1c1c);
@@ -396,54 +421,163 @@ export class FrigateEventsCard extends LitElement {
         background: rgba(0, 0, 0, 0.8);
       }
 
+      .frigate-events-modal-nav {
+        position: absolute;
+        top: 50%;
+        transform: translateY(-50%);
+        background: rgba(0, 0, 0, 0.5);
+        color: white;
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 20px;
+        cursor: pointer;
+        transition: background 0.2s, opacity 0.2s;
+        backdrop-filter: blur(4px);
+        border: none;
+        font-family: inherit;
+        z-index: 10;
+        user-select: none;
+        line-height: 1;
+      }
+
+      .frigate-events-modal-nav svg {
+        width: 22px;
+        height: 22px;
+        fill: currentColor;
+        display: block;
+      }
+
+      .frigate-events-modal-nav:hover {
+        background: rgba(0, 0, 0, 0.8);
+      }
+
+      .frigate-events-modal-nav.prev {
+        left: 10px;
+      }
+
+      .frigate-events-modal-nav.next {
+        right: 10px;
+      }
+
       .frigate-events-modal-info {
         padding: 16px;
         background: var(--card-background-color, #1c1c1c);
         display: flex;
+        flex-direction: column;
+        gap: 12px;
+        width: 0;
+        min-width: 100%;
+        box-sizing: border-box;
+      }
+
+      .frigate-events-modal-info-top {
+        display: flex;
         justify-content: space-between;
         align-items: flex-start;
         gap: 16px;
+        width: 100%;
       }
 
       .frigate-events-modal-info-left {
-        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
         min-width: 0;
+        flex: 1;
+      }
+
+      .frigate-events-modal-info-center {
+        display: flex;
+        flex: 2;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        min-width: 0;
+        padding: 0 16px;
+        align-self: center;
       }
 
       .frigate-events-modal-info-right {
-        text-align: right;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 4px;
+        flex: 1;
         flex-shrink: 0;
+        text-align: right;
       }
 
       .frigate-events-modal-label {
         font-size: 20px;
         font-weight: 600;
         color: var(--primary-text-color, #fff);
-        margin-bottom: 2px;
+        line-height: 1.2;
       }
 
       .frigate-events-modal-camera {
-        font-size: 14px;
+        font-size: 13px;
         color: var(--secondary-text-color, #aaa);
+        line-height: 1.2;
       }
 
       .frigate-events-modal-time {
-        font-size: 14px;
-        color: var(--primary-text-color, #fff);
+        font-size: 20px;
         font-weight: 500;
-        margin-bottom: 2px;
+        color: var(--primary-text-color, #fff);
+        line-height: 1.2;
+      }
+
+      .frigate-events-modal-zones {
+        font-size: 13px;
+        color: var(--secondary-text-color, #aaa);
+        line-height: 1.2;
       }
 
       .frigate-events-modal-duration {
         font-size: 13px;
         color: var(--secondary-text-color, #aaa);
-        margin-bottom: 2px;
+        line-height: 1.2;
       }
 
-      .frigate-events-modal-zones {
-        font-size: 12px;
+      .frigate-events-modal-score {
+        font-size: 13px;
         color: var(--secondary-text-color, #aaa);
-        opacity: 0.8;
+        line-height: 1.2;
+      }
+
+      .frigate-events-modal-description-row {
+        border-top: 1px solid var(--divider-color, rgba(255, 255, 255, 0.15));
+        padding-top: 12px;
+        margin-top: 4px;
+        width: 100%;
+        max-height: 90px;
+        overflow-y: auto;
+      }
+
+      .frigate-events-modal-description-row::-webkit-scrollbar {
+        width: 6px;
+      }
+      .frigate-events-modal-description-row::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      .frigate-events-modal-description-row::-webkit-scrollbar-thumb {
+        background-color: rgba(255, 255, 255, 0.15);
+        border-radius: 3px;
+      }
+      .frigate-events-modal-description-row::-webkit-scrollbar-thumb:hover {
+        background-color: rgba(255, 255, 255, 0.35);
+      }
+
+      .frigate-events-modal-description {
+        font-size: 13px;
+        line-height: 1.5;
+        color: var(--primary-text-color, #e0e0e0);
+        font-style: italic;
+        white-space: pre-wrap;
       }
     `;
     document.head.appendChild(style);
@@ -493,68 +627,212 @@ export class FrigateEventsCard extends LitElement {
     return skipSeconds > 0 ? `#t=${skipSeconds}` : '';
   }
 
+  private _getEventsToShow(): FrigateEvent[] {
+    if (!this._config) return [];
+    const isScroll = !!this._config.scroll;
+    const visibleCount = this._config.event_count || 5;
+    const scrollLimit = this._config.scroll_limit || 20;
+    const limit = isScroll ? scrollLimit : visibleCount;
+
+    let visibleEvents = this._events;
+    const resetTimestamp = this._getDailyResetTimestamp();
+    if (resetTimestamp !== null) {
+      visibleEvents = this._events.filter(e => (e.start_time || 0) > resetTimestamp);
+    }
+
+    const offset = this._config.offset || 0;
+    const eventsToShow = visibleEvents.slice(offset, offset + limit);
+    return this._config.reverse ? [...eventsToShow].reverse() : eventsToShow;
+  }
+
+  private _navigateToEvent(direction: 'next' | 'prev'): void {
+    if (!this._selectedEvent) return;
+    const orderedEvents = this._getEventsToShow();
+    const currentIndex = orderedEvents.findIndex(e => e.id === this._selectedEvent?.id);
+    if (currentIndex === -1) return;
+
+    let newIndex = currentIndex;
+    if (direction === 'next') {
+      newIndex = currentIndex + 1;
+    } else if (direction === 'prev') {
+      newIndex = currentIndex - 1;
+    }
+
+    if (newIndex >= 0 && newIndex < orderedEvents.length) {
+      this._selectedEvent = orderedEvents[newIndex];
+      this._showModal();
+    }
+  }
+
+  private _handleKeyDown(e: KeyboardEvent): void {
+    if (!this._selectedEvent) return;
+    if (e.key === 'ArrowRight') {
+      this._navigateToEvent('next');
+    } else if (e.key === 'ArrowLeft') {
+      this._navigateToEvent('prev');
+    } else if (e.key === 'Escape') {
+      this._handleModalClose();
+    }
+  }
+
   private _showModal(): void {
     if (!this._selectedEvent) return;
 
+    console.log('Frigate Events Card: event clicked =', this._selectedEvent);
+
     this._injectModalStyles();
-    this._removeModal(); // Clean up any existing modal
+    
+    const isUpdating = !!this._modalContainer;
+    if (isUpdating && this._boundKeyDownHandler) {
+      window.removeEventListener('keydown', this._boundKeyDownHandler);
+      this._boundKeyDownHandler = undefined;
+    }
 
     const event = this._selectedEvent;
     const clientId = this._config?.frigate_client_id || 'frigate';
     const snapshotUrl = getEventSnapshotURL(clientId, event.id, {
-      bbox: true,
-      timestamp: true
+      bbox: this._config?.show_bounding_box !== false,
+      timestamp: true,
+      cacheBust: event.end_time || undefined
     });
     const duration = this._formatDuration(event.start_time, event.end_time);
     const zones = this._formatZones(event.zones);
 
-    // Create modal container
-    this._modalContainer = document.createElement('div');
-    this._modalContainer.className = 'frigate-events-modal';
-    this._modalContainer.addEventListener('click', () => this._handleModalClose());
+    if (!isUpdating) {
+      // Create modal container
+      this._modalContainer = document.createElement('div');
+      this._modalContainer.className = 'frigate-events-modal';
+      this._modalContainer.addEventListener('click', () => this._handleModalClose());
+    }
 
     // Build modal content
-    const showVideo = this._config?.video && event.has_clip;
+    const showVideo = !!this._config?.video;
     const timeParam = this._getVideoTimeParam(event);
     const clipUrl = getEventClipURL(clientId, event.id) + timeParam;
     const hlsUrl = getEventHlsURL(clientId, event.id) + timeParam;
 
+    const topScore = event.data?.top_score ?? event.top_score ?? event.data?.score;
+    const scoreText = topScore !== undefined && topScore !== null
+      ? `${Math.round(topScore * 100)}%`
+      : '';
+
+    const timeStr = this._formatTime(event.start_time);
+    const dateStr = this._config?.show_date ? `${this._formatDate(event.start_time)} · ` : '';
+    const rightLine1 = `${dateStr}${timeStr}`;
+
+    const showDuration = !!this._config?.show_duration;
+    const showAccuracy = !!this._config?.show_accuracy;
+    const showDescription = this._config?.show_description !== false;
+    const showCameraName = this._config?.show_camera_name !== false;
+    const showZones = this._config?.show_zones !== false;
+
+    // Check next/prev events
+    const orderedEvents = this._getEventsToShow();
+    const currentIndex = orderedEvents.findIndex(e => e.id === event.id);
+    const hasPrev = currentIndex > 0;
+    const hasNext = currentIndex !== -1 && currentIndex < orderedEvents.length - 1;
+
+    const showNav = !!this._config?.show_modal_navigation;
+    const prevBtnHtml = (showNav && hasPrev)
+      ? `<button class="frigate-events-modal-nav prev" title="Previous event">
+           <svg viewBox="0 0 24 24">
+             <path d="M15,6L9,12L15,18Z" fill="currentColor"/>
+           </svg>
+         </button>`
+      : '';
+    const nextBtnHtml = (showNav && hasNext)
+      ? `<button class="frigate-events-modal-nav next" title="Next event">
+           <svg viewBox="0 0 24 24">
+             <path d="M9,6L15,12L9,18Z" fill="currentColor"/>
+           </svg>
+         </button>`
+      : '';
+    const container = this._modalContainer;
+    if (!container) return;
+
     // Build modal content html
-    this._modalContainer.innerHTML = `
+    container.innerHTML = `
       <div class="frigate-events-modal-content">
         <div class="frigate-events-modal-image-container">
+          ${prevBtnHtml}
           ${showVideo
-            ? `<video autoplay muted controls playsinline style="width: 100%; height: auto; display: block;">
+            ? `<video autoplay ${this._config?.muted ? 'muted' : ''} controls playsinline>
                  <source src="${clipUrl}" type="video/mp4">
                  <source src="${hlsUrl}" type="application/x-mpegURL">
                </video>`
-            : `<img src="${snapshotUrl}" alt="${event.label}" style="width: 100%; height: auto; display: block;" />`
-          }          <button class="frigate-events-modal-close">x</button>
+            : `<img src="${snapshotUrl}" alt="${event.label}" />`
+          }          ${nextBtnHtml}
+          <button class="frigate-events-modal-close">x</button>
         </div>
         <div class="frigate-events-modal-info">
-          <div class="frigate-events-modal-info-left">
-            <div class="frigate-events-modal-label">${this._capitalize(event.label)}</div>
-            <div class="frigate-events-modal-camera">${this._formatCameraName(event.camera)}</div>
+          <div class="frigate-events-modal-info-top">
+            <div class="frigate-events-modal-info-left">
+              <div class="frigate-events-modal-label">
+                ${this._capitalize(event.label)}
+              </div>
+              ${showCameraName
+                ? `<div class="frigate-events-modal-camera">
+                     ${this._formatCameraName(event.camera)}
+                   </div>`
+                : ''
+              }
+              ${showAccuracy && scoreText ? `<div class="frigate-events-modal-score">${scoreText}</div>` : ''}
+            </div>
+            
+            <div class="frigate-events-modal-info-right">
+              <div class="frigate-events-modal-time">${rightLine1}</div>
+              ${showZones && zones ? `<div class="frigate-events-modal-zones">${zones}</div>` : ''}
+              ${showDuration ? `<div class="frigate-events-modal-duration">${duration}</div>` : ''}
+            </div>
           </div>
-          <div class="frigate-events-modal-info-right">
-            <div class="frigate-events-modal-time">${this._formatTime(event.start_time)}</div>
-            <div class="frigate-events-modal-duration">${duration}</div>
-            ${zones ? `<div class="frigate-events-modal-zones">${zones}</div>` : ''}
-          </div>
+          ${showDescription && (event.description || event.data?.description)
+            ? `<div class="frigate-events-modal-description-row">
+                 <div class="frigate-events-modal-description">${event.description || event.data?.description}</div>
+               </div>`
+            : ''
+          }
         </div>
       </div>
     `;
 
+    // Ensure video muted state is programmatically set to handle browser autoplay policies
+    const videoEl = container.querySelector('video');
+    if (videoEl) {
+      videoEl.muted = this._config?.muted !== false;
+    }
+
     // Stop propagation on content click
-    const content = this._modalContainer.querySelector('.frigate-events-modal-content');
+    const content = container.querySelector('.frigate-events-modal-content');
     content?.addEventListener('click', (e) => e.stopPropagation());
 
     // Close button handler
-    const closeBtn = this._modalContainer.querySelector('.frigate-events-modal-close');
+    const closeBtn = container.querySelector('.frigate-events-modal-close');
     closeBtn?.addEventListener('click', () => this._handleModalClose());
 
-    // Append to document body
-    document.body.appendChild(this._modalContainer);
+    // Navigation button handlers
+    if (showNav && hasPrev) {
+      const prevBtn = container.querySelector('.frigate-events-modal-nav.prev');
+      prevBtn?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._navigateToEvent('prev');
+      });
+    }
+    if (showNav && hasNext) {
+      const nextBtn = container.querySelector('.frigate-events-modal-nav.next');
+      nextBtn?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._navigateToEvent('next');
+      });
+    }
+
+    // Bind keydown listener
+    this._boundKeyDownHandler = (e: KeyboardEvent) => this._handleKeyDown(e);
+    window.addEventListener('keydown', this._boundKeyDownHandler);
+
+    // Append to document body only if it's a new modal
+    if (!isUpdating) {
+      document.body.appendChild(container);
+    }
   }
 
   private _removeModal(): void {
@@ -562,12 +840,21 @@ export class FrigateEventsCard extends LitElement {
       this._modalContainer.parentNode.removeChild(this._modalContainer);
       this._modalContainer = undefined;
     }
+    if (this._boundKeyDownHandler) {
+      window.removeEventListener('keydown', this._boundKeyDownHandler);
+      this._boundKeyDownHandler = undefined;
+    }
   }
 
   private _formatTime(timestamp: number): string {
     const date = new Date(timestamp * 1000);
-    // Let browser locale determine 12/24 hour format
-    return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    // Let browser locale determine 12/24 hour format, using numeric hour to avoid leading zeros
+    return date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' }).toUpperCase();
+  }
+
+  private _formatDate(timestamp: number): string {
+    const date = new Date(timestamp * 1000);
+    return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
   }
 
   private _formatDuration(startTime: number, endTime: number | null): string {
@@ -951,10 +1238,12 @@ export class FrigateEventsCard extends LitElement {
       return html`<ha-card>No configuration</ha-card>`;
     }
 
-    const isScroll = !!this._config.scroll;
+    const isGrid = this._config.layout === 'grid';
+    const isScroll = !isGrid && !!this._config.scroll;
+    const showScrollArrows = isScroll && !!this._config.show_scroll_arrows;
     const visibleCount = this._config.event_count || 5;
     const scrollLimit = this._config.scroll_limit || 20;
-    const limit = isScroll ? scrollLimit : visibleCount;
+    const limit = this._config.scroll ? scrollLimit : visibleCount;
 
     // Filter events based on daily clear time
     let visibleEvents = this._events;
@@ -966,8 +1255,12 @@ export class FrigateEventsCard extends LitElement {
     // Limit to event count and calculate placeholders
     const offset = this._config.offset || 0;
     const eventsToShow = visibleEvents.slice(offset, offset + limit);
-    const targetCountForPlaceholders = isScroll ? visibleCount : limit;
-    const placeholderCount = Math.max(0, targetCountForPlaceholders - eventsToShow.length);
+    let placeholderCount = Math.max(0, (isScroll ? visibleCount : limit) - eventsToShow.length);
+    if (isGrid && this._config.grid_columns && placeholderCount > 0) {
+      const totalWithPlaceholders = eventsToShow.length + placeholderCount;
+      const roundedTotal = Math.ceil(totalWithPlaceholders / this._config.grid_columns) * this._config.grid_columns;
+      placeholderCount = roundedTotal - eventsToShow.length;
+    }
 
     let renderedEvents = eventsToShow.map(event => this._renderEvent(event));
     let renderedPlaceholders = Array(placeholderCount).fill(0).map(() => html`<div class="placeholder"></div>`);
@@ -976,6 +1269,23 @@ export class FrigateEventsCard extends LitElement {
     if (this._config.reverse) {
       allItems.reverse();
     }
+
+    const eventsClasses = [
+      'events',
+      isGrid ? 'grid' : '',
+      isGrid && this._config.scroll ? 'scrollable-y' : '',
+      !isGrid && this._config.scroll ? 'scrollable' : ''
+    ].filter(Boolean).join(' ');
+
+    const gridColumns = this._config.grid_columns;
+    const gridTemplateColumns = gridColumns
+      ? `repeat(${gridColumns}, 1fr)`
+      : `repeat(auto-fill, minmax(120px, 1fr))`;
+    const gridMaxHeight = this._config.grid_max_height || '400px';
+
+    const eventsStyle = isGrid
+      ? `grid-template-columns: ${gridTemplateColumns}; --grid-max-height: ${gridMaxHeight};`
+      : `--visible-count: ${visibleCount}; --event-count: ${limit};`;
 
     return html`
       <ha-card>
@@ -987,11 +1297,19 @@ export class FrigateEventsCard extends LitElement {
           ? html``
           : html`
               <div class="events-container">
-                ${isScroll ? html`
-                  <button class="scroll-btn prev" @click=${() => this._scroll('left')}>◀</button>
-                  <button class="scroll-btn next" @click=${() => this._scroll('right')}>▶</button>
+                ${showScrollArrows ? html`
+                  <button class="scroll-btn prev" @click=${() => this._scroll('left')} aria-label="Previous">
+                    <svg viewBox="0 0 24 24">
+                      <path d="M15,6L9,12L15,18Z" fill="currentColor"/>
+                    </svg>
+                  </button>
+                  <button class="scroll-btn next" @click=${() => this._scroll('right')} aria-label="Next">
+                    <svg viewBox="0 0 24 24">
+                      <path d="M9,6L15,12L9,18Z" fill="currentColor"/>
+                    </svg>
+                  </button>
                 ` : ''}
-                <div class="events ${isScroll ? 'scrollable' : ''}" style="--visible-count: ${visibleCount}; --event-count: ${limit};">
+                <div class="${eventsClasses}" style="${eventsStyle}">
                   ${allItems}
                 </div>
               </div>
@@ -1003,12 +1321,13 @@ export class FrigateEventsCard extends LitElement {
   private _renderEvent(event: FrigateEvent): TemplateResult {
     const clientId = this._config?.frigate_client_id || 'frigate';
     const snapshotUrl = getEventSnapshotURL(clientId, event.id, {
-      bbox: true,
-      crop: true
+      bbox: this._config?.show_bounding_box !== false,
+      crop: true,
+      cacheBust: event.end_time || undefined
     });
 
     const isHovered = this._hoveredEventId === event.id;
-    const playVideoOnHover = this._config?.video_on_hover && event.has_clip;
+    const playVideoOnHover = !!this._config?.video_on_hover;
     const timeParam = this._getVideoTimeParam(event);
     const clipUrl = getEventClipURL(clientId, event.id) + timeParam;
     const hlsUrl = getEventHlsURL(clientId, event.id) + timeParam;
@@ -1126,6 +1445,13 @@ export class FrigateEventsCard extends LitElement {
         right: 8px;
       }
 
+      .scroll-btn svg {
+        width: 18px;
+        height: 18px;
+        fill: currentColor;
+        display: block;
+      }
+
       .events-container:hover .scroll-btn {
         opacity: 1;
       }
@@ -1143,6 +1469,7 @@ export class FrigateEventsCard extends LitElement {
         display: grid;
         grid-template-columns: repeat(var(--visible-count, 5), 1fr);
         gap: 9px;
+        align-items: start;
       }
 
       .events.scrollable {
@@ -1156,6 +1483,7 @@ export class FrigateEventsCard extends LitElement {
         grid-template-columns: none;
         -ms-overflow-style: none;
         scrollbar-width: none;
+        align-items: start;
       }
 
       .events.scrollable::-webkit-scrollbar {
@@ -1167,6 +1495,37 @@ export class FrigateEventsCard extends LitElement {
         flex: 0 0 calc((100% - (var(--visible-count, 5) - 1) * 9px) / var(--visible-count, 5));
         scroll-snap-align: start;
         box-sizing: border-box;
+      }
+
+      .events.grid {
+        display: grid;
+        grid-template-columns: var(--grid-template-columns, repeat(auto-fill, minmax(120px, 1fr)));
+        gap: 9px;
+        align-items: start;
+      }
+
+      .events.grid.scrollable-y {
+        max-height: var(--grid-max-height, 400px);
+        overflow-y: auto;
+        overflow-x: hidden;
+        padding-right: 4px;
+      }
+
+      .events.grid.scrollable-y::-webkit-scrollbar {
+        width: 6px;
+      }
+
+      .events.grid.scrollable-y::-webkit-scrollbar-track {
+        background: transparent;
+      }
+
+      .events.grid.scrollable-y::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.2);
+        border-radius: 3px;
+      }
+
+      .events.grid.scrollable-y::-webkit-scrollbar-thumb:hover {
+        background: rgba(255, 255, 255, 0.4);
       }
 
       .event {
