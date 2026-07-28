@@ -1,6 +1,8 @@
 # Changelog
  
 ## [Unreleased]
+- Fixed: Fallback snapshot image to event thumbnail if snapshot disabled or missing.
+
 
 ## [2.1.31] - 2026-06-05
 - Added: Horizontal scrolling gallery mode via new `scroll` and `scroll_limit` config options. When enabled, `event_count` controls the number of visible thumbnails and hover-triggered navigation arrows appear on desktop.

@@ -5,9 +5,9 @@ import { LitElement, html, css, PropertyValues, TemplateResult, CSSResult } from
 import { customElement, property, state } from 'lit/decorators.js';
 import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/types';
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
-import { getEvents, getEventSnapshotURL, subscribeToEvents, getEventClipURL, getEventHlsURL } from './frigate/api';
+import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL } from './frigate/api';
 
-const CARD_VERSION = '2.1.30';
+const CARD_VERSION = '2.1.31';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -966,7 +966,8 @@ export class FrigateEventsCard extends LitElement {
     // Limit to event count and calculate placeholders
     const offset = this._config.offset || 0;
     const eventsToShow = visibleEvents.slice(offset, offset + limit);
-    const placeholderCount = limit - eventsToShow.length;
+    const targetCountForPlaceholders = isScroll ? visibleCount : limit;
+    const placeholderCount = Math.max(0, targetCountForPlaceholders - eventsToShow.length);
 
     let renderedEvents = eventsToShow.map(event => this._renderEvent(event));
     let renderedPlaceholders = Array(placeholderCount).fill(0).map(() => html`<div class="placeholder"></div>`);
@@ -1012,6 +1013,8 @@ export class FrigateEventsCard extends LitElement {
     const clipUrl = getEventClipURL(clientId, event.id) + timeParam;
     const hlsUrl = getEventHlsURL(clientId, event.id) + timeParam;
 
+    const thumbnailUrl = getEventThumbnailURL(clientId, event.id);
+
     return html`
       <div class="event"
         @click=${() => this._handleEventClick(event)}
@@ -1023,6 +1026,12 @@ export class FrigateEventsCard extends LitElement {
           src="${snapshotUrl}"
           alt="${event.label}"
           loading="lazy"
+          @error=${(e: Event) => {
+            const img = e.target as HTMLImageElement;
+            if (img && !img.src.includes('/thumbnail/')) {
+              img.src = thumbnailUrl;
+            }
+          }}
         />
         ${playVideoOnHover && isHovered
           ? html`<video
@@ -1145,23 +1154,12 @@ export class FrigateEventsCard extends LitElement {
         -webkit-overflow-scrolling: touch;
         scroll-behavior: smooth;
         grid-template-columns: none;
+        -ms-overflow-style: none;
+        scrollbar-width: none;
       }
 
       .events.scrollable::-webkit-scrollbar {
-        height: 4px;
-      }
-
-      .events.scrollable::-webkit-scrollbar-track {
-        background: transparent;
-      }
-
-      .events.scrollable::-webkit-scrollbar-thumb {
-        background: var(--scrollbar-thumb-color, rgba(255, 255, 255, 0.2));
-        border-radius: 4px;
-      }
-
-      .events.scrollable::-webkit-scrollbar-thumb:hover {
-        background: var(--scrollbar-thumb-hover-color, rgba(255, 255, 255, 0.4));
+        display: none;
       }
 
       .events.scrollable .event,
