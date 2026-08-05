@@ -1,5 +1,8 @@
 # Changelog
 
+## [Unreleased]
+- Fixed: Fallback snapshot image to event thumbnail if snapshot disabled or missing.
+
 ## [2.2.0] - 2026-07-06
 - Added: Vertical Grid Layout (`layout: grid`) supporting custom `grid_columns` and `grid_max_height` styles.
 - Added: Details modal navigation buttons (◀/▶) and keyboard shortcuts (`ArrowLeft`/`ArrowRight`/`Escape`) to easily cycle through events.
@@ -81,6 +84,7 @@
 
 ## [2.1.32] - 2026-06-09
 - Added: `show_scroll_arrows` config option (default: `false`) to control the visibility of navigation arrows in scroll mode.
+>>>>>>> origin/develop
 
 ## [2.1.31] - 2026-06-05
 - Added: Horizontal scrolling gallery mode via new `scroll` and `scroll_limit` config options. When enabled, `event_count` controls the number of visible thumbnails and hover-triggered navigation arrows appear on desktop.
