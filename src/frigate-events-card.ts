@@ -2185,6 +2185,7 @@ declare global {
   name: 'Frigate Events Card',
   description: 'A simple card for displaying recent Frigate detection events',
   preview: true,
+  documentationURL: 'https://github.com/saihgupr/frigate-events-card',
 });
 
 console.info(
