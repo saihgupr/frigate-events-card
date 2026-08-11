@@ -15,9 +15,9 @@ A simple Lovelace card for displaying recent Frigate detection events in a horiz
 - **Sections View Ready**: Fully compatible with Home Assistant's Sections view, rendering full-width and scaling properly.
 - **Rich Media**: High-quality snapshots with optional zooming.
 - **Bounding Boxes**: Toggle the visibility of Frigate's detection bounding box overlays on event snapshots.
-- **Video Playback**: Natively stream MP4 and HLS (`.m3u8`) event clips directly in your browser.
-- **Hover Previews**: Instantly play video clips when hovering over any event, with smooth auto-tracking that pans and follows the detected object throughout the clip.
-- **Live Camera Feed**: Optional WebRTC live feed above the event gallery — true continuous peer connection, zero-flash re-renders, Smart TV browser optimizations, and 24/7 self-healing auto-reconnect for network drops and Frigate restarts.
+- **Video Playback**: Natively stream MP4 and HLS (`.m3u8`) event clips directly in your browser with seamless dark grey loading placeholders.
+- **Hover Previews**: Instantly play video clips when hovering over any event without flashing, with smooth auto-tracking that pans and follows the detected object throughout the clip.
+- **Live Camera Feed**: Optional WebRTC live feed above the event gallery — click to open fullscreen, true continuous peer connection, zero-flash re-renders, Smart TV browser optimizations, and 24/7 self-healing auto-reconnect for network drops and Frigate restarts.
 - **Scrollable Gallery**: Optional horizontal scroll mode with arrow navigation and hidden scrollbar for a clean, native feel.
 - **Customizable Layout**: Reverse the rendering order or offset the timeline to build the exact dashboard you want.
 - **Daily Reset**: Optional automated clearing for a fresh daily view.
@@ -203,7 +203,7 @@ The most common settings to get you started:
 | `video` | boolean | `true` | Whether to play video clips instead of snapshots in the gallery and modal. |
 | `video_on_hover` | boolean | `true` | Play video clips automatically when hovering over an event snapshot in the gallery. |
 | `scroll` | boolean | `true` | Enable horizontal scrolling gallery. When enabled, `event_count` sets the visible thumbnail count at once. |
-| `live_view` | boolean | `false` | Show a live WebRTC camera feed above the event gallery. Continuous peer connection with 24/7 self-healing auto-recovery for network drops and Frigate restarts. |
+| `live_view` | boolean | `false` | Show a live WebRTC camera feed above the event gallery. Click to toggle fullscreen view. Continuous peer connection with 24/7 self-healing auto-recovery for network drops and Frigate restarts. |
 | `live_view_entity` | string | none | Camera entity ID for the live feed (e.g. `camera.wyze_camera`). Required when `live_view: true`. |
 | `live_view_aspect_ratio` | string | `16 / 9` | CSS `aspect-ratio` for the live feed container (e.g. `"4 / 3"`). |
 | `go2rtc_url` | string | none | Optional direct go2rtc API URL (e.g. `http://192.168.1.211:1984`). Directly negotiates WebRTC with go2rtc, bypassing Home Assistant WebSocket requirements. |
