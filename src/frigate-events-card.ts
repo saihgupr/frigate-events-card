@@ -8,7 +8,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL } from './frigate/api';
 
-const CARD_VERSION = '2.2.23';
+const CARD_VERSION = '2.2.24';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -151,6 +151,7 @@ export class FrigateEventsCard extends LitElement {
   private _liveViewUnsub?: () => void;
   private _intersectionObserver?: IntersectionObserver;
   private _intersectionGraceTimer?: number;
+  private _disconnectTimer?: number;
   private _liveVideoEl: HTMLVideoElement | null = null;
   private _remoteStream?: MediaStream;
 
@@ -481,20 +482,8 @@ export class FrigateEventsCard extends LitElement {
         }
       };
 
-      // --- Monitor for connection failure and attempt recovery ---
-      pc.onconnectionstatechange = () => {
-        console.debug(`Frigate Events Card: WebRTC state → ${pc.connectionState}`);
-        if (pc.connectionState === 'failed') {
-          console.warn('Frigate Events Card: WebRTC connection failed; retrying in 5s.');
-          this._teardownWebRTC();
-          // Only retry if the card is still visible (IntersectionObserver is active)
-          window.setTimeout(() => {
-            if (this._intersectionObserver && !this._peerConnection) {
-              this._startWebRTC();
-            }
-          }, 5000);
-        }
-      };
+      // --- Monitor for connection failure and 24/7 self-healing recovery ---
+      this._setupWebRTCMonitoring(pc);
 
     } catch (e: any) {
       let msg = e?.message || (typeof e === 'object' ? JSON.stringify(e) : String(e));
@@ -565,18 +554,8 @@ export class FrigateEventsCard extends LitElement {
       await pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: answerSdp }));
       this._liveViewError = undefined;
 
-      pc.onconnectionstatechange = () => {
-        console.debug(`Frigate Events Card: go2rtc WebRTC state → ${pc.connectionState}`);
-        if (pc.connectionState === 'failed') {
-          console.warn('Frigate Events Card: go2rtc WebRTC connection failed; retrying in 5s.');
-          this._teardownWebRTC();
-          window.setTimeout(() => {
-            if (this._intersectionObserver && !this._peerConnection) {
-              this._startWebRTC();
-            }
-          }, 5000);
-        }
-      };
+      // --- Monitor for connection failure and 24/7 self-healing recovery ---
+      this._setupWebRTCMonitoring(pc);
     } catch (e: any) {
       const msg = e?.message || String(e);
       console.error('Frigate Events Card: Failed direct go2rtc WebRTC session:', msg);
@@ -591,10 +570,16 @@ export class FrigateEventsCard extends LitElement {
    * session is also released. Safe to call multiple times.
    */
   private _teardownWebRTC(): void {
+    if (this._disconnectTimer) {
+      clearTimeout(this._disconnectTimer);
+      this._disconnectTimer = undefined;
+    }
+
     if (this._peerConnection) {
       this._peerConnection.ontrack = null;
       this._peerConnection.onicecandidate = null;
       this._peerConnection.onconnectionstatechange = null;
+      this._peerConnection.oniceconnectionstatechange = null;
       this._peerConnection.onicegatheringstatechange = null;
       this._peerConnection.close();
       this._peerConnection = undefined;
@@ -620,9 +605,61 @@ export class FrigateEventsCard extends LitElement {
       this._liveVideoEl.srcObject = null;
     }
     if (this._remoteStream) {
-      this._remoteStream.getTracks().forEach(t => t.stop());
+      this._remoteStream.getTracks().forEach((track) => track.stop());
       this._remoteStream = undefined;
     }
+  }
+
+  /**
+   * Monitor WebRTC peer connection and ICE state.
+   * Handles immediate recovery on failure, and 10s self-healing grace period
+   * on network disconnection (e.g. Wi-Fi blips, router reboots, Frigate restarts).
+   */
+  private _setupWebRTCMonitoring(pc: RTCPeerConnection): void {
+    const handleStateChange = () => {
+      const connState = pc.connectionState;
+      const iceState = pc.iceConnectionState;
+      console.debug(`Frigate Events Card: WebRTC state → connection: ${connState}, ice: ${iceState}`);
+
+      if (connState === 'connected' || iceState === 'connected' || iceState === 'completed') {
+        if (this._disconnectTimer) {
+          clearTimeout(this._disconnectTimer);
+          this._disconnectTimer = undefined;
+        }
+      } else if (connState === 'failed' || iceState === 'failed') {
+        if (this._disconnectTimer) {
+          clearTimeout(this._disconnectTimer);
+          this._disconnectTimer = undefined;
+        }
+        console.warn('Frigate Events Card: WebRTC connection failed; auto-reconnecting in 5s.');
+        this._teardownWebRTC();
+        window.setTimeout(() => {
+          if (this._intersectionObserver && !this._peerConnection) {
+            this._startWebRTC();
+          }
+        }, 5000);
+      } else if (connState === 'disconnected' || iceState === 'disconnected') {
+        if (!this._disconnectTimer) {
+          console.warn('Frigate Events Card: WebRTC stream disconnected; starting 10s self-healing timer...');
+          this._disconnectTimer = window.setTimeout(() => {
+            this._disconnectTimer = undefined;
+            if (
+              this._peerConnection === pc &&
+              (pc.connectionState === 'disconnected' || pc.iceConnectionState === 'disconnected')
+            ) {
+              console.warn(
+                'Frigate Events Card: WebRTC stream remained disconnected for 10s. Triggering self-healing restart.'
+              );
+              this._teardownWebRTC();
+              this._startWebRTC();
+            }
+          }, 10000);
+        }
+      }
+    };
+
+    pc.onconnectionstatechange = handleStateChange;
+    pc.oniceconnectionstatechange = handleStateChange;
   }
 
   private async _loadEvents(): Promise<void> {
