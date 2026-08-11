@@ -8,7 +8,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL } from './frigate/api';
 
-const CARD_VERSION = '2.2.13';
+const CARD_VERSION = '2.2.19';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -78,6 +78,8 @@ interface FrigateEventsCardConfig extends LovelaceCardConfig {
   live_view?: boolean;              // default: false
   live_view_entity?: string;        // required if live_view: true — must be camera.*
   live_view_aspect_ratio?: string;  // CSS aspect-ratio value, e.g. '16 / 9' (default)
+  go2rtc_url?: string;              // Optional direct go2rtc URL (e.g. 'http://192.168.1.211:1984')
+  go2rtc_stream?: string;           // Optional stream name in go2rtc (defaults to camera entity basename)
 }
 
 const DEFAULT_CONFIG: Partial<FrigateEventsCardConfig> = {
@@ -347,7 +349,7 @@ export class FrigateEventsCard extends LitElement {
 
   /**
    * Negotiate a WebRTC peer connection to the configured camera entity via
-   * Home Assistant's camera/webrtc_offer WebSocket subscription protocol.
+   * Home Assistant's camera/web_rtc_offer WebSocket subscription protocol.
    *
    * This is the same protocol used internally by ha-web-rtc-player, but
    * called directly so we don't depend on HA's internal Lit context providers.
@@ -370,6 +372,13 @@ export class FrigateEventsCard extends LitElement {
       return;
     }
 
+    // If direct go2rtc URL is specified in config, use direct go2rtc WebRTC endpoint
+    if (this._config.go2rtc_url) {
+      const streamName = this._config.go2rtc_stream || entity.replace(/^camera\./, '');
+      await this._startGo2rtcWebRTC(this._config.go2rtc_url, streamName);
+      return;
+    }
+
     try {
       // --- Peer connection setup ---
       const pc = new RTCPeerConnection({ iceServers: WEBRTC_STUN_SERVERS });
@@ -387,9 +396,11 @@ export class FrigateEventsCard extends LitElement {
         event.streams[0]?.getTracks().forEach(track => remoteStream.addTrack(track));
       };
 
-      // Signal willingness to receive video and audio (send-only from HA's perspective)
+      // Signal willingness to receive video only.
+      // Audio is intentionally omitted: go2rtc RTSP streams are typically video-only,
+      // and including an audio m-line when the camera has no audio track can cause
+      // HA/go2rtc to reject the SDP offer entirely.
       pc.addTransceiver('video', { direction: 'recvonly' });
-      pc.addTransceiver('audio', { direction: 'recvonly' });
 
       // --- SDP offer ---
       const offer = await pc.createOffer();
@@ -454,14 +465,14 @@ export class FrigateEventsCard extends LitElement {
           }
         },
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        { type: 'camera/webrtc_offer', entity_id: entity, offer: sdpOffer } as any
+        { type: 'camera/web_rtc_offer', entity_id: entity, offer: sdpOffer } as any
       );
 
       // --- Trickle ICE: send local candidates to HA as they're discovered ---
       pc.onicecandidate = ({ candidate }) => {
         if (candidate && this._liveViewSessionId && this.hass) {
           this.hass.callWS({
-            type: 'camera/webrtc_candidate',
+            type: 'camera/web_rtc_candidate',
             session_id: this._liveViewSessionId,
             candidate: candidate.toJSON(),
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -484,9 +495,90 @@ export class FrigateEventsCard extends LitElement {
         }
       };
 
-    } catch (e) {
-      console.error('Frigate Events Card: Failed to start WebRTC session:', e);
-      this._liveViewError = 'Failed to start live stream';
+    } catch (e: any) {
+      let msg = e?.message || (typeof e === 'object' ? JSON.stringify(e) : String(e));
+      if (e?.code === 'unknown_command' || msg.toLowerCase().includes('unknown command')) {
+        msg = 'HA WebRTC protocol (camera/web_rtc_offer) not supported for this entity. Fix WebRTC Camera integration in HA or set go2rtc_url in card config.';
+      }
+      console.error('Frigate Events Card: Failed to start WebRTC session:', msg);
+      this._liveViewError = `Failed to start: ${msg}`;
+      this._teardownWebRTC();
+    }
+  }
+
+  private async _startGo2rtcWebRTC(go2rtcUrl: string, streamName: string): Promise<void> {
+    try {
+      const pc = new RTCPeerConnection({ iceServers: WEBRTC_STUN_SERVERS });
+      this._peerConnection = pc;
+
+      const remoteStream = new MediaStream();
+      this._remoteStream = remoteStream;
+      if (this._liveVideoEl) {
+        this._liveVideoEl.srcObject = remoteStream;
+      }
+
+      pc.ontrack = (event) => {
+        event.streams[0]?.getTracks().forEach((track) => remoteStream.addTrack(track));
+      };
+
+      pc.addTransceiver('video', { direction: 'recvonly' });
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      const sdpOffer = await new Promise<string>((resolve) => {
+        if (pc.iceGatheringState === 'complete') {
+          resolve(pc.localDescription!.sdp);
+          return;
+        }
+        const onStateChange = () => {
+          if (pc.iceGatheringState === 'complete') {
+            resolve(pc.localDescription!.sdp);
+          }
+        };
+        pc.onicegatheringstatechange = onStateChange;
+        setTimeout(() => resolve(pc.localDescription?.sdp || offer.sdp!), 3000);
+      });
+
+      const cleanUrl = go2rtcUrl.replace(/\/+$/, '');
+      const res = await fetch(`${cleanUrl}/api/webrtc?src=${encodeURIComponent(streamName)}`, {
+        method: 'POST',
+        body: sdpOffer,
+      });
+
+      if (!res.ok) {
+        throw new Error(`go2rtc returned HTTP ${res.status}: ${res.statusText}`);
+      }
+
+      const text = await res.text();
+      let answerSdp = text;
+      try {
+        const json = JSON.parse(text);
+        if (json.sdp) answerSdp = json.sdp;
+        else if (json.error) throw new Error(json.error);
+      } catch (e: any) {
+        if (e.message && !e.message.includes('JSON') && !e.message.includes('Unexpected token')) throw e;
+      }
+
+      await pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: answerSdp }));
+      this._liveViewError = undefined;
+
+      pc.onconnectionstatechange = () => {
+        console.debug(`Frigate Events Card: go2rtc WebRTC state → ${pc.connectionState}`);
+        if (pc.connectionState === 'failed') {
+          console.warn('Frigate Events Card: go2rtc WebRTC connection failed; retrying in 5s.');
+          this._teardownWebRTC();
+          window.setTimeout(() => {
+            if (this._intersectionObserver && !this._peerConnection) {
+              this._startWebRTC();
+            }
+          }, 5000);
+        }
+      };
+    } catch (e: any) {
+      const msg = e?.message || String(e);
+      console.error('Frigate Events Card: Failed direct go2rtc WebRTC session:', msg);
+      this._liveViewError = `Failed go2rtc stream: ${msg}`;
       this._teardownWebRTC();
     }
   }
