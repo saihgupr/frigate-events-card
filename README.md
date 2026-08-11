@@ -15,8 +15,8 @@ A simple Lovelace card for displaying recent Frigate detection events in a horiz
 - **Sections View Ready**: Fully compatible with Home Assistant's Sections view, rendering full-width and scaling properly.
 - **Rich Media**: High-quality snapshots with optional zooming.
 - **Bounding Boxes**: Toggle the visibility of Frigate's detection bounding box overlays on event snapshots.
-- **Video Playback**: Natively stream MP4 and HLS (`.m3u8`) event clips directly in your browser with seamless dark grey loading placeholders.
-- **Hover Previews**: Instantly play video clips when hovering over any event without flashing, with smooth auto-tracking that pans and follows the detected object throughout the clip.
+- **Video Playback**: Natively stream MP4 and HLS (`.m3u8`) event clips directly in your browser.
+- **Hover Previews**: Instantly play video clips when hovering over any event, with smooth auto-tracking that pans and follows the detected object throughout the clip.
 - **Live Camera Feed**: Optional WebRTC live feed above the event gallery — click to open fullscreen, true continuous peer connection, zero-flash re-renders, Smart TV browser optimizations, and 24/7 self-healing auto-reconnect for network drops and Frigate restarts.
 - **Scrollable Gallery**: Optional horizontal scroll mode with arrow navigation and hidden scrollbar for a clean, native feel.
 - **Customizable Layout**: Reverse the rendering order or offset the timeline to build the exact dashboard you want.
