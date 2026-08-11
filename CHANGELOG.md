@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [2.3.0] - 2026-08-11
 - Added: Optional live WebRTC camera feed (`live_view: true` + `live_view_entity: camera.*`) rendered above the event gallery. Uses Home Assistant's native `camera/webrtc_offer` WebSocket protocol for a true continuous peer connection — no periodic refresh, no black-frame flash. Connection is gated by IntersectionObserver (opens when ≥10% of the card is visible, closes with a 10s grace period when the card scrolls out of view), and is fully torn down in `disconnectedCallback` with no leaked peer connections.
 - Added: `live_view_aspect_ratio` config option (default `16 / 9`) to override the live feed container aspect ratio.
 - Fixed: Fallback snapshot image to event thumbnail if snapshot disabled or missing.
