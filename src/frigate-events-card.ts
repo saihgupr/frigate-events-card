@@ -8,7 +8,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL } from './frigate/api';
 
-const CARD_VERSION = '2.2.21';
+const CARD_VERSION = '2.2.23';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -358,8 +358,8 @@ export class FrigateEventsCard extends LitElement {
     if (!this.hass || !this._config?.live_view_entity) return;
     const entity = this._config.live_view_entity;
 
-    // Verify entity exists in HA state registry
-    if (!this.hass.states[entity]) {
+    // Verify entity exists in HA state registry (if using HA WebSocket signaling)
+    if (!this._config?.go2rtc_url && !this.hass.states[entity]) {
       console.warn(`Frigate Events Card: Camera entity "${entity}" not found in Home Assistant.`);
       this._liveViewError = `Entity "${entity}" not found`;
       return;
