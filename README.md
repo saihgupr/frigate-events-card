@@ -17,6 +17,7 @@ A simple Lovelace card for displaying recent Frigate detection events in a horiz
 - **Bounding Boxes**: Toggle the visibility of Frigate's detection bounding box overlays on event snapshots.
 - **Video Playback**: Natively stream MP4 and HLS (`.m3u8`) event clips directly in your browser.
 - **Hover Previews**: Instantly play video clips when hovering over any event, with smooth auto-tracking that pans and follows the detected object throughout the clip.
+- **Live Camera Feed**: Optional WebRTC live feed above the event gallery — true continuous peer connection, no polling, no black-frame flash.
 - **Scrollable Gallery**: Optional horizontal scroll mode with arrow navigation and hidden scrollbar for a clean, native feel.
 - **Customizable Layout**: Reverse the rendering order or offset the timeline to build the exact dashboard you want.
 - **Daily Reset**: Optional automated clearing for a fresh daily view.
@@ -56,6 +57,10 @@ This card can be easily installed via [HACS](https://hacs.xyz/) (Home Assistant 
 type: custom:frigate-events-card
 frigate_client_id: frigate
 event_count: 5
+
+# Optional: Live camera feed above events (WebRTC — no polling, no flash)
+live_view: true
+live_view_entity: camera.wyze_camera
 
 # Optional filters
 cameras:
@@ -126,6 +131,30 @@ scroll_limit: 40
 video_on_hover: true
 ```
 
+### Example: Live Camera Feed
+
+This example adds a live WebRTC camera feed above the event gallery. The stream uses Home
+Assistant's native camera WebSocket protocol, so WebRTC is negotiated through HA's own
+authenticated path — no hardcoded IPs, no go2rtc API access directly from the browser.
+
+> **Requirements:** Camera entity must support WebRTC (Frigate's go2rtc integration,
+> `reolink`, `nest`, etc.). Dashboard must be served over **HTTPS**.
+
+```yaml
+type: custom:frigate-events-card
+frigate_client_id: frigate
+event_count: 5
+live_view: true
+live_view_entity: camera.wyze_camera
+video_on_hover: true
+```
+
+Optionally override the video aspect ratio (defaults to `16 / 9`):
+
+```yaml
+live_view_aspect_ratio: "4 / 3"
+```
+
 ### Example: Advanced Tracking Configuration
 
 This example shows a real-world configuration for fine-tuning video clip endpoints and tracking synchronization based on detection labels.
@@ -162,6 +191,9 @@ The most common settings to get you started:
 | `video` | boolean | `true` | Whether to play video clips instead of snapshots in the gallery and modal. |
 | `video_on_hover` | boolean | `true` | Play video clips automatically when hovering over an event snapshot in the gallery. |
 | `scroll` | boolean | `true` | Enable horizontal scrolling gallery. When enabled, `event_count` sets the visible thumbnail count at once. |
+| `live_view` | boolean | `false` | Show a live WebRTC camera feed above the event gallery. Connection opens only while the card is visible and closes on unmount — no polling, no flash. |
+| `live_view_entity` | string | none | Camera entity ID for the live feed (e.g. `camera.wyze_camera`). Required when `live_view: true`. Must be a `camera.*` entity with WebRTC support. |
+| `live_view_aspect_ratio` | string | `16 / 9` | CSS `aspect-ratio` for the live feed container (e.g. `"4 / 3"`). |
 
 <details>
 <summary><strong>Advanced Settings</strong> (Click to expand)</summary>

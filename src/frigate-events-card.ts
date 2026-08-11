@@ -3,17 +3,38 @@
  */
 import { LitElement, html, css, PropertyValues, TemplateResult, CSSResult } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
+import { ref } from 'lit/directives/ref.js';
 import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/types';
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL } from './frigate/api';
 
-const CARD_VERSION = '2.2.12';
+const CARD_VERSION = '2.2.13';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
 const FALLBACK_POLL_INTERVAL = 10000; // 10 seconds
 const HOVER_CROP_DEFAULT_SMOOTHING = 1.0; // 0.0 is jerky, 1.0 is smoothest
 const HOVER_CROP_MARGIN_PERCENT = 0.20; // 20% margin on each side of the container
+
+// WebRTC live feed constants
+// Events streamed back from HA's camera/webrtc_offer subscription
+type HAWebRtcEvent =
+  | { type: 'session'; session_id: string }
+  | { type: 'answer'; answer: string }
+  | { type: 'candidate'; candidate: RTCIceCandidateInit }
+  | { type: 'error'; code: string; message: string };
+
+// Google public STUN servers — used to help establish the peer connection.
+// HA may also return STUN/TURN config via camera/webrtc_client_config, but
+// these cover the common LAN + Nabu Casa remote access case without extra calls.
+const WEBRTC_STUN_SERVERS: RTCIceServer[] = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+];
+
+// Time (ms) to keep the peer connection alive after the card leaves the
+// viewport, to avoid teardown/reconnect churn from minor scroll jitter.
+const LIVE_VIEW_TEARDOWN_GRACE_MS = 10000;
 
 
 type ObjectPositionPercent = { x: number; y: number };
@@ -53,6 +74,10 @@ interface FrigateEventsCardConfig extends LovelaceCardConfig {
   layout?: 'row' | 'grid';
   grid_columns?: number;
   grid_max_height?: string;
+  // Live view options
+  live_view?: boolean;              // default: false
+  live_view_entity?: string;        // required if live_view: true — must be camera.*
+  live_view_aspect_ratio?: string;  // CSS aspect-ratio value, e.g. '16 / 9' (default)
 }
 
 const DEFAULT_CONFIG: Partial<FrigateEventsCardConfig> = {
@@ -108,6 +133,7 @@ export class FrigateEventsCard extends LitElement {
   @state() private _loading = true;
   @state() private _error?: string;
   @state() private _hoveredEventId?: string;
+  @state() private _liveViewError?: string;   // Set when live feed fails gracefully
 
   private _unsubscribe?: () => void;
   private _pollInterval?: number;
@@ -116,6 +142,15 @@ export class FrigateEventsCard extends LitElement {
   private _modalContainer?: HTMLDivElement;
   private _hoverVideoCropPositions = new WeakMap<HTMLVideoElement, ObjectPositionPercent>();
   private static _stylesInjected = false;
+
+  // Live view WebRTC state
+  private _peerConnection?: RTCPeerConnection;
+  private _liveViewSessionId?: string;
+  private _liveViewUnsub?: () => void;
+  private _intersectionObserver?: IntersectionObserver;
+  private _intersectionGraceTimer?: number;
+  private _liveVideoEl: HTMLVideoElement | null = null;
+  private _remoteStream?: MediaStream;
 
   /**
    * Calculate the daily reset timestamp based on the configured time.
@@ -172,11 +207,30 @@ export class FrigateEventsCard extends LitElement {
     await this._subscribeToEvents();
     this._setupVisibilityHandler();
     this._setupPolling();
+    this._setupLiveView();
   }
 
   protected updated(changedProps: PropertyValues): void {
     if (changedProps.has('hass') && this.hass && !this._unsubscribe) {
       this._subscribeToEvents();
+    }
+    // Restart live view when the entity or enabled state changes after initial setup.
+    // oldConfig is undefined on first render (no prior value), so this only fires on
+    // genuine re-configurations (e.g. YAML editor changes).
+    if (changedProps.has('_config')) {
+      const oldConfig = changedProps.get('_config') as FrigateEventsCardConfig | undefined;
+      if (
+        oldConfig !== undefined && (
+          oldConfig.live_view !== this._config?.live_view ||
+          oldConfig.live_view_entity !== this._config?.live_view_entity
+        )
+      ) {
+        this._teardownWebRTC();
+        this._intersectionObserver?.disconnect();
+        this._intersectionObserver = undefined;
+        this._liveViewError = undefined;
+        this._setupLiveView();
+      }
     }
   }
 
@@ -198,6 +252,14 @@ export class FrigateEventsCard extends LitElement {
       document.removeEventListener('visibilitychange', this._boundVisibilityHandler);
       this._boundVisibilityHandler = undefined;
     }
+    // Tear down WebRTC peer connection and IntersectionObserver
+    this._teardownWebRTC();
+    if (this._intersectionGraceTimer) {
+      clearTimeout(this._intersectionGraceTimer);
+      this._intersectionGraceTimer = undefined;
+    }
+    this._intersectionObserver?.disconnect();
+    this._intersectionObserver = undefined;
     this._removeModal();
   }
 
@@ -233,6 +295,240 @@ export class FrigateEventsCard extends LitElement {
         this._loadEvents();
       }
     }, FALLBACK_POLL_INTERVAL);
+  }
+
+  /**
+   * Set up an IntersectionObserver to gate the WebRTC connection to card visibility.
+   * Opens the peer connection when ≥10% of the card is in the viewport,
+   * and closes it (after LIVE_VIEW_TEARDOWN_GRACE_MS) when it leaves.
+   */
+  private _setupLiveView(): void {
+    if (!this._config?.live_view) return;
+
+    const entity = this._config.live_view_entity;
+    if (!entity) {
+      console.warn('Frigate Events Card: live_view is enabled but live_view_entity is not set.');
+      this._liveViewError = 'live_view_entity is required when live_view is true';
+      return;
+    }
+    if (!entity.startsWith('camera.')) {
+      console.warn(`Frigate Events Card: live_view_entity "${entity}" must be a camera entity (must start with "camera.").`);
+      this._liveViewError = `"${entity}" is not a camera entity`;
+      return;
+    }
+
+    this._intersectionObserver = new IntersectionObserver(
+      (entries) => {
+        const isVisible = entries.some(e => e.isIntersecting);
+        if (isVisible) {
+          // Cancel any pending teardown grace timer
+          if (this._intersectionGraceTimer) {
+            clearTimeout(this._intersectionGraceTimer);
+            this._intersectionGraceTimer = undefined;
+          }
+          // Start WebRTC if not already running
+          if (!this._peerConnection) {
+            this._startWebRTC();
+          }
+        } else {
+          // Delay teardown to absorb minor scroll jitter
+          if (!this._intersectionGraceTimer) {
+            this._intersectionGraceTimer = window.setTimeout(() => {
+              this._intersectionGraceTimer = undefined;
+              this._teardownWebRTC();
+            }, LIVE_VIEW_TEARDOWN_GRACE_MS);
+          }
+        }
+      },
+      { threshold: 0.1 }
+    );
+    this._intersectionObserver.observe(this);
+  }
+
+  /**
+   * Negotiate a WebRTC peer connection to the configured camera entity via
+   * Home Assistant's camera/webrtc_offer WebSocket subscription protocol.
+   *
+   * This is the same protocol used internally by ha-web-rtc-player, but
+   * called directly so we don't depend on HA's internal Lit context providers.
+   */
+  private async _startWebRTC(): Promise<void> {
+    if (!this.hass || !this._config?.live_view_entity) return;
+    const entity = this._config.live_view_entity;
+
+    // Verify entity exists in HA state registry
+    if (!this.hass.states[entity]) {
+      console.warn(`Frigate Events Card: Camera entity "${entity}" not found in Home Assistant.`);
+      this._liveViewError = `Entity "${entity}" not found`;
+      return;
+    }
+
+    // WebRTC requires a secure context (HTTPS) in all modern browsers
+    if (typeof RTCPeerConnection === 'undefined') {
+      console.warn('Frigate Events Card: WebRTC is not supported in this context. HTTPS is required.');
+      this._liveViewError = 'WebRTC unavailable — HTTPS required';
+      return;
+    }
+
+    try {
+      // --- Peer connection setup ---
+      const pc = new RTCPeerConnection({ iceServers: WEBRTC_STUN_SERVERS });
+      this._peerConnection = pc;
+
+      const remoteStream = new MediaStream();
+      this._remoteStream = remoteStream;
+      // Attach to the video element if it's already in the DOM
+      if (this._liveVideoEl) {
+        this._liveVideoEl.srcObject = remoteStream;
+      }
+
+      pc.ontrack = (event) => {
+        // Add each incoming track to the stream that's already attached to the <video>
+        event.streams[0]?.getTracks().forEach(track => remoteStream.addTrack(track));
+      };
+
+      // Signal willingness to receive video and audio (send-only from HA's perspective)
+      pc.addTransceiver('video', { direction: 'recvonly' });
+      pc.addTransceiver('audio', { direction: 'recvonly' });
+
+      // --- SDP offer ---
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      // Gather ICE candidates before sending the offer (complete gathering or 3s timeout).
+      // This is a Vanilla ICE approach — simpler and works well on LAN.
+      const sdpOffer = await new Promise<string>((resolve) => {
+        if (pc.iceGatheringState === 'complete') {
+          resolve(pc.localDescription!.sdp);
+          return;
+        }
+        const onStateChange = () => {
+          if (pc.iceGatheringState === 'complete') {
+            resolve(pc.localDescription!.sdp);
+          }
+        };
+        pc.onicegatheringstatechange = onStateChange;
+        // 3-second fallback to support Trickle ICE if the camera needs it
+        setTimeout(() => resolve(pc.localDescription?.sdp || offer.sdp!), 3000);
+      });
+
+      // --- Subscribe to HA's WebRTC offer/answer event stream ---
+      this._liveViewUnsub = await this.hass.connection.subscribeMessage<HAWebRtcEvent>(
+        async (event) => {
+          // Guard against events arriving after teardown
+          if (!this._peerConnection || this._peerConnection !== pc) return;
+
+          switch (event.type) {
+            case 'session':
+              this._liveViewSessionId = event.session_id;
+              break;
+
+            case 'answer':
+              try {
+                await pc.setRemoteDescription(
+                  new RTCSessionDescription({ type: 'answer', sdp: event.answer })
+                );
+                this._liveViewError = undefined; // Clear any prior error on success
+              } catch (e) {
+                console.error('Frigate Events Card: Failed to set WebRTC remote description:', e);
+                this._liveViewError = 'Stream negotiation failed';
+                this._teardownWebRTC();
+              }
+              break;
+
+            case 'candidate':
+              try {
+                await pc.addIceCandidate(new RTCIceCandidate(event.candidate));
+              } catch {
+                // Non-fatal — ICE candidate errors can occur as connections transition
+              }
+              break;
+
+            case 'error':
+              console.warn(
+                `Frigate Events Card: WebRTC stream error (${event.code}): ${event.message}`
+              );
+              this._liveViewError = event.message || 'Camera stream unavailable';
+              this._teardownWebRTC();
+              break;
+          }
+        },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        { type: 'camera/webrtc_offer', entity_id: entity, offer: sdpOffer } as any
+      );
+
+      // --- Trickle ICE: send local candidates to HA as they're discovered ---
+      pc.onicecandidate = ({ candidate }) => {
+        if (candidate && this._liveViewSessionId && this.hass) {
+          this.hass.callWS({
+            type: 'camera/webrtc_candidate',
+            session_id: this._liveViewSessionId,
+            candidate: candidate.toJSON(),
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          } as any).catch(() => {});
+        }
+      };
+
+      // --- Monitor for connection failure and attempt recovery ---
+      pc.onconnectionstatechange = () => {
+        console.debug(`Frigate Events Card: WebRTC state → ${pc.connectionState}`);
+        if (pc.connectionState === 'failed') {
+          console.warn('Frigate Events Card: WebRTC connection failed; retrying in 5s.');
+          this._teardownWebRTC();
+          // Only retry if the card is still visible (IntersectionObserver is active)
+          window.setTimeout(() => {
+            if (this._intersectionObserver && !this._peerConnection) {
+              this._startWebRTC();
+            }
+          }, 5000);
+        }
+      };
+
+    } catch (e) {
+      console.error('Frigate Events Card: Failed to start WebRTC session:', e);
+      this._liveViewError = 'Failed to start live stream';
+      this._teardownWebRTC();
+    }
+  }
+
+  /**
+   * Close the WebRTC peer connection and free all associated resources.
+   * Sends the close_webrtc_session command to HA so the server-side
+   * session is also released. Safe to call multiple times.
+   */
+  private _teardownWebRTC(): void {
+    if (this._peerConnection) {
+      this._peerConnection.ontrack = null;
+      this._peerConnection.onicecandidate = null;
+      this._peerConnection.onconnectionstatechange = null;
+      this._peerConnection.onicegatheringstatechange = null;
+      this._peerConnection.close();
+      this._peerConnection = undefined;
+    }
+
+    if (this._liveViewUnsub) {
+      this._liveViewUnsub();
+      this._liveViewUnsub = undefined;
+    }
+
+    // Tell HA to release the server-side WebRTC session
+    if (this._liveViewSessionId && this.hass) {
+      this.hass.callWS({
+        type: 'camera/close_webrtc_session',
+        session_id: this._liveViewSessionId,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any).catch(() => {});
+      this._liveViewSessionId = undefined;
+    }
+
+    // Detach the stream from the video element and stop all tracks
+    if (this._liveVideoEl) {
+      this._liveVideoEl.srcObject = null;
+    }
+    if (this._remoteStream) {
+      this._remoteStream.getTracks().forEach(t => t.stop());
+      this._remoteStream = undefined;
+    }
   }
 
   private async _loadEvents(): Promise<void> {
@@ -1291,6 +1587,7 @@ export class FrigateEventsCard extends LitElement {
       <ha-card>
         <div class="content">
           ${this._config.debug ? html`<div class="debug-version">v${CARD_VERSION}</div>` : ''}
+          ${this._config.live_view ? this._renderLiveView() : ''}
           ${this._loading
         ? html`<div class="loading"></div>`
         : this._error
@@ -1316,6 +1613,44 @@ export class FrigateEventsCard extends LitElement {
             `}
         </div>
       </ha-card>
+    `;
+  }
+
+  /**
+   * Render the live WebRTC video feed above the event gallery.
+   * The ref() callback attaches incoming media streams to the <video>
+   * element as soon as it enters the DOM.
+   */
+  private _renderLiveView(): TemplateResult {
+    const aspectRatio = this._config?.live_view_aspect_ratio || '16 / 9';
+
+    if (this._liveViewError) {
+      return html`
+        <div class="live-view-container" style="aspect-ratio: ${aspectRatio};">
+          <div class="live-view-error">
+            <span>⚠ Live feed unavailable</span>
+            <span class="live-view-error-detail">${this._liveViewError}</span>
+          </div>
+        </div>
+      `;
+    }
+
+    return html`
+      <div class="live-view-container" style="aspect-ratio: ${aspectRatio};">
+        <video
+          class="live-view-video"
+          autoplay
+          muted
+          playsinline
+          ${ref((el: Element | undefined) => {
+            this._liveVideoEl = (el as HTMLVideoElement) ?? null;
+            // If a stream is already flowing (e.g. video re-rendered), reattach it
+            if (this._liveVideoEl && this._remoteStream) {
+              this._liveVideoEl.srcObject = this._remoteStream;
+            }
+          })}
+        ></video>
+      </div>
     `;
   }
   private _renderEvent(event: FrigateEvent): TemplateResult {
@@ -1567,6 +1902,44 @@ export class FrigateEventsCard extends LitElement {
         text-align: right;
         font-family: monospace;
         opacity: 0.7;
+      }
+
+      /* ─── Live view ────────────────────────────────────────── */
+
+      .live-view-container {
+        width: 100%;
+        aspect-ratio: 16 / 9;
+        background: #000;
+        border-radius: 12px;
+        overflow: hidden;
+        margin-bottom: 9px;
+        position: relative;
+      }
+
+      .live-view-video {
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        display: block;
+      }
+
+      .live-view-error {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        color: var(--secondary-text-color, #aaa);
+        font-size: 13px;
+      }
+
+      .live-view-error-detail {
+        font-size: 11px;
+        opacity: 0.7;
+        max-width: 80%;
+        text-align: center;
       }
 
     `;
