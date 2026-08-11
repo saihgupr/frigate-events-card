@@ -133,19 +133,31 @@ video_on_hover: true
 
 ### Example: Live Camera Feed
 
-This example adds a live WebRTC camera feed above the event gallery. The stream uses Home
-Assistant's native camera WebSocket protocol, so WebRTC is negotiated through HA's own
-authenticated path — no hardcoded IPs, no go2rtc API access directly from the browser.
+This example adds a live WebRTC camera feed above the event gallery. The card supports two WebRTC streaming modes:
 
-> **Requirements:** Camera entity must support WebRTC (Frigate's go2rtc integration,
-> `reolink`, `nest`, etc.). Dashboard must be served over **HTTPS**.
+1. **Home Assistant WebRTC API (Default)**: Negotiates WebRTC through Home Assistant's native camera WebSocket protocol (`camera/web_rtc_offer`). Ideal for remote viewing (e.g. Home Assistant Cloud / Nabu Casa) as signaling passes through HA.
+2. **Direct go2rtc WebRTC (`go2rtc_url`)**: Negotiates WebRTC directly with your Frigate `go2rtc` server via `go2rtc_url` (e.g. `http://192.168.1.211:1984`). Bypasses Home Assistant custom component dependencies, reducing HA CPU overhead and delivering sub-second startup times — ideal for local TV dashboards and wall tablets.
 
+> **Requirements:** Dashboard must be served over **HTTPS** (or `localhost`).
+
+#### Mode 1: Home Assistant Native WebRTC
 ```yaml
 type: custom:frigate-events-card
 frigate_client_id: frigate
 event_count: 5
 live_view: true
 live_view_entity: camera.wyze_camera
+video_on_hover: true
+```
+
+#### Mode 2: Direct go2rtc WebRTC (Recommended for Local TVs / Wall Tablets)
+```yaml
+type: custom:frigate-events-card
+frigate_client_id: frigate
+event_count: 5
+live_view: true
+live_view_entity: camera.wyze_camera
+go2rtc_url: http://192.168.1.211:1984
 video_on_hover: true
 ```
 
@@ -192,8 +204,10 @@ The most common settings to get you started:
 | `video_on_hover` | boolean | `true` | Play video clips automatically when hovering over an event snapshot in the gallery. |
 | `scroll` | boolean | `true` | Enable horizontal scrolling gallery. When enabled, `event_count` sets the visible thumbnail count at once. |
 | `live_view` | boolean | `false` | Show a live WebRTC camera feed above the event gallery. Connection opens only while the card is visible and closes on unmount — no polling, no flash. |
-| `live_view_entity` | string | none | Camera entity ID for the live feed (e.g. `camera.wyze_camera`). Required when `live_view: true`. Must be a `camera.*` entity with WebRTC support. |
+| `live_view_entity` | string | none | Camera entity ID for the live feed (e.g. `camera.wyze_camera`). Required when `live_view: true`. |
 | `live_view_aspect_ratio` | string | `16 / 9` | CSS `aspect-ratio` for the live feed container (e.g. `"4 / 3"`). |
+| `go2rtc_url` | string | none | Optional direct go2rtc API URL (e.g. `http://192.168.1.211:1984`). Directly negotiates WebRTC with go2rtc, bypassing Home Assistant WebSocket requirements. |
+| `go2rtc_stream` | string | none | Optional stream name in go2rtc (defaults to `live_view_entity` name without `camera.`, e.g. `wyze_camera`). |
 
 <details>
 <summary><strong>Advanced Settings</strong> (Click to expand)</summary>
