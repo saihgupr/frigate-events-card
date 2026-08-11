@@ -8,7 +8,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL } from './frigate/api';
 
-const CARD_VERSION = '2.2.20';
+const CARD_VERSION = '2.2.21';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -1739,6 +1739,7 @@ export class FrigateEventsCard extends LitElement {
           webkit-playsinline
           disablepictureinpicture
           disableremoteplayback
+          poster="data:image/png;base64,iVBORw0KGgoAAAANSU5EUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
           ${ref((el: Element | undefined) => {
             const videoEl = (el as HTMLVideoElement) ?? null;
             this._liveVideoEl = videoEl;
@@ -2020,6 +2021,17 @@ export class FrigateEventsCard extends LitElement {
         height: 100%;
         object-fit: contain;
         display: block;
+        background-color: #000;
+      }
+
+      /* Hide WebKit / Blink default media controls and play button overlays on TV browsers */
+      .live-view-video::-webkit-media-controls,
+      .live-view-video::-webkit-media-controls-start-playback-button,
+      .live-view-video::-webkit-media-controls-play-button,
+      .live-view-video::-webkit-media-controls-overlay-play-button,
+      .live-view-video::-webkit-media-controls-enclosure {
+        display: none !important;
+        -webkit-appearance: none !important;
       }
 
       .live-view-error {
