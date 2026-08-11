@@ -8,7 +8,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL } from './frigate/api';
 
-const CARD_VERSION = '2.2.27';
+const CARD_VERSION = '2.2.28';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -607,6 +607,59 @@ export class FrigateEventsCard extends LitElement {
     if (this._remoteStream) {
       this._remoteStream.getTracks().forEach((track) => track.stop());
       this._remoteStream = undefined;
+    }
+  }
+
+  /**
+   * Handle clicking the live view video to toggle fullscreen.
+   */
+  private _handleLiveViewClick(e: Event): void {
+    const container = e.currentTarget as HTMLElement;
+    const videoEl = this._liveVideoEl || container.querySelector('video');
+
+    // Check if element or document is currently fullscreen
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const fsDoc = document as any;
+    const isFullscreen = !!(
+      fsDoc.fullscreenElement ||
+      fsDoc.webkitFullscreenElement ||
+      fsDoc.mozFullScreenElement ||
+      fsDoc.msFullscreenElement
+    );
+
+    if (isFullscreen) {
+      if (document.exitFullscreen) {
+        document.exitFullscreen().catch(() => {});
+      } else if (fsDoc.webkitExitFullscreen) {
+        fsDoc.webkitExitFullscreen();
+      } else if (fsDoc.mozCancelFullScreen) {
+        fsDoc.mozCancelFullScreen();
+      } else if (fsDoc.msExitFullscreen) {
+        fsDoc.msExitFullscreen();
+      }
+      return;
+    }
+
+    if (videoEl) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const v = videoEl as any;
+      if (v.requestFullscreen) {
+        v.requestFullscreen().catch(() => {
+          if (v.webkitEnterFullscreen) {
+            v.webkitEnterFullscreen();
+          } else if (container && container.requestFullscreen) {
+            container.requestFullscreen().catch(() => {});
+          }
+        });
+      } else if (v.webkitEnterFullscreen) {
+        v.webkitEnterFullscreen();
+      } else if (v.webkitRequestFullscreen) {
+        v.webkitRequestFullscreen();
+      } else if (container && container.requestFullscreen) {
+        container.requestFullscreen().catch(() => {});
+      }
+    } else if (container && container.requestFullscreen) {
+      container.requestFullscreen().catch(() => {});
     }
   }
 
@@ -1768,7 +1821,12 @@ export class FrigateEventsCard extends LitElement {
     }
 
     return html`
-      <div class="live-view-container" style="aspect-ratio: ${aspectRatio};">
+      <div
+        class="live-view-container"
+        style="aspect-ratio: ${aspectRatio};"
+        @click=${(e: Event) => this._handleLiveViewClick(e)}
+        title="Click for fullscreen"
+      >
         <video
           class="live-view-video"
           autoplay
@@ -2052,6 +2110,24 @@ export class FrigateEventsCard extends LitElement {
         overflow: hidden;
         margin-bottom: 8px;
         position: relative;
+        cursor: pointer;
+      }
+
+      .live-view-container:fullscreen,
+      .live-view-container:-webkit-full-screen {
+        width: 100vw;
+        height: 100vh;
+        aspect-ratio: unset !important;
+        border-radius: 0;
+        margin-bottom: 0;
+        background: #000;
+      }
+
+      .live-view-container:fullscreen .live-view-video,
+      .live-view-container:-webkit-full-screen .live-view-video {
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
       }
 
       .live-view-video {
