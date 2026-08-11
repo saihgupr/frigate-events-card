@@ -8,7 +8,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL } from './frigate/api';
 
-const CARD_VERSION = '2.2.24';
+const CARD_VERSION = '2.2.25';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -812,7 +812,7 @@ export class FrigateEventsCard extends LitElement {
         position: relative;
         display: flex;
         justify-content: center;
-        background: black;
+        background: #1c1c1c;
       }
 
       .frigate-events-modal-image-container img,
@@ -822,6 +822,7 @@ export class FrigateEventsCard extends LitElement {
         width: auto;
         height: auto;
         display: block;
+        background-color: #1c1c1c;
       }
 
       .frigate-events-modal-close {
@@ -2030,6 +2031,7 @@ export class FrigateEventsCard extends LitElement {
         height: 100%;
         object-fit: cover;
         display: block;
+        background-color: #1c1c1c;
       }
       
       .debug-version {
@@ -2046,7 +2048,7 @@ export class FrigateEventsCard extends LitElement {
       .live-view-container {
         width: 100%;
         aspect-ratio: 16 / 9;
-        background: #000;
+        background: #1c1c1c;
         border-radius: 12px;
         overflow: hidden;
         margin-bottom: 9px;
@@ -2058,7 +2060,7 @@ export class FrigateEventsCard extends LitElement {
         height: 100%;
         object-fit: contain;
         display: block;
-        background-color: #000;
+        background-color: #1c1c1c;
       }
 
       /* Hide WebKit / Blink default media controls and play button overlays on TV browsers */
