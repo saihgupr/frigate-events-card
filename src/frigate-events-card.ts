@@ -8,7 +8,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL } from './frigate/api';
 
-const CARD_VERSION = '2.2.19';
+const CARD_VERSION = '2.2.20';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -387,8 +387,9 @@ export class FrigateEventsCard extends LitElement {
       const remoteStream = new MediaStream();
       this._remoteStream = remoteStream;
       // Attach to the video element if it's already in the DOM
-      if (this._liveVideoEl) {
+      if (this._liveVideoEl && this._liveVideoEl.srcObject !== remoteStream) {
         this._liveVideoEl.srcObject = remoteStream;
+        this._liveVideoEl.play().catch(() => {});
       }
 
       pc.ontrack = (event) => {
@@ -513,8 +514,9 @@ export class FrigateEventsCard extends LitElement {
 
       const remoteStream = new MediaStream();
       this._remoteStream = remoteStream;
-      if (this._liveVideoEl) {
+      if (this._liveVideoEl && this._liveVideoEl.srcObject !== remoteStream) {
         this._liveVideoEl.srcObject = remoteStream;
+        this._liveVideoEl.play().catch(() => {});
       }
 
       pc.ontrack = (event) => {
@@ -1734,11 +1736,16 @@ export class FrigateEventsCard extends LitElement {
           autoplay
           muted
           playsinline
+          webkit-playsinline
+          disablepictureinpicture
+          disableremoteplayback
           ${ref((el: Element | undefined) => {
-            this._liveVideoEl = (el as HTMLVideoElement) ?? null;
-            // If a stream is already flowing (e.g. video re-rendered), reattach it
-            if (this._liveVideoEl && this._remoteStream) {
-              this._liveVideoEl.srcObject = this._remoteStream;
+            const videoEl = (el as HTMLVideoElement) ?? null;
+            this._liveVideoEl = videoEl;
+            // ONLY set srcObject if it has changed to avoid resetting video decoder on re-render
+            if (videoEl && this._remoteStream && videoEl.srcObject !== this._remoteStream) {
+              videoEl.srcObject = this._remoteStream;
+              videoEl.play().catch(() => {});
             }
           })}
         ></video>
