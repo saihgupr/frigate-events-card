@@ -8,7 +8,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL } from './frigate/api';
 
-const CARD_VERSION = '2.3.0';
+const CARD_VERSION = '2.3.1';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -237,6 +237,25 @@ export class FrigateEventsCard extends LitElement {
     }
   }
 
+  connectedCallback(): void {
+    super.connectedCallback();
+    if (this.hasUpdated) {
+      this._loadEvents();
+      if (!this._unsubscribe) {
+        this._subscribeToEvents();
+      }
+      if (!this._boundVisibilityHandler) {
+        this._setupVisibilityHandler();
+      }
+      if (!this._pollInterval) {
+        this._setupPolling();
+      }
+      if (!this._intersectionObserver) {
+        this._setupLiveView();
+      }
+    }
+  }
+
   disconnectedCallback(): void {
     super.disconnectedCallback();
     this._cleanup();
@@ -388,14 +407,26 @@ export class FrigateEventsCard extends LitElement {
       const remoteStream = new MediaStream();
       this._remoteStream = remoteStream;
       // Attach to the video element if it's already in the DOM
-      if (this._liveVideoEl && this._liveVideoEl.srcObject !== remoteStream) {
-        this._liveVideoEl.srcObject = remoteStream;
-        this._liveVideoEl.play().catch(() => {});
+      const videoEl = this._liveVideoEl || (this.renderRoot?.querySelector('.live-view-video') as HTMLVideoElement | null);
+      if (videoEl) {
+        this._liveVideoEl = videoEl;
+        if (videoEl.srcObject !== remoteStream) {
+          videoEl.srcObject = remoteStream;
+          videoEl.play().catch(() => {});
+        }
       }
 
       pc.ontrack = (event) => {
         // Add each incoming track to the stream that's already attached to the <video>
         event.streams[0]?.getTracks().forEach(track => remoteStream.addTrack(track));
+        const video = this._liveVideoEl || (this.renderRoot?.querySelector('.live-view-video') as HTMLVideoElement | null);
+        if (video) {
+          this._liveVideoEl = video;
+          if (video.srcObject !== remoteStream) {
+            video.srcObject = remoteStream;
+          }
+          video.play().catch(() => {});
+        }
       };
 
       // Signal willingness to receive video only.
@@ -503,13 +534,25 @@ export class FrigateEventsCard extends LitElement {
 
       const remoteStream = new MediaStream();
       this._remoteStream = remoteStream;
-      if (this._liveVideoEl && this._liveVideoEl.srcObject !== remoteStream) {
-        this._liveVideoEl.srcObject = remoteStream;
-        this._liveVideoEl.play().catch(() => {});
+      const videoEl = this._liveVideoEl || (this.renderRoot?.querySelector('.live-view-video') as HTMLVideoElement | null);
+      if (videoEl) {
+        this._liveVideoEl = videoEl;
+        if (videoEl.srcObject !== remoteStream) {
+          videoEl.srcObject = remoteStream;
+          videoEl.play().catch(() => {});
+        }
       }
 
       pc.ontrack = (event) => {
         event.streams[0]?.getTracks().forEach((track) => remoteStream.addTrack(track));
+        const video = this._liveVideoEl || (this.renderRoot?.querySelector('.live-view-video') as HTMLVideoElement | null);
+        if (video) {
+          this._liveVideoEl = video;
+          if (video.srcObject !== remoteStream) {
+            video.srcObject = remoteStream;
+          }
+          video.play().catch(() => {});
+        }
       };
 
       pc.addTransceiver('video', { direction: 'recvonly' });
