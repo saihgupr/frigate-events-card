@@ -252,7 +252,32 @@ The most common settings to get you started:
 ## Requirements
 
 - Home Assistant with [Frigate Integration](https://github.com/blakeblackshear/frigate-hass-integration) installed
-- Frigate NVR with cameras configured
+- Frigate NVR with cameras configured and **snapshots enabled** (`snapshots: enabled: true` in Frigate `config.yml`)
+- For WebRTC Live View: Dashboard accessed via **HTTPS** (or `localhost`)
+
+## Troubleshooting
+
+### No events appearing in the card
+- **Snapshots must be enabled**: The card queries Frigate for detection events that include snapshots. Ensure your Frigate `config.yml` has snapshots enabled globally or per camera:
+  ```yaml
+  cameras:
+    front_door:
+      ffmpeg: ...
+      snapshots:
+        enabled: true
+  ```
+- **Check `frigate_client_id`**: If you have multiple Frigate instances or changed the default integration name, set `frigate_client_id` in the card config to match your instance ID (default: `frigate`).
+
+### "Live feed unavailable" or WebRTC stream fails
+- **HTTPS Required**: Browsers strictly enforce that WebRTC (`RTCPeerConnection`) is only available in secure contexts (**HTTPS** or `localhost`). Accessing Home Assistant over plain HTTP (e.g., `http://192.168.1.xxx:8123`) will prevent WebRTC from connecting.
+- **Camera Entity Format**: Ensure `live_view_entity` is the full Home Assistant entity ID (e.g. `camera.front_door`), not just `front_door`.
+- **Frigate on a Remote Server / Unraid Docker**: If Frigate runs in a separate container or host (such as Unraid), you can configure `go2rtc_url` for a direct connection:
+  ```yaml
+  live_view: true
+  live_view_entity: camera.front_door
+  go2rtc_url: http://192.168.1.211:1984
+  ```
+  *(Note: If your Home Assistant dashboard is loaded over HTTPS, browsers may block an HTTP `go2rtc_url` due to Mixed Content security rules. In that case, use Home Assistant's native WebRTC mode without `go2rtc_url` or put go2rtc behind HTTPS).*
 
 ## Contributing
 

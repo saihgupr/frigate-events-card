@@ -8,7 +8,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL } from './frigate/api';
 
-const CARD_VERSION = '2.3.1';
+const CARD_VERSION = '2.3.2';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -203,6 +203,22 @@ export class FrigateEventsCard extends LitElement {
     return {
       grid_columns: 4,
     };
+  }
+
+  protected shouldUpdate(changedProps: PropertyValues): boolean {
+    // If hass is the only property that changed, and it was already defined previously,
+    // check if we need to subscribe, but skip re-rendering the HTML DOM tree since
+    // render() does not depend on hass state.
+    if (changedProps.has('hass') && changedProps.size === 1) {
+      const oldHass = changedProps.get('hass') as HomeAssistant | undefined;
+      if (oldHass !== undefined) {
+        if (this.hass && !this._unsubscribe) {
+          this._subscribeToEvents();
+        }
+        return false;
+      }
+    }
+    return true;
   }
 
   protected async firstUpdated(): Promise<void> {
@@ -1844,6 +1860,15 @@ export class FrigateEventsCard extends LitElement {
     `;
   }
 
+  private _handleLiveVideoRef = (el: Element | undefined): void => {
+    const videoEl = (el as HTMLVideoElement) ?? null;
+    this._liveVideoEl = videoEl;
+    if (videoEl && this._remoteStream && videoEl.srcObject !== this._remoteStream) {
+      videoEl.srcObject = this._remoteStream;
+      videoEl.play().catch(() => {});
+    }
+  };
+
   /**
    * Render the live WebRTC video feed above the event gallery.
    * The ref() callback attaches incoming media streams to the <video>
@@ -1879,15 +1904,7 @@ export class FrigateEventsCard extends LitElement {
           disablepictureinpicture
           disableremoteplayback
           poster="data:image/png;base64,iVBORw0KGgoAAAANSU5EUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
-          ${ref((el: Element | undefined) => {
-            const videoEl = (el as HTMLVideoElement) ?? null;
-            this._liveVideoEl = videoEl;
-            // ONLY set srcObject if it has changed to avoid resetting video decoder on re-render
-            if (videoEl && this._remoteStream && videoEl.srcObject !== this._remoteStream) {
-              videoEl.srcObject = this._remoteStream;
-              videoEl.play().catch(() => {});
-            }
-          })}
+          ${ref(this._handleLiveVideoRef)}
         ></video>
       </div>
     `;
@@ -2179,6 +2196,8 @@ export class FrigateEventsCard extends LitElement {
         object-fit: contain;
         display: block;
         background-color: #1c1c1c;
+        transform: translateZ(0);
+        will-change: transform;
       }
 
       /* Hide WebKit / Blink default media controls and play button overlays on TV browsers */
