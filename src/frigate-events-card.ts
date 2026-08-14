@@ -8,7 +8,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL } from './frigate/api';
 
-const CARD_VERSION = '2.3.2';
+const CARD_VERSION = '2.3.3';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -797,9 +797,10 @@ export class FrigateEventsCard extends LitElement {
       });
 
       this._events = events.sort((a, b) => (b.start_time || 0) - (a.start_time || 0));
-    } catch (e) {
+    } catch (e: any) {
       console.error('Failed to load Frigate events:', e);
-      this._error = 'Failed to load events';
+      const msg = e?.message || (typeof e === 'object' ? JSON.stringify(e) : String(e));
+      this._error = `Failed to load events: ${msg}`;
     } finally {
       this._loading = false;
     }
@@ -1803,7 +1804,9 @@ export class FrigateEventsCard extends LitElement {
     }
 
     let renderedEvents = eventsToShow.map(event => this._renderEvent(event));
-    let renderedPlaceholders = Array(placeholderCount).fill(0).map(() => html`<div class="placeholder"></div>`);
+    let renderedPlaceholders = Array(placeholderCount).fill(0).map(() => 
+      html`<div class="placeholder" title="No events found. Check that snapshots: enabled: true in Frigate."></div>`
+    );
     
     let allItems = [...renderedEvents, ...renderedPlaceholders];
     if (this._config.reverse) {
@@ -1830,31 +1833,43 @@ export class FrigateEventsCard extends LitElement {
     return html`
       <ha-card>
         <div class="content">
-          ${this._config.debug ? html`<div class="debug-version">v${CARD_VERSION}</div>` : ''}
+          ${this._config.debug ? html`
+            <div class="debug-banner">
+              <span>v${CARD_VERSION} • Instance: ${this._config.frigate_client_id || 'frigate'} • Events: ${this._events.length}</span>
+              ${!this._loading && !this._error && this._events.length === 0 ? html`
+                <div class="debug-warning">0 events returned. Verify Frigate has <code>snapshots: enabled: true</code>.</div>
+              ` : ''}
+            </div>
+          ` : ''}
           ${this._config.live_view ? this._renderLiveView() : ''}
           ${this._loading
-        ? html`<div class="loading"></div>`
-        : this._error
-          ? html``
-          : html`
-              <div class="events-container">
-                ${showScrollArrows ? html`
-                  <button class="scroll-btn prev" @click=${() => this._scroll('left')} aria-label="Previous">
-                    <svg viewBox="0 0 24 24">
-                      <path d="M15,6L9,12L15,18Z" fill="currentColor"/>
-                    </svg>
-                  </button>
-                  <button class="scroll-btn next" @click=${() => this._scroll('right')} aria-label="Next">
-                    <svg viewBox="0 0 24 24">
-                      <path d="M9,6L15,12L9,18Z" fill="currentColor"/>
-                    </svg>
-                  </button>
-                ` : ''}
-                <div class="${eventsClasses}" style="${eventsStyle}">
-                  ${allItems}
+            ? html`<div class="loading"></div>`
+            : this._error
+              ? html`
+                <div class="events-error">
+                  <span>⚠ ${this._error}</span>
+                  <span class="events-error-detail">Check your Frigate integration connection and instance ID.</span>
                 </div>
-              </div>
-            `}
+              `
+              : html`
+                  <div class="events-container">
+                    ${showScrollArrows ? html`
+                      <button class="scroll-btn prev" @click=${() => this._scroll('left')} aria-label="Previous">
+                        <svg viewBox="0 0 24 24">
+                          <path d="M15,6L9,12L15,18Z" fill="currentColor"/>
+                        </svg>
+                      </button>
+                      <button class="scroll-btn next" @click=${() => this._scroll('right')} aria-label="Next">
+                        <svg viewBox="0 0 24 24">
+                          <path d="M9,6L15,12L9,18Z" fill="currentColor"/>
+                        </svg>
+                      </button>
+                    ` : ''}
+                    <div class="${eventsClasses}" style="${eventsStyle}">
+                      ${allItems}
+                    </div>
+                  </div>
+                `}
         </div>
       </ha-card>
     `;
@@ -2151,13 +2166,43 @@ export class FrigateEventsCard extends LitElement {
         display: block;
       }
       
-      .debug-version {
+      .debug-banner {
         font-size: 10px;
         color: var(--secondary-text-color, #aaa);
         padding: 2px 8px;
         text-align: right;
         font-family: monospace;
+        opacity: 0.8;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 2px;
+      }
+
+      .debug-warning {
+        color: var(--warning-color, #f59e0b);
+        font-size: 10px;
+      }
+
+      .events-error {
+        min-height: 80px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        color: var(--secondary-text-color, #aaa);
+        font-size: 13px;
+        padding: 16px;
+        text-align: center;
+        background: rgba(0, 0, 0, 0.2);
+        border-radius: 12px;
+      }
+
+      .events-error-detail {
+        font-size: 11px;
         opacity: 0.7;
+        max-width: 90%;
       }
 
       /* ─── Live view ────────────────────────────────────────── */
