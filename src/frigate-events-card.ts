@@ -8,7 +8,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, deleteEvent } from './frigate/api';
 
-const CARD_VERSION = '2.3.10';
+const CARD_VERSION = '2.3.11';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -1586,7 +1586,7 @@ export class FrigateEventsCard extends LitElement {
       ${hasTempMaskIntegration ? `
       <div class="frigate-events-context-separator"></div>
       <button class="frigate-events-context-item ${isMaskActive ? 'masked' : ''}" data-action="mask">
-        <svg viewBox="0 0 24 24"><path d="M12,1L3,5V11C3,16.55 6.84,21.74 12,23C17.16,21.74 21,16.55 21,11V5L12,1M12,5A6,6 0 0,1 18,11C18,14.07 15.63,16.63 12.64,16.96L12,17L11.36,16.96C8.37,16.63 6,14.07 6,11A6,6 0 0,1 12,5Z"/></svg>
+        <svg viewBox="0 0 24 24"><path d="M2,2H8V4H16V2H22V8H20V16H22V22H16V20H8V22H2V16H4V8H2V2M4,4V6H6V4H4M18,4V6H20V4H18M20,18V20H18V18H20M4,18V20H6V18H4M8,6V8H6V16H8V18H16V16H18V8H16V6H8M9,9H15V15H9V9Z"/></svg>
         <span>${isMaskActive ? 'Remove Mask' : 'Temporary Mask'}</span>
       </button>
       ` : ''}
