@@ -101,16 +101,40 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
             except Exception:
                 pass
 
-        if not box_coords and not polygon_arg and event_id:
-            try:
-                async with session.get(f"{base_url}/api/events/{event_id}", timeout=10) as resp:
-                    if resp.status == 200:
-                        event_data = await resp.json()
-                        box_coords = event_data.get("data", {}).get("box")
-                        if not camera:
-                            camera = event_data.get("camera", "wyze_camera")
-            except Exception as e:
-                _LOGGER.error("Error fetching Frigate event %s: %s", event_id, e)
+        event_data = None
+        if not box_coords and not polygon_arg:
+            if event_id:
+                try:
+                    async with session.get(f"{base_url}/api/events/{event_id}", timeout=10) as resp:
+                        if resp.status == 200:
+                            event_data = await resp.json()
+                            box_coords = event_data.get("data", {}).get("box")
+                            if not camera:
+                                camera = event_data.get("camera", "wyze_camera")
+                            if not label_val:
+                                label_val = event_data.get("label", "")
+                except Exception as e:
+                    _LOGGER.error("Error fetching Frigate event %s: %s", event_id, e)
+            else:
+                # Fallback: find the most recent event for camera if event_id was not passed
+                try:
+                    cam_param = f"?camera={camera}&limit=5" if camera else "?limit=5"
+                    async with session.get(f"{base_url}/api/events{cam_param}", timeout=10) as resp:
+                        if resp.status == 200:
+                            evts = await resp.json()
+                            if isinstance(evts, list) and len(evts) > 0:
+                                event_data = evts[0]
+                                event_id = event_data.get("id", "")
+                                box_coords = event_data.get("data", {}).get("box")
+                                if not camera:
+                                    camera = event_data.get("camera", "wyze_camera")
+                                if not label_val:
+                                    label_val = event_data.get("label", "")
+                                if not mask_id or mask_id == "manual":
+                                    mask_id = event_id.split("-")[0] if "-" in event_id else event_id or "manual"
+                                _LOGGER.info("Using latest Frigate event fallback %s for camera %s", event_id, camera)
+                except Exception as e:
+                    _LOGGER.error("Error fetching latest Frigate events: %s", e)
 
         poly_str = polygon_arg
         if not box_coords and not poly_str:
@@ -139,8 +163,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
 
             poly_str = _box_to_polygon(box_coords, width, height, padding)
         tag = f"# TEMP_MASK_{mask_id}"
-        label_val = call.data.get("label", "")
-        if not label_val and "event_data" in locals() and isinstance(event_data, dict):
+        if not label_val and event_data and isinstance(event_data, dict):
             label_val = event_data.get("label", "")
 
         # Fetch raw config
@@ -164,9 +187,17 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                 f_match = re.search(r"^([ ]*)filters:\s*$", cleaned, re.MULTILINE)
                 if f_match:
                     f_indent = f_match.group(1)
-                    label_pattern = rf"^{f_indent}  {re.escape(obj_label)}:\s*$"
+                    label_pattern = rf"^{f_indent}  {re.escape(obj_label)}:\s*(?:{{}}\s*)?$"
                     l_match = re.search(label_pattern, cleaned, re.MULTILINE)
                     if l_match:
+                        matched_line = l_match.group(0)
+                        if "{}" in matched_line:
+                            label_indent = f_indent + "  "
+                            mask_indent = label_indent + "  "
+                            item_indent = mask_indent
+                            replacement = f"{label_indent}{obj_label}:\n{mask_indent}mask:\n{item_indent}- {polygon} {mask_tag}"
+                            return cleaned[:l_match.start()] + replacement + cleaned[l_match.end():]
+
                         label_pos = l_match.end()
                         rest = cleaned[label_pos:]
                         mask_match = re.search(rf"^([ ]+)mask:\s*$", rest, re.MULTILINE)

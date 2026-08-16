@@ -8,7 +8,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, deleteEvent } from './frigate/api';
 
-const CARD_VERSION = '2.3.34';
+const CARD_VERSION = '2.3.35';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -1655,9 +1655,9 @@ export class FrigateEventsCard extends LitElement {
         border-radius: 6px;
         font-size: 12px;
         font-weight: 600;
-        color: #fca5a5;
-        background: rgba(239, 68, 68, 0.15);
-        border: 1px solid rgba(239, 68, 68, 0.3);
+        color: #cbd5e1;
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.18);
         cursor: pointer;
         transition: all 0.15s;
         font-family: inherit;
@@ -1665,8 +1665,9 @@ export class FrigateEventsCard extends LitElement {
       }
 
       .mask-remove-btn:hover {
-        background: rgba(239, 68, 68, 0.3);
-        color: #f87171;
+        background: rgba(255, 255, 255, 0.18);
+        color: #ffffff;
+        border-color: rgba(255, 255, 255, 0.28);
       }
 
       .mask-empty-state {
@@ -2209,7 +2210,7 @@ export class FrigateEventsCard extends LitElement {
 
     const maskId = event.id.includes('-') ? event.id.split('-')[0] : event.id;
     const activeMasks = (this.hass?.states?.['sensor.frigate_active_masks']?.attributes?.masks as any[]) || [];
-    const currentMask = Array.isArray(activeMasks) ? activeMasks.find((m: any) => m.mask_id === maskId) : undefined;
+    const currentMask = Array.isArray(activeMasks) ? activeMasks.find((m: any) => m.mask_id === maskId || m.event_id === event.id || String(m.mask_id) === String(maskId)) : undefined;
     const isMaskActive: boolean = Boolean(currentMask);
 
     let activeDurationHours = 24;
@@ -2300,7 +2301,7 @@ export class FrigateEventsCard extends LitElement {
           </button>
         </div>
       </div>
-      <button class="frigate-events-context-item danger" data-action="mask">
+      <button class="frigate-events-context-item masked" data-action="mask">
         <svg viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12S6.5 22 12 22 22 17.5 22 12 17.5 2 12 2M12 4C16.4 4 20 7.6 20 12C20 13.8 19.4 15.5 18.3 16.9L7.1 5.7C8.5 4.6 10.2 4 12 4M5.7 7.1L16.9 18.3C15.5 19.4 13.8 20 12 20C7.6 20 4 16.4 4 12C4 10.2 4.6 8.5 5.7 7.1Z"/></svg>
         <span>Remove Mask</span>
       </button>
