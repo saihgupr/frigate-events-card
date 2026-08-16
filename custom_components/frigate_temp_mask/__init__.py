@@ -26,6 +26,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
     hass.data.setdefault(DOMAIN, {
         "timers": {},
         "active_masks": {},
+        "pending_restart_masks": {},
         "services_registered": True
     })
 
@@ -60,15 +61,20 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         return f"{x_min},{y_min},{x_max},{y_min},{x_max},{y_max},{x_min},{y_max}"
 
     def _update_state():
-        active = hass.data[DOMAIN]["active_masks"]
+        active = hass.data[DOMAIN].get("active_masks", {})
+        pending = hass.data[DOMAIN].get("pending_restart_masks", {})
         count = len(active)
+        pending_count = len(pending)
         hass.states.async_set(
             "sensor.frigate_active_masks",
             str(count),
             {
                 "friendly_name": "Frigate Active Temporary Masks",
-                "icon": "mdi:shield-outline",
-                "masks": list(active.values())
+                "icon": "mdi:vector-square-remove",
+                "masks": list(active.values()),
+                "pending_restart_masks": list(pending.values()),
+                "restart_pending": pending_count > 0,
+                "pending_count": pending_count,
             }
         )
 
@@ -173,6 +179,8 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
             # Restart backend to load into memory
             async with session.post(f"{base_url}/api/restart", timeout=10) as restart_resp:
                 _LOGGER.info("Frigate restart triggered: %s", restart_resp.status)
+                # Restart applied all pending changes
+                hass.data[DOMAIN]["pending_restart_masks"].clear()
         except Exception as e:
             _LOGGER.error("Failed to save Frigate config: %s", e)
             return
@@ -187,6 +195,9 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         if not label_val and "event_data" in locals() and isinstance(event_data, dict):
             label_val = event_data.get("label", "")
         
+        # Remove from pending if re-adding
+        hass.data[DOMAIN]["pending_restart_masks"].pop(mask_id, None)
+
         hass.data[DOMAIN]["active_masks"][mask_id] = {
             "mask_id": mask_id,
             "camera": camera,
@@ -221,7 +232,9 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
             del hass.data[DOMAIN]["timers"][mask_id]
 
         if mask_id in hass.data[DOMAIN]["active_masks"]:
-            del hass.data[DOMAIN]["active_masks"][mask_id]
+            removed_mask = dict(hass.data[DOMAIN]["active_masks"].pop(mask_id))
+            removed_mask["removed_at"] = datetime.utcnow().isoformat() + "Z"
+            hass.data[DOMAIN]["pending_restart_masks"][mask_id] = removed_mask
         _update_state()
 
         session = async_get_clientsession(hass)
@@ -258,6 +271,11 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         for unsub in hass.data[DOMAIN]["timers"].values():
             unsub()
         hass.data[DOMAIN]["timers"].clear()
+
+        for m_id, m_val in hass.data[DOMAIN]["active_masks"].items():
+            removed_mask = dict(m_val)
+            removed_mask["removed_at"] = datetime.utcnow().isoformat() + "Z"
+            hass.data[DOMAIN]["pending_restart_masks"][m_id] = removed_mask
         hass.data[DOMAIN]["active_masks"].clear()
         _update_state()
 
@@ -288,9 +306,22 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         except Exception as e:
             _LOGGER.error("Failed to prune masks: %s", e)
 
+    async def async_handle_restart(call: ServiceCall):
+        session = async_get_clientsession(hass)
+        base_url = _get_frigate_base_url()
+        try:
+            async with session.post(f"{base_url}/api/restart", timeout=10) as resp:
+                _LOGGER.info("Frigate restart triggered via service: %s", resp.status)
+                hass.data[DOMAIN]["pending_restart_masks"].clear()
+                _update_state()
+        except Exception as e:
+            _LOGGER.error("Failed to restart Frigate: %s", e)
+
     hass.services.async_register(DOMAIN, "add_mask", async_handle_add_mask)
     hass.services.async_register(DOMAIN, "remove_mask", async_handle_remove_mask)
     hass.services.async_register(DOMAIN, "prune_all", async_handle_prune_all)
+    hass.services.async_register(DOMAIN, "restart", async_handle_restart)
+    hass.services.async_register(DOMAIN, "restart_frigate", async_handle_restart)
 
     _update_state()
     return True

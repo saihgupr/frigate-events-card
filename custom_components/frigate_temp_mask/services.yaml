@@ -57,3 +57,7 @@ remove_mask:
 prune_all:
   name: Prune All Temporary Masks
   description: Removes all temporary masks from Frigate configuration.
+
+restart:
+  name: Restart Frigate
+  description: Restarts the Frigate detector backend to apply pending configuration changes.

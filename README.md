@@ -192,14 +192,13 @@ Right-clicking (desktop) or long-pressing (touch devices) any event thumbnail op
 
 * **Temporary Mask (Optional)**: Dynamically available when the companion `frigate_temp_mask` custom component is installed. Automatically calculates a 20% expanded bounding box around false detections (such as a wheelbarrow, package, or parked vehicle), injects a temporary mask into Frigate, and automatically restarts Frigate's backend process so the mask takes effect immediately.
 * **Change Duration / Remove Mask**: Right-clicking an already masked event allows changing the mask duration on the fly (1h, 4h, 8h, 12h, 24h, 48h, 7d, or Custom hours) or removing the mask.
-* **Live Video Feed Right-Click Menu & Mask Manager**: Right-clicking (or long-pressing) on the live video feed opens a dedicated management menu:
-  * **Manage Temporary Masks**: Opens an interactive Mask Manager modal displaying all active masks, remaining countdown timers, polygon coordinates, per-mask duration adjustments, and individual removal or bulk "Prune All" controls.
-  * **Visual Mask Overlays on Live Feed**: Real-time translucent SVG polygons and floating countdown tags (`Mask · 22h left`) drawn directly over masked objects on the live camera stream. Can be toggled on/off in the right-click menu.
+* **Live Video Feed Right-Click (Temporary Mask Manager)**: Right-clicking (or long-pressing on touch devices) the live video feed opens the interactive Mask Manager modal directly, displaying all active masks with object snapshots/minimaps, countdown timers, polygon coordinates, per-mask duration adjustments, and individual removal controls.
 
 > [!NOTE]
-> **Restart Behavior**:
+> **Restart Behavior & Pending Restart Awareness**:
 > * **Adding or Updating Masks:** Frigate **automatically restarts** its internal detector process (~1–2 seconds) so false alarms stop immediately.
-> * **Removing or Expired (Timed Out) Masks:** The mask is cleaned from `config.yml` on disk **without restarting Frigate** to prevent dropping live video streams or interrupting daytime recordings. To have the removal take effect in active detection memory immediately, manually restart Frigate (otherwise it will load on your next routine or nightly restart).
+> * **Removing or Expired (Timed Out) Masks:** The mask is cleaned from `config.yml` on disk **without restarting Frigate** to prevent dropping live video streams or interrupting daytime recordings.
+> * **Pending Restart Tracker:** The Mask Manager automatically tracks removed masks and displays a **Restart Pending** banner and status badge with a 1-click **Restart Frigate** button so you can apply removals immediately whenever convenient.
 
 #### Setting Up Temporary Masking (Optional Companion Integration)
 
@@ -210,6 +209,56 @@ The card works completely standalone out of the box. If you would like to enable
 3. Reload YAML or restart Home Assistant.
 
 The card will automatically detect the integration and display the **Temporary Mask**, **Change Duration**, and **Remove Mask** options in the right-click menu, as well as the Live Video Feed Mask Manager.
+
+#### Actionable Notification Automation Example (iOS & Android)
+
+You can attach **Temporary Mask** action buttons directly to your Home Assistant Frigate mobile push notifications. When tapped from your phone lock screen or smartwatch, Home Assistant automatically calculates the expanded polygon mask, injects it into Frigate, and restarts the detector to stop repeated false alarms immediately without needing to open the dashboard.
+
+**1. Sending the Notification with Mask Actions:**
+```yaml
+alias: "Frigate Notification with Temp Mask Action"
+trigger:
+  - platform: mqtt
+    topic: frigate/events
+    payload: new
+    value_template: "{{ value_json.type }}"
+action:
+  - service: notify.notify
+    data:
+      title: "{{ trigger.payload_json['after']['label'] | title }} detected"
+      message: "Motion on {{ trigger.payload_json['after']['camera'] | replace('_', ' ') | title }}"
+      data:
+        image: "/api/frigate/notifications/{{ trigger.payload_json['after']['id'] }}/thumbnail.jpg"
+        tag: "{{ trigger.payload_json['after']['id'] }}"
+        actions:
+          - action: "TEMP_MASK_24H"
+            title: "Mask 24h"
+          - action: "TEMP_MASK_8H"
+            title: "Mask 8h"
+          - action: "URI"
+            title: "View Live"
+            uri: "/lovelace/cameras"
+```
+
+**2. Handling the Action Button to Apply the Mask:**
+```yaml
+alias: "Apply Frigate Temporary Mask from Notification"
+trigger:
+  - platform: event
+    event_type: mobile_app_notification_action
+    event_data:
+      action: "TEMP_MASK_24H"
+  - platform: event
+    event_type: mobile_app_notification_action
+    event_data:
+      action: "TEMP_MASK_8H"
+action:
+  - service: frigate_temp_mask.add_mask
+    data:
+      event_id: "{{ trigger.event.data.tag }}"
+      duration_hours: >
+        {% if trigger.event.data.action == 'TEMP_MASK_8H' %}8{% else %}24{% endif %}
+```
 
 
 ## Configuration Options

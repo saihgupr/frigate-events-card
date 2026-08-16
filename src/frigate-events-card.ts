@@ -8,7 +8,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, deleteEvent } from './frigate/api';
 
-const CARD_VERSION = '2.3.23';
+const CARD_VERSION = '2.3.29';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -141,8 +141,8 @@ export class FrigateEventsCard extends LitElement {
   @state() private _error?: string;
   @state() private _hoveredEventId?: string;
   @state() private _liveViewError?: string;   // Set when live feed fails gracefully
-  @state() private _showLiveMaskOverlays = false;
   @state() private _maskManagerSelectedCamera = 'all';
+  @state() private _localPendingMasks: any[] = [];
 
   private _unsubscribe?: () => void;
   private _pollInterval?: number;
@@ -1360,27 +1360,6 @@ export class FrigateEventsCard extends LitElement {
         gap: 8px;
       }
 
-      .mask-manager-prune-btn {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        padding: 6px 12px;
-        border-radius: 6px;
-        font-size: 12px;
-        font-weight: 600;
-        color: #fca5a5;
-        background: rgba(239, 68, 68, 0.15);
-        border: 1px solid rgba(239, 68, 68, 0.35);
-        cursor: pointer;
-        transition: background 0.15s, color 0.15s;
-        font-family: inherit;
-      }
-
-      .mask-manager-prune-btn:hover {
-        background: rgba(239, 68, 68, 0.3);
-        color: #fecaca;
-      }
-
       .mask-manager-body {
         padding: 16px 20px;
         overflow-y: auto;
@@ -1721,6 +1700,126 @@ export class FrigateEventsCard extends LitElement {
         line-height: 1.5;
         color: #71717a;
       }
+
+      .mask-restart-banner {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        background: rgba(245, 158, 11, 0.12);
+        border: 1px solid rgba(245, 158, 11, 0.35);
+        border-radius: 8px;
+        padding: 10px 14px;
+        margin-bottom: 4px;
+      }
+
+      .mask-restart-banner-info {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .restart-warning-icon {
+        width: 22px;
+        height: 22px;
+        fill: #fbbf24;
+        flex-shrink: 0;
+      }
+
+      .restart-banner-title {
+        font-size: 13px;
+        font-weight: 600;
+        color: #fde68a;
+      }
+
+      .restart-banner-desc {
+        font-size: 11px;
+        color: #d1d5db;
+        line-height: 1.3;
+        margin-top: 2px;
+      }
+
+      .mask-restart-btn {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 12px;
+        border-radius: 6px;
+        font-size: 12px;
+        font-weight: 600;
+        color: #1e1b4b;
+        background: #fbbf24;
+        border: none;
+        cursor: pointer;
+        transition: background 0.15s, transform 0.15s;
+        font-family: inherit;
+        white-space: nowrap;
+        flex-shrink: 0;
+      }
+
+      .mask-restart-btn:hover {
+        background: #f59e0b;
+        transform: scale(1.02);
+      }
+
+      .mask-restart-btn svg {
+        width: 14px;
+        height: 14px;
+        fill: currentColor;
+      }
+
+      .mask-restart-btn-small {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 4px 10px;
+        border-radius: 5px;
+        font-size: 11px;
+        font-weight: 600;
+        color: #1e1b4b;
+        background: #fbbf24;
+        border: none;
+        cursor: pointer;
+        transition: background 0.15s;
+        font-family: inherit;
+        margin-left: auto;
+      }
+
+      .mask-restart-btn-small:hover {
+        background: #f59e0b;
+      }
+
+      .pending-masks-section {
+        margin-top: 12px;
+        padding-top: 12px;
+        border-top: 1px dashed rgba(245, 158, 11, 0.3);
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .pending-section-title {
+        font-size: 12px;
+        font-weight: 600;
+        color: #fbbf24;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+
+      .mask-card.pending-restart {
+        border-color: rgba(245, 158, 11, 0.35);
+        background: rgba(245, 158, 11, 0.05);
+      }
+
+      .mask-card-time-badge.pending {
+        background: rgba(245, 158, 11, 0.2);
+        color: #fbbf24;
+      }
+
+      .pending-notice {
+        color: #fde68a !important;
+        font-size: 11px !important;
+      }
     `;
     document.head.appendChild(style);
     FrigateEventsCard._stylesInjected = true;
@@ -2024,6 +2123,10 @@ export class FrigateEventsCard extends LitElement {
             });
           }
         }
+        this._localPendingMasks = [
+          ...this._localPendingMasks.filter(m => String(m.mask_id) !== String(maskId)),
+          { mask_id: maskId, camera: event.camera, label: event.label, event_id: event.id, removed_at: new Date().toISOString() }
+        ];
         this.dispatchEvent(new CustomEvent('hass-notification', {
           detail: { message: `Temporary mask removed for ${event.camera} (restart Frigate to apply)` },
           bubbles: true,
@@ -2032,6 +2135,7 @@ export class FrigateEventsCard extends LitElement {
         return false;
       } else {
         // Add mask
+        this._localPendingMasks = [];
         const durationHours = this._getMaskDurationHours();
         const boxData = Array.isArray(event.box) ? event.box.join(',') : (event.data?.box ? event.data.box.join(',') : '');
         if (this.hass.callService) {
@@ -2365,17 +2469,13 @@ export class FrigateEventsCard extends LitElement {
   private _handleLiveViewContextMenu(e: MouseEvent): void {
     e.preventDefault();
     e.stopPropagation();
-    this._openLiveViewContextMenu(e.clientX, e.clientY);
+    this._showMaskManagerModal();
   }
 
   private _handleLiveViewTouchStart(e: TouchEvent): void {
     if (e.touches.length !== 1) return;
-    const touch = e.touches[0];
-    const clientX = touch.clientX;
-    const clientY = touch.clientY;
-
     this._liveTouchTimeout = setTimeout(() => {
-      this._openLiveViewContextMenu(clientX, clientY);
+      this._showMaskManagerModal();
     }, 500);
   }
 
@@ -2391,123 +2491,6 @@ export class FrigateEventsCard extends LitElement {
     const clean1 = entityOrCam1.toLowerCase().replace(/^camera\./, '').replace(/_(live|sub|detect|fluent|high|low|hd|sd|main|stream|rtsp)$/, '').replace(/[-_]/g, '');
     const clean2 = entityOrCam2.toLowerCase().replace(/^camera\./, '').replace(/_(live|sub|detect|fluent|high|low|hd|sd|main|stream|rtsp)$/, '').replace(/[-_]/g, '');
     return clean1 === clean2 || clean1.includes(clean2) || clean2.includes(clean1);
-  }
-
-  private _openLiveViewContextMenu(x: number, y: number): void {
-    this._closeContextMenu();
-    this._injectModalStyles();
-
-    const liveEntity = this._config?.live_view_entity || '';
-    const activeMasks = (this.hass?.states?.['sensor.frigate_active_masks']?.attributes?.masks as any[]) || [];
-    const allMaskCount = Array.isArray(activeMasks) ? activeMasks.length : 0;
-    const cameraMaskCount = Array.isArray(activeMasks)
-      ? (liveEntity ? activeMasks.filter((m: any) => this._matchesCamera(liveEntity, m.camera)).length : allMaskCount)
-      : 0;
-
-    const hasTempMaskIntegration = !!(
-      this._config?.show_temp_mask !== false &&
-      (this.hass?.services?.['frigate_temp_mask'] || this.hass?.services?.['shell_command']?.['frigate_add_temp_mask'] || this.hass?.states?.['sensor.frigate_active_masks'])
-    );
-
-    const menu = document.createElement('div');
-    menu.className = 'frigate-events-context-menu live-view-context-menu';
-
-    menu.innerHTML = `
-      ${hasTempMaskIntegration ? `
-      <button class="frigate-events-context-item masked" data-action="manage-masks">
-        <svg viewBox="0 0 24 24"><path d="M12,1L3,5V11C3,16.55 6.84,21.74 12,23C17.16,21.74 21,16.55 21,11V5L12,1M12,5A6,6 0 0,1 18,11C18,14.41 15.46,18.22 12,19.82C8.54,18.22 6,14.41 6,11A6,6 0 0,1 12,5Z"/></svg>
-        <div class="duration-label-container">
-          <span>Manage Temporary Masks</span>
-          <span class="duration-subtitle">${allMaskCount > 0 ? `${allMaskCount} active (${cameraMaskCount} on this camera)` : 'No active masks'}</span>
-        </div>
-      </button>
-      <button class="frigate-events-context-item ${this._showLiveMaskOverlays ? 'selected' : ''}" data-action="toggle-overlay">
-        <svg viewBox="0 0 24 24"><path d="M12,9A3,3 0 0,0 9,12A3,3 0 0,0 12,15A3,3 0 0,0 15,12A3,3 0 0,0 12,9M12,17A5,5 0 0,1 7,12A5,5 0 0,1 12,7A5,5 0 0,1 17,12A5,5 0 0,1 12,7M12,4.5C7,4.5 2.73,7.61 1,12C2.73,16.39 7,19.5 12,19.5C17,19.5 21.27,16.39 23,12C21.27,7.61 17,4.5 12,4.5Z"/></svg>
-        <span>${this._showLiveMaskOverlays ? 'Hide Mask Overlays' : 'Show Mask Overlays'}</span>
-        ${this._showLiveMaskOverlays ? `
-          <svg class="check-icon" viewBox="0 0 24 24">
-            <path d="M21,7L9,19L3.5,13.5L4.91,12.09L9,16.17L19.59,5.59L21,7Z"/>
-          </svg>
-        ` : ''}
-      </button>
-      ${allMaskCount > 0 ? `
-      <button class="frigate-events-context-item danger" data-action="prune-all">
-        <svg viewBox="0 0 24 24"><path d="M19.36,2.72L20.78,4.14L15.06,9.85C16.13,11.39 16.28,13.24 15.38,14.44L9.06,8.12C10.26,7.22 12.11,7.37 13.65,8.44L19.36,2.72M5.93,17.57C3.92,15.56 2.69,13.16 2.35,10.92L7.23,8.83L14.67,16.27L12.58,21.15C10.34,20.81 7.94,19.58 5.93,17.57Z"/></svg>
-        <span>Prune All Masks</span>
-      </button>
-      ` : ''}
-      <div class="frigate-events-context-separator"></div>
-      ` : ''}
-      <button class="frigate-events-context-item" data-action="fullscreen">
-        <svg viewBox="0 0 24 24"><path d="M5,5H10V7H7V10H5V5M14,5H19V10H17V7H14V5M17,14H19V19H14V17H17V14M10,17V19H5V14H7V17H10Z"/></svg>
-        <span>Toggle Fullscreen</span>
-      </button>
-    `;
-
-    document.body.appendChild(menu);
-    const rect = menu.getBoundingClientRect();
-    let posX = x;
-    let posY = y;
-    if (posX + rect.width > window.innerWidth - 10) {
-      posX = window.innerWidth - rect.width - 10;
-    }
-    if (posY + rect.height > window.innerHeight - 10) {
-      posY = window.innerHeight - rect.height - 10;
-    }
-    menu.style.left = `${Math.max(10, posX)}px`;
-    menu.style.top = `${Math.max(10, posY)}px`;
-
-    menu.querySelector('[data-action="manage-masks"]')?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      this._closeContextMenu();
-      this._showMaskManagerModal();
-    });
-
-    menu.querySelector('[data-action="toggle-overlay"]')?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      this._closeContextMenu();
-      this._showLiveMaskOverlays = !this._showLiveMaskOverlays;
-      this.requestUpdate();
-
-      this.dispatchEvent(new CustomEvent('hass-notification', {
-        detail: {
-          message: this._showLiveMaskOverlays
-            ? (cameraMaskCount > 0
-                ? `Mask overlays enabled (${cameraMaskCount} active on this camera)`
-                : allMaskCount > 0
-                ? `Mask overlays enabled (${allMaskCount} active on other cameras)`
-                : `Mask overlays enabled (0 active masks)`)
-            : 'Mask overlays hidden'
-        },
-        bubbles: true,
-        composed: true,
-      }));
-    });
-
-    menu.querySelector('[data-action="prune-all"]')?.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      this._closeContextMenu();
-      await this._executePruneAllMasks();
-    });
-
-    menu.querySelector('[data-action="fullscreen"]')?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      this._closeContextMenu();
-      const container = this.renderRoot?.querySelector('.live-view-container') as HTMLElement | null;
-      if (container) {
-        this._handleLiveViewClick({ currentTarget: container } as any);
-      }
-    });
-
-    const onDocClick = (ev: MouseEvent) => {
-      if (!menu.contains(ev.target as Node)) {
-        this._closeContextMenu();
-        window.removeEventListener('click', onDocClick);
-      }
-    };
-    setTimeout(() => window.addEventListener('click', onDocClick), 10);
-
-    this._contextMenuEl = menu;
   }
 
   private _showMaskManagerModal(): void {
@@ -2584,13 +2567,30 @@ export class FrigateEventsCard extends LitElement {
     const activeMasks = Array.isArray(rawMasks) ? rawMasks : [];
     const totalCount = activeMasks.length;
 
-    // Get unique cameras
-    const cameras = Array.from(new Set(activeMasks.map((m: any) => m.camera).filter(Boolean)));
+    const rawPending = (this.hass?.states?.['sensor.frigate_active_masks']?.attributes?.pending_restart_masks as any[]) || [];
+    const backendPending = Array.isArray(rawPending) ? rawPending : [];
+
+    // Combine local pending and backend pending
+    const pendingMap = new Map<string, any>();
+    this._localPendingMasks.forEach(m => pendingMap.set(String(m.mask_id), m));
+    backendPending.forEach(m => pendingMap.set(String(m.mask_id), m));
+
+    // Remove any that are currently in activeMasks
+    activeMasks.forEach(m => pendingMap.delete(String(m.mask_id)));
+    const pendingMasks = Array.from(pendingMap.values());
+
+    // Get unique cameras from active and pending
+    const allCams = [...activeMasks.map((m: any) => m.camera), ...pendingMasks.map((m: any) => m.camera)].filter(Boolean);
+    const cameras = Array.from(new Set(allCams));
     const filterCamera = this._maskManagerSelectedCamera || 'all';
 
     const filteredMasks = filterCamera === 'all'
       ? activeMasks
       : activeMasks.filter((m: any) => m.camera === filterCamera);
+
+    const filteredPending = filterCamera === 'all'
+      ? pendingMasks
+      : pendingMasks.filter((m: any) => m.camera === filterCamera);
 
     const durationPresets = [
       { hours: 1, label: '1h' },
@@ -2607,23 +2607,33 @@ export class FrigateEventsCard extends LitElement {
         <div class="mask-manager-header">
           <div class="mask-manager-header-left">
             <div class="mask-manager-title">
-              <svg viewBox="0 0 24 24" style="width: 20px; height: 20px; fill: #60a5fa;"><path d="M12,1L3,5V11C3,16.55 6.84,21.74 12,23C17.16,21.74 21,16.55 21,11V5L12,1M12,5A6,6 0 0,1 18,11C18,14.41 15.46,18.22 12,19.82C8.54,18.22 6,14.41 6,11A6,6 0 0,1 12,5Z"/></svg>
+              <svg viewBox="0 0 24 24" style="width: 20px; height: 20px; fill: #60a5fa;"><path d="M2,2H8V4H16V2H22V8H20V16H22V22H16V20H8V22H2V16H4V8H2V2M4,4V6H6V4H4M18,4V6H20V4H18M20,18V20H18V18H20M4,18V20H6V18H4M8,6V8H6V16H8V18H16V16H18V8H16V6H8M9,9H15V15H9V9Z"/></svg>
               <span>Temporary Masks</span>
             </div>
             <span class="mask-manager-count-badge">${totalCount} Active</span>
           </div>
           <div class="mask-manager-header-actions">
-            ${totalCount > 0 ? `
-              <button class="mask-manager-prune-btn" data-action="prune-all">
-                <svg viewBox="0 0 24 24" style="width: 14px; height: 14px; fill: currentColor;"><path d="M19.36,2.72L20.78,4.14L15.06,9.85C16.13,11.39 16.28,13.24 15.38,14.44L9.06,8.12C10.26,7.22 12.11,7.37 13.65,8.44L19.36,2.72M5.93,17.57C3.92,15.56 2.69,13.16 2.35,10.92L7.23,8.83L14.67,16.27L12.58,21.15C10.34,20.81 7.94,19.58 5.93,17.57Z"/></svg>
-                <span>Prune All</span>
-              </button>
-            ` : ''}
             <button class="frigate-events-modal-close" data-action="close">✕</button>
           </div>
         </div>
 
         <div class="mask-manager-body">
+          ${pendingMasks.length > 0 ? `
+            <div class="mask-restart-banner">
+              <div class="mask-restart-banner-info">
+                <svg viewBox="0 0 24 24" class="restart-warning-icon"><path d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,4A8,8 0 0,1 20,12A8,8 0 0,1 12,20A8,8 0 0,1 4,12A8,8 0 0,1 12,4M11,7V13H13V7H11M11,15V17H13V15H11Z"/></svg>
+                <div class="restart-banner-text">
+                  <div class="restart-banner-title">Restart Pending (${pendingMasks.length} removed ${pendingMasks.length === 1 ? 'mask' : 'masks'})</div>
+                  <div class="restart-banner-desc">Masks were removed from config on disk. Restart Frigate to unload them from detector memory now.</div>
+                </div>
+              </div>
+              <button class="mask-restart-btn" data-action="restart-frigate" title="Restart Frigate detector process now">
+                <svg viewBox="0 0 24 24"><path d="M12,4V1L8,5L12,9V6A6,6 0 0,1 18,12C18,13.34 17.56,14.58 16.82,15.58L18.25,17C19.34,15.61 20,13.88 20,12A8,8 0 0,0 12,4M12,18A6,6 0 0,1 6,12C6,10.66 6.44,9.42 7.18,8.42L5.75,7C4.66,8.39 4,10.12 4,12A8,8 0 0,0 12,20V23L16,19L12,15V18Z"/></svg>
+                <span>Restart Frigate</span>
+              </button>
+            </div>
+          ` : ''}
+
           ${cameras.length > 1 ? `
             <div class="mask-filter-tabs">
               <button class="mask-filter-tab ${filterCamera === 'all' ? 'active' : ''}" data-camera-filter="all">
@@ -2637,13 +2647,15 @@ export class FrigateEventsCard extends LitElement {
             </div>
           ` : ''}
 
-          ${filteredMasks.length === 0 ? `
+          ${filteredMasks.length === 0 && filteredPending.length === 0 ? `
             <div class="mask-empty-state">
-              <svg viewBox="0 0 24 24"><path d="M12,1L3,5V11C3,16.55 6.84,21.74 12,23C17.16,21.74 21,16.55 21,11V5L12,1M12,5A6,6 0 0,1 18,11C18,14.41 15.46,18.22 12,19.82C8.54,18.22 6,14.41 6,11A6,6 0 0,1 12,5Z"/></svg>
+              <svg viewBox="0 0 24 24"><path d="M2,2H8V4H16V2H22V8H20V16H22V22H16V20H8V22H2V16H4V8H2V2M4,4V6H6V4H4M18,4V6H20V4H18M20,18V20H18V18H20M4,18V20H6V18H4M8,6V8H6V16H8V18H16V16H18V8H16V6H8M9,9H15V15H9V9Z"/></svg>
               <h4>No Active Temporary Masks</h4>
               <p>Apply temporary false-positive masks by right-clicking any event thumbnail below or from actionable notifications.</p>
             </div>
-          ` : `
+          ` : ''}
+
+          ${filteredMasks.length > 0 ? `
             <div class="mask-cards-list">
               ${filteredMasks.map((mask: any) => {
                 const currentDurationHours = typeof mask.duration_hours === 'number' ? mask.duration_hours : 24;
@@ -2779,7 +2791,65 @@ export class FrigateEventsCard extends LitElement {
                 `;
               }).join('')}
             </div>
-          `}
+          ` : ''}
+
+          ${filteredPending.length > 0 ? `
+            <div class="pending-masks-section">
+              <div class="pending-section-title">
+                <span>Removed Masks (Pending Frigate Restart)</span>
+              </div>
+              <div class="mask-cards-list">
+                ${filteredPending.map((mask: any) => {
+                  const clientId = this._config?.frigate_client_id || 'frigate';
+                  const maskId = String(mask.mask_id || '');
+                  const eventId = String(mask.event_id || maskId);
+                  const matchedEvent = this._events?.find(e => e.id === eventId || e.id.startsWith(maskId) || maskId.startsWith(e.id));
+                  const objectLabel = (matchedEvent?.label || mask.label || 'Detected Object').toUpperCase();
+                  const snapshotUrl = getEventSnapshotURL(clientId, matchedEvent ? matchedEvent.id : eventId, { bbox: true, crop: false });
+
+                  return `
+                    <div class="mask-card pending-restart" data-mask-id="${mask.mask_id}">
+                      <div class="mask-card-main-row">
+                        <div class="mask-visual-preview">
+                          <img
+                            src="${snapshotUrl}"
+                            class="mask-preview-thumb"
+                            alt="${objectLabel}"
+                            loading="lazy"
+                            onerror="this.style.display='none';"
+                          />
+                        </div>
+                        <div class="mask-card-info">
+                          <div class="mask-card-header">
+                            <div class="mask-card-title-col">
+                              <span class="mask-object-pill">${objectLabel}</span>
+                              <span class="mask-camera-pill">${this._formatCameraName(mask.camera || 'Camera')}</span>
+                              <span class="mask-id-pill">#${mask.mask_id}</span>
+                            </div>
+                            <div class="mask-card-time-badge pending">
+                              <span>Pending Restart</span>
+                            </div>
+                          </div>
+                          <div class="mask-card-details">
+                            <div class="mask-detail-row">
+                              <span class="detail-label">Status:</span>
+                              <span class="detail-value pending-notice">Removed from config · Awaiting Frigate restart to unload</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <div class="mask-card-actions">
+                        <button class="mask-restart-btn-small" data-action="restart-frigate">
+                          <svg viewBox="0 0 24 24" style="width: 13px; height: 13px; fill: currentColor;"><path d="M12,4V1L8,5L12,9V6A6,6 0 0,1 18,12C18,13.34 17.56,14.58 16.82,15.58L18.25,17C19.34,15.61 20,13.88 20,12A8,8 0 0,0 12,4M12,18A6,6 0 0,1 6,12C6,10.66 6.44,9.42 7.18,8.42L5.75,7C4.66,8.39 4,10.12 4,12A8,8 0 0,0 12,20V23L16,19L12,15V18Z"/></svg>
+                          <span>Restart Frigate Now</span>
+                        </button>
+                      </div>
+                    </div>
+                  `;
+                }).join('')}
+              </div>
+            </div>
+          ` : ''}
         </div>
       </div>
     `;
@@ -2792,8 +2862,11 @@ export class FrigateEventsCard extends LitElement {
       this._removeMaskManagerModal();
     });
 
-    container.querySelector('[data-action="prune-all"]')?.addEventListener('click', async () => {
-      await this._executePruneAllMasks();
+    container.querySelectorAll('[data-action="restart-frigate"]').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        await this._executeRestartFrigate();
+      });
     });
 
     container.querySelectorAll('[data-camera-filter]').forEach(tab => {
@@ -2845,9 +2918,47 @@ export class FrigateEventsCard extends LitElement {
     });
   }
 
+  private async _executeRestartFrigate(): Promise<void> {
+    if (!this.hass) return;
+    this._localPendingMasks = [];
+    try {
+      if (this.hass.callService) {
+        try {
+          await this.hass.callService('frigate_temp_mask', 'restart', {});
+        } catch {
+          try {
+            await this.hass.callService('frigate', 'restart', {});
+          } catch {
+            await this.hass.callService('homeassistant', 'restart', {});
+          }
+        }
+      }
+      this.dispatchEvent(new CustomEvent('hass-notification', {
+        detail: { message: 'Frigate detector process restarting to apply configuration changes...' },
+        bubbles: true,
+        composed: true,
+      }));
+      this.requestUpdate();
+      if (this._maskManagerContainer) {
+        setTimeout(() => {
+          if (this._maskManagerContainer) this._renderMaskManagerContent(this._maskManagerContainer);
+        }, 1500);
+      }
+    } catch (err) {
+      console.error('Failed to restart Frigate:', err);
+    }
+  }
+
   private async _executeRemoveMask(maskId: string, camera?: string): Promise<void> {
     if (!this.hass) return;
     try {
+      const activeMasks = (this.hass?.states?.['sensor.frigate_active_masks']?.attributes?.masks as any[]) || [];
+      const existing = activeMasks.find((m: any) => String(m.mask_id) === String(maskId));
+      this._localPendingMasks = [
+        ...this._localPendingMasks.filter(m => String(m.mask_id) !== String(maskId)),
+        existing ? { ...existing, removed_at: new Date().toISOString() } : { mask_id: maskId, camera: camera || 'Camera', removed_at: new Date().toISOString() }
+      ];
+
       if (this.hass.callService) {
         try {
           await this.hass.callService('frigate_temp_mask', 'remove_mask', {
@@ -2860,7 +2971,7 @@ export class FrigateEventsCard extends LitElement {
         }
       }
       this.dispatchEvent(new CustomEvent('hass-notification', {
-        detail: { message: `Temporary mask #${maskId} removed ${camera ? `for ${camera}` : ''}` },
+        detail: { message: `Temporary mask #${maskId} removed ${camera ? `for ${camera} ` : ''}(restart Frigate to apply)` },
         bubbles: true,
         composed: true,
       }));
@@ -3475,32 +3586,6 @@ export class FrigateEventsCard extends LitElement {
       `;
     }
 
-    const liveEntity = this._config?.live_view_entity || '';
-    const activeMasks = (this.hass?.states?.['sensor.frigate_active_masks']?.attributes?.masks as any[]) || [];
-    const cameraMasks = Array.isArray(activeMasks)
-      ? (liveEntity ? activeMasks.filter((m: any) => this._matchesCamera(liveEntity, m.camera)) : activeMasks)
-      : [];
-
-    let viewBoxW = 1920;
-    let viewBoxH = 1080;
-    if (cameraMasks.length > 0) {
-      let maxCoord = 0;
-      for (const m of cameraMasks) {
-        if (!m.polygon) continue;
-        const nums = m.polygon.split(',').map((s: string) => parseFloat(s.trim())).filter((n: number) => !isNaN(n));
-        for (const n of nums) {
-          if (n > maxCoord) maxCoord = n;
-        }
-      }
-      if (maxCoord > 1920) {
-        viewBoxW = maxCoord > 2560 ? 3840 : 2560;
-        viewBoxH = maxCoord > 2560 ? 2160 : 1440;
-      } else if (maxCoord <= 1280 && maxCoord > 1.0) {
-        viewBoxW = 1280;
-        viewBoxH = 720;
-      }
-    }
-
     return html`
       <div
         class="live-view-container"
@@ -3523,64 +3608,6 @@ export class FrigateEventsCard extends LitElement {
           poster="data:image/png;base64,iVBORw0KGgoAAAANSU5EUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
           ${ref(this._handleLiveVideoRef)}
         ></video>
-
-        ${this._showLiveMaskOverlays && cameraMasks.length > 0 ? html`
-          <svg class="live-view-mask-overlay" viewBox="0 0 ${viewBoxW} ${viewBoxH}" preserveAspectRatio="none">
-            ${cameraMasks.map((mask: any) => {
-              if (!mask.polygon) return '';
-              const nums = mask.polygon.split(',').map((s: string) => parseFloat(s.trim())).filter((n: number) => !isNaN(n));
-              if (nums.length < 6) return '';
-              const isNormalized = nums.every((n: number) => n <= 1.0);
-              const pts: string[] = [];
-              for (let i = 0; i < nums.length; i += 2) {
-                let px = nums[i];
-                let py = nums[i + 1] ?? 0;
-                if (isNormalized) {
-                  px = px * viewBoxW;
-                  py = py * viewBoxH;
-                }
-                pts.push(`${px},${py}`);
-              }
-
-              return html`
-                <g class="live-mask-poly-group" @click=${(e: Event) => { e.stopPropagation(); this._showMaskManagerModal(); }}>
-                  <polygon points="${pts.join(' ')}" class="live-mask-poly" vector-effect="non-scaling-stroke" />
-                </g>
-              `;
-            })}
-          </svg>
-          ${cameraMasks.map((mask: any) => {
-            if (!mask.polygon) return '';
-            const nums = mask.polygon.split(',').map((s: string) => parseFloat(s.trim())).filter((n: number) => !isNaN(n));
-            if (nums.length < 6) return '';
-            const isNormalized = nums.every((n: number) => n <= 1.0);
-            let minX = Infinity, minY = Infinity;
-            for (let i = 0; i < nums.length; i += 2) {
-              let px = nums[i];
-              let py = nums[i + 1] ?? 0;
-              if (isNormalized) {
-                px = px * viewBoxW;
-                py = py * viewBoxH;
-              }
-              if (px < minX) minX = px;
-              if (py < minY) minY = py;
-            }
-            const pctX = Math.max(1, Math.min(90, (minX / viewBoxW) * 100));
-            const pctY = Math.max(2, Math.min(92, (minY / viewBoxH) * 100));
-            const remainingText = this._formatMaskRemainingTime(mask.expires_at);
-
-            return html`
-              <div
-                class="live-mask-badge"
-                style="left: ${pctX}%; top: ${pctY}%;"
-                @click=${(e: Event) => { e.stopPropagation(); this._showMaskManagerModal(); }}
-                title="Temporary mask active - click to manage"
-              >
-                <span>Mask · ${remainingText}</span>
-              </div>
-            `;
-          })}
-        ` : ''}
       </div>
     `;
   }
@@ -3906,60 +3933,6 @@ export class FrigateEventsCard extends LitElement {
         opacity: 0.7;
         max-width: 80%;
         text-align: center;
-      }
-
-      .live-view-mask-overlay {
-        position: absolute;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        pointer-events: auto;
-        z-index: 10;
-        transform: translateZ(5px);
-      }
-
-      .live-mask-poly-group {
-        cursor: pointer;
-      }
-
-      .live-mask-poly {
-        fill: rgba(59, 130, 246, 0.35);
-        stroke: #60a5fa;
-        stroke-width: 3px;
-        stroke-dasharray: 8 4;
-        vector-effect: non-scaling-stroke;
-        transition: fill 0.2s, stroke 0.2s;
-      }
-
-      .live-mask-poly-group:hover .live-mask-poly {
-        fill: rgba(59, 130, 246, 0.55);
-        stroke: #93c5fd;
-        stroke-width: 4px;
-      }
-
-      .live-mask-badge {
-        position: absolute;
-        transform: translateY(-100%) translateY(-6px);
-        font-size: 11px;
-        font-weight: 600;
-        color: #f0f9ff;
-        background: rgba(15, 23, 42, 0.92);
-        border: 1px solid rgba(96, 165, 250, 0.75);
-        border-radius: 4px;
-        padding: 2px 7px;
-        pointer-events: auto;
-        white-space: nowrap;
-        z-index: 12;
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
-        cursor: pointer;
-        user-select: none;
-        transition: transform 0.15s, background 0.15s;
-      }
-
-      .live-mask-badge:hover {
-        background: rgba(30, 58, 138, 0.95);
-        transform: translateY(-100%) translateY(-6px) scale(1.05);
       }
 
     `;
