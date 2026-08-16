@@ -8,7 +8,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, deleteEvent } from './frigate/api';
 
-const CARD_VERSION = '2.3.7';
+const CARD_VERSION = '2.3.8';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -1476,14 +1476,17 @@ export class FrigateEventsCard extends LitElement {
   private async _executeTempMaskToggle(event: FrigateEvent): Promise<boolean> {
     if (!this.hass) return false;
     const maskId = event.id.includes('-') ? event.id.split('-')[0] : event.id;
-    const activeMask = this.hass.states?.['input_text.frigate_temp_mask_active']?.state;
-    const isCurrentlyActive = !!(activeMask && (activeMask === maskId || activeMask.includes(maskId)));
+    const activeMasks = (this.hass.states?.['sensor.frigate_active_masks']?.attributes?.masks as any[]) || [];
+    const activeMaskStr = this.hass.states?.['sensor.frigate_active_masks']?.state;
+    const isCurrentlyActive: boolean = Boolean(
+      (Array.isArray(activeMasks) && activeMasks.some((m: any) => m.mask_id === maskId)) ||
+      (activeMaskStr && activeMaskStr !== '0' && activeMaskStr !== 'unavailable')
+    );
 
     try {
       if (isCurrentlyActive) {
         // Remove mask
         if (this.hass.callService) {
-          // Check if native custom component service is available, otherwise fallback to shell_command
           try {
             await this.hass.callService('frigate_temp_mask', 'remove_mask', {
               mask_id: maskId,
@@ -1493,13 +1496,6 @@ export class FrigateEventsCard extends LitElement {
               mask_id: maskId,
             });
           }
-          await this.hass.callService('timer', 'cancel', {
-            entity_id: 'timer.frigate_temp_mask',
-          });
-          await this.hass.callService('input_text', 'set_value', {
-            entity_id: 'input_text.frigate_temp_mask_active',
-            value: '',
-          });
         }
         this.dispatchEvent(new CustomEvent('hass-notification', {
           detail: { message: `Temporary mask removed for ${event.camera}` },
@@ -1509,14 +1505,13 @@ export class FrigateEventsCard extends LitElement {
         return false;
       } else {
         // Add mask
-        const duration = this._config?.temp_mask_duration || '24:00:00';
         if (this.hass.callService) {
-          // Check if native custom component service is available, otherwise fallback to shell_command
           try {
             await this.hass.callService('frigate_temp_mask', 'add_mask', {
               camera: event.camera,
               event_id: event.id,
               mask_id: maskId,
+              duration_hours: 24,
             });
           } catch {
             await this.hass.callService('shell_command', 'frigate_add_temp_mask', {
@@ -1525,14 +1520,6 @@ export class FrigateEventsCard extends LitElement {
               mask_id: maskId,
             });
           }
-          await this.hass.callService('timer', 'start', {
-            entity_id: 'timer.frigate_temp_mask',
-            duration: duration,
-          });
-          await this.hass.callService('input_text', 'set_value', {
-            entity_id: 'input_text.frigate_temp_mask_active',
-            value: maskId,
-          });
         }
         this.dispatchEvent(new CustomEvent('hass-notification', {
           detail: { message: `Temporary mask applied for ${event.camera}` },
@@ -1576,8 +1563,12 @@ export class FrigateEventsCard extends LitElement {
     this._injectModalStyles();
 
     const maskId = event.id.includes('-') ? event.id.split('-')[0] : event.id;
-    const activeMask = this.hass?.states?.['input_text.frigate_temp_mask_active']?.state;
-    const isMaskActive = !!(activeMask && (activeMask === maskId || activeMask.includes(maskId)));
+    const activeMasks = (this.hass?.states?.['sensor.frigate_active_masks']?.attributes?.masks as any[]) || [];
+    const activeMaskStr = this.hass?.states?.['sensor.frigate_active_masks']?.state;
+    const isMaskActive: boolean = Boolean(
+      (Array.isArray(activeMasks) && activeMasks.some((m: any) => m.mask_id === maskId)) ||
+      (activeMaskStr && activeMaskStr !== '0' && activeMaskStr !== 'unavailable')
+    );
 
     const menu = document.createElement('div');
     menu.className = 'frigate-events-context-menu';
