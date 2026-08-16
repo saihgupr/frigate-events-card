@@ -318,6 +318,6 @@ Contributions are welcome! Please submit all Pull Requests to the **develop** br
 
 If you encounter any issues, bugs, or have feature requests, please [open an issue on GitHub](https://github.com/saihgupr/frigate-events-card/issues).
 
-Frigate Events Card is open-source and free. If you find it useful, consider giving it a star or making a donation to support development!
+Frigate Events Card is open-source and free. If you find it useful, consider giving it a star ⭐ or making a donation to support development!
 
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/saihgupr)

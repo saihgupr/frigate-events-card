@@ -8,7 +8,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, deleteEvent } from './frigate/api';
 
-const CARD_VERSION = '2.3.19';
+const CARD_VERSION = '2.3.23';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -1459,6 +1459,91 @@ export class FrigateEventsCard extends LitElement {
         gap: 8px;
       }
 
+      .mask-card-main-row {
+        display: flex;
+        gap: 12px;
+        align-items: stretch;
+      }
+
+      .mask-visual-preview {
+        position: relative;
+        width: 100px;
+        min-width: 100px;
+        height: 72px;
+        border-radius: 6px;
+        overflow: hidden;
+        background: #090d16;
+        border: 1px solid rgba(59, 130, 246, 0.3);
+        flex-shrink: 0;
+      }
+
+      .mask-preview-thumb {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+      }
+
+      .mask-preview-minimap {
+        width: 100%;
+        height: 100%;
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: radial-gradient(circle at center, #1e293b 0%, #0f172a 100%);
+      }
+
+      .mask-preview-minimap svg {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+      }
+
+      .minimap-poly {
+        fill: rgba(59, 130, 246, 0.45);
+        stroke: #60a5fa;
+        stroke-width: 25px;
+        vector-effect: non-scaling-stroke;
+      }
+
+      .minimap-pos-tag {
+        position: absolute;
+        bottom: 3px;
+        left: 4px;
+        font-size: 9px;
+        font-weight: 600;
+        color: #93c5fd;
+        background: rgba(15, 23, 42, 0.85);
+        padding: 1px 4px;
+        border-radius: 3px;
+        z-index: 2;
+      }
+
+      .mask-card-info {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        gap: 6px;
+      }
+
+      .mask-object-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 2px 7px;
+        border-radius: 4px;
+        font-size: 11px;
+        font-weight: 600;
+        background: rgba(59, 130, 246, 0.2);
+        color: #93c5fd;
+        border: 1px solid rgba(59, 130, 246, 0.4);
+        text-transform: capitalize;
+      }
+
       .mask-camera-pill {
         font-size: 12px;
         font-weight: 600;
@@ -1502,7 +1587,7 @@ export class FrigateEventsCard extends LitElement {
         font-size: 12px;
         color: #aaa;
         background: rgba(0, 0, 0, 0.25);
-        padding: 8px 10px;
+        padding: 6px 8px;
         border-radius: 6px;
       }
 
@@ -1948,6 +2033,7 @@ export class FrigateEventsCard extends LitElement {
       } else {
         // Add mask
         const durationHours = this._getMaskDurationHours();
+        const boxData = Array.isArray(event.box) ? event.box.join(',') : (event.data?.box ? event.data.box.join(',') : '');
         if (this.hass.callService) {
           try {
             await this.hass.callService('frigate_temp_mask', 'add_mask', {
@@ -1955,6 +2041,8 @@ export class FrigateEventsCard extends LitElement {
               event_id: event.id,
               mask_id: maskId,
               duration_hours: durationHours,
+              label: event.label,
+              box: boxData,
             });
           } catch {
             await this.hass.callService('shell_command', 'frigate_add_temp_mask', {
@@ -1980,6 +2068,7 @@ export class FrigateEventsCard extends LitElement {
   private async _executeChangeMaskDuration(event: FrigateEvent, durationHours: number): Promise<void> {
     if (!this.hass) return;
     const maskId = event.id.includes('-') ? event.id.split('-')[0] : event.id;
+    const boxData = Array.isArray(event.box) ? event.box.join(',') : (event.data?.box ? event.data.box.join(',') : '');
 
     try {
       if (this.hass.callService) {
@@ -1989,6 +2078,8 @@ export class FrigateEventsCard extends LitElement {
             event_id: event.id,
             mask_id: maskId,
             duration_hours: durationHours,
+            label: event.label,
+            box: boxData,
           });
         } catch {
           await this.hass.callService('shell_command', 'frigate_add_temp_mask', {
@@ -2295,12 +2386,23 @@ export class FrigateEventsCard extends LitElement {
     }
   }
 
+  private _matchesCamera(entityOrCam1?: string, entityOrCam2?: string): boolean {
+    if (!entityOrCam1 || !entityOrCam2) return true;
+    const clean1 = entityOrCam1.toLowerCase().replace(/^camera\./, '').replace(/_(live|sub|detect|fluent|high|low|hd|sd|main|stream|rtsp)$/, '').replace(/[-_]/g, '');
+    const clean2 = entityOrCam2.toLowerCase().replace(/^camera\./, '').replace(/_(live|sub|detect|fluent|high|low|hd|sd|main|stream|rtsp)$/, '').replace(/[-_]/g, '');
+    return clean1 === clean2 || clean1.includes(clean2) || clean2.includes(clean1);
+  }
+
   private _openLiveViewContextMenu(x: number, y: number): void {
     this._closeContextMenu();
     this._injectModalStyles();
 
+    const liveEntity = this._config?.live_view_entity || '';
     const activeMasks = (this.hass?.states?.['sensor.frigate_active_masks']?.attributes?.masks as any[]) || [];
-    const maskCount = Array.isArray(activeMasks) ? activeMasks.length : 0;
+    const allMaskCount = Array.isArray(activeMasks) ? activeMasks.length : 0;
+    const cameraMaskCount = Array.isArray(activeMasks)
+      ? (liveEntity ? activeMasks.filter((m: any) => this._matchesCamera(liveEntity, m.camera)).length : allMaskCount)
+      : 0;
 
     const hasTempMaskIntegration = !!(
       this._config?.show_temp_mask !== false &&
@@ -2316,14 +2418,19 @@ export class FrigateEventsCard extends LitElement {
         <svg viewBox="0 0 24 24"><path d="M12,1L3,5V11C3,16.55 6.84,21.74 12,23C17.16,21.74 21,16.55 21,11V5L12,1M12,5A6,6 0 0,1 18,11C18,14.41 15.46,18.22 12,19.82C8.54,18.22 6,14.41 6,11A6,6 0 0,1 12,5Z"/></svg>
         <div class="duration-label-container">
           <span>Manage Temporary Masks</span>
-          <span class="duration-subtitle">${maskCount > 0 ? `${maskCount} active ${maskCount === 1 ? 'mask' : 'masks'}` : 'No active masks'}</span>
+          <span class="duration-subtitle">${allMaskCount > 0 ? `${allMaskCount} active (${cameraMaskCount} on this camera)` : 'No active masks'}</span>
         </div>
       </button>
-      <button class="frigate-events-context-item" data-action="toggle-overlay">
+      <button class="frigate-events-context-item ${this._showLiveMaskOverlays ? 'selected' : ''}" data-action="toggle-overlay">
         <svg viewBox="0 0 24 24"><path d="M12,9A3,3 0 0,0 9,12A3,3 0 0,0 12,15A3,3 0 0,0 15,12A3,3 0 0,0 12,9M12,17A5,5 0 0,1 7,12A5,5 0 0,1 12,7A5,5 0 0,1 17,12A5,5 0 0,1 12,7M12,4.5C7,4.5 2.73,7.61 1,12C2.73,16.39 7,19.5 12,19.5C17,19.5 21.27,16.39 23,12C21.27,7.61 17,4.5 12,4.5Z"/></svg>
         <span>${this._showLiveMaskOverlays ? 'Hide Mask Overlays' : 'Show Mask Overlays'}</span>
+        ${this._showLiveMaskOverlays ? `
+          <svg class="check-icon" viewBox="0 0 24 24">
+            <path d="M21,7L9,19L3.5,13.5L4.91,12.09L9,16.17L19.59,5.59L21,7Z"/>
+          </svg>
+        ` : ''}
       </button>
-      ${maskCount > 0 ? `
+      ${allMaskCount > 0 ? `
       <button class="frigate-events-context-item danger" data-action="prune-all">
         <svg viewBox="0 0 24 24"><path d="M19.36,2.72L20.78,4.14L15.06,9.85C16.13,11.39 16.28,13.24 15.38,14.44L9.06,8.12C10.26,7.22 12.11,7.37 13.65,8.44L19.36,2.72M5.93,17.57C3.92,15.56 2.69,13.16 2.35,10.92L7.23,8.83L14.67,16.27L12.58,21.15C10.34,20.81 7.94,19.58 5.93,17.57Z"/></svg>
         <span>Prune All Masks</span>
@@ -2361,6 +2468,20 @@ export class FrigateEventsCard extends LitElement {
       this._closeContextMenu();
       this._showLiveMaskOverlays = !this._showLiveMaskOverlays;
       this.requestUpdate();
+
+      this.dispatchEvent(new CustomEvent('hass-notification', {
+        detail: {
+          message: this._showLiveMaskOverlays
+            ? (cameraMaskCount > 0
+                ? `Mask overlays enabled (${cameraMaskCount} active on this camera)`
+                : allMaskCount > 0
+                ? `Mask overlays enabled (${allMaskCount} active on other cameras)`
+                : `Mask overlays enabled (0 active masks)`)
+            : 'Mask overlays hidden'
+        },
+        bubbles: true,
+        composed: true,
+      }));
     });
 
     menu.querySelector('[data-action="prune-all"]')?.addEventListener('click', async (e) => {
@@ -2529,30 +2650,109 @@ export class FrigateEventsCard extends LitElement {
                 const isCustom = !durationPresets.some(p => Math.abs(p.hours - currentDurationHours) < 0.01);
                 const remainingText = this._formatMaskRemainingTime(mask.expires_at);
 
+                const clientId = this._config?.frigate_client_id || 'frigate';
+                const maskId = String(mask.mask_id || '');
+                const eventId = String(mask.event_id || maskId);
+
+                // Find matching event from card events cache
+                const matchedEvent = this._events?.find(e =>
+                  e.id === eventId ||
+                  e.id.startsWith(maskId) ||
+                  maskId.startsWith(e.id)
+                );
+
+                const objectLabel = (matchedEvent?.label || mask.label || 'Detected Object').toUpperCase();
+                const scoreText = matchedEvent?.top_score ? ` (${Math.round(matchedEvent.top_score * 100)}%)` : '';
+                const timeText = matchedEvent?.start_time ? this._formatTime(matchedEvent.start_time) : '';
+
+                // Build snapshot image URL
+                const snapshotUrl = getEventSnapshotURL(clientId, matchedEvent ? matchedEvent.id : eventId, {
+                  bbox: true,
+                  crop: false
+                });
+
+                // Parse polygon for location/dimensions
+                let posName = 'Center';
+                let polyPts = '';
+                let maskW = 0, maskH = 0;
+                if (mask.polygon) {
+                  const nums = mask.polygon.split(',').map((s: string) => parseFloat(s.trim())).filter((n: number) => !isNaN(n));
+                  if (nums.length >= 6) {
+                    const isNormalized = nums.every((n: number) => n <= 1.0);
+                    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+                    const pts: string[] = [];
+                    for (let i = 0; i < nums.length; i += 2) {
+                      let px = nums[i];
+                      let py = nums[i + 1] ?? 0;
+                      if (isNormalized) {
+                        px = px * 1920;
+                        py = py * 1080;
+                      }
+                      pts.push(`${px},${py}`);
+                      if (px < minX) minX = px;
+                      if (py < minY) minY = py;
+                      if (px > maxX) maxX = px;
+                      if (py > maxY) maxY = py;
+                    }
+                    polyPts = pts.join(' ');
+                    maskW = maxX - minX;
+                    maskH = maxY - minY;
+
+                    const centerX = (minX + maxX) / 2;
+                    const centerY = (minY + maxY) / 2;
+                    const vert = centerY < 360 ? 'Top' : (centerY > 720 ? 'Bottom' : 'Middle');
+                    const horiz = centerX < 640 ? 'Left' : (centerX > 1280 ? 'Right' : 'Center');
+                    posName = vert === 'Middle' && horiz === 'Center' ? 'Center' : `${vert}-${horiz}`;
+                  }
+                }
+
                 return `
                   <div class="mask-card" data-mask-id="${mask.mask_id}">
-                    <div class="mask-card-header">
-                      <div class="mask-card-title-col">
-                        <span class="mask-camera-pill">${this._formatCameraName(mask.camera || 'Camera')}</span>
-                        <span class="mask-id-pill">#${mask.mask_id}</span>
+                    <div class="mask-card-main-row">
+                      <div class="mask-visual-preview">
+                        <img
+                          src="${snapshotUrl}"
+                          class="mask-preview-thumb"
+                          alt="${objectLabel}"
+                          loading="lazy"
+                          onerror="this.style.display='none'; if(this.nextElementSibling) this.nextElementSibling.style.display='flex';"
+                        />
+                        <div class="mask-preview-minimap" style="${snapshotUrl ? 'display: none;' : 'display: flex;'}">
+                          <svg viewBox="0 0 1920 1080" preserveAspectRatio="none">
+                            <polygon points="${polyPts}" class="minimap-poly" />
+                          </svg>
+                          <span class="minimap-pos-tag">${posName}</span>
+                        </div>
                       </div>
-                      <div class="mask-card-time-badge" data-timer-mask-id="${mask.mask_id}">
-                        <svg viewBox="0 0 24 24" style="width: 13px; height: 13px; fill: currentColor;"><path d="M12,20A8,8 0 0,0 20,12A8,8 0 0,0 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,2C6.47,22 2,17.5 2,12A10,10 0 0,1 12,2M12.5,7V12.25L17,14.92L16.25,16.15L11,13V7H12.5Z"/></svg>
-                        <span class="timer-text">${remainingText}</span>
+
+                      <div class="mask-card-info">
+                        <div class="mask-card-header">
+                          <div class="mask-card-title-col">
+                            <span class="mask-object-pill">${objectLabel}${scoreText}</span>
+                            <span class="mask-camera-pill">${this._formatCameraName(mask.camera || 'Camera')}</span>
+                            <span class="mask-id-pill">#${mask.mask_id}</span>
+                          </div>
+                          <div class="mask-card-time-badge" data-timer-mask-id="${mask.mask_id}">
+                            <svg viewBox="0 0 24 24" style="width: 13px; height: 13px; fill: currentColor;"><path d="M12,20A8,8 0 0,0 20,12A8,8 0 0,0 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,2C6.47,22 2,17.5 2,12A10,10 0 0,1 12,2M12.5,7V12.25L17,14.92L16.25,16.15L11,13V7H12.5Z"/></svg>
+                            <span class="timer-text">${remainingText}</span>
+                          </div>
+                        </div>
+
+                        <div class="mask-card-details">
+                          <div class="mask-detail-row">
+                            <span class="detail-label">Location:</span>
+                            <span class="detail-value">${posName} on camera ${maskW > 0 ? `(${Math.round(maskW)} × ${Math.round(maskH)} px)` : ''}</span>
+                          </div>
+                          ${timeText ? `
+                          <div class="mask-detail-row">
+                            <span class="detail-label">Detected:</span>
+                            <span class="detail-value">${timeText}</span>
+                          </div>
+                          ` : ''}
+                        </div>
                       </div>
                     </div>
-                    <div class="mask-card-details">
-                      <div class="mask-detail-row">
-                        <span class="detail-label">Duration:</span>
-                        <span class="detail-value">${currentDurationHours} ${currentDurationHours === 1 ? 'hour' : 'hours'}</span>
-                      </div>
-                      ${mask.polygon ? `
-                      <div class="mask-detail-row">
-                        <span class="detail-label">Polygon:</span>
-                        <span class="detail-value mono">${mask.polygon}</span>
-                      </div>
-                      ` : ''}
-                    </div>
+
                     <div class="mask-card-actions">
                       <div class="mask-duration-selector">
                         <span class="duration-title">Duration:</span>
@@ -3276,29 +3476,26 @@ export class FrigateEventsCard extends LitElement {
     }
 
     const liveEntity = this._config?.live_view_entity || '';
-    const liveCamera = liveEntity.replace(/^camera\./, '').replace(/_(live|sub|detect)$/, '');
     const activeMasks = (this.hass?.states?.['sensor.frigate_active_masks']?.attributes?.masks as any[]) || [];
     const cameraMasks = Array.isArray(activeMasks)
-      ? activeMasks.filter((m: any) => !liveCamera || m.camera === liveCamera || m.camera === liveEntity.replace(/^camera\./, ''))
+      ? (liveEntity ? activeMasks.filter((m: any) => this._matchesCamera(liveEntity, m.camera)) : activeMasks)
       : [];
 
     let viewBoxW = 1920;
     let viewBoxH = 1080;
     if (cameraMasks.length > 0) {
-      let maxCoordX = 0;
-      let maxCoordY = 0;
+      let maxCoord = 0;
       for (const m of cameraMasks) {
         if (!m.polygon) continue;
         const nums = m.polygon.split(',').map((s: string) => parseFloat(s.trim())).filter((n: number) => !isNaN(n));
-        for (let i = 0; i < nums.length; i += 2) {
-          if (nums[i] > maxCoordX) maxCoordX = nums[i];
-          if ((nums[i + 1] ?? 0) > maxCoordY) maxCoordY = nums[i + 1];
+        for (const n of nums) {
+          if (n > maxCoord) maxCoord = n;
         }
       }
-      if (maxCoordX > 1920 || maxCoordY > 1080) {
-        viewBoxW = maxCoordX > 2560 ? 3840 : 2560;
-        viewBoxH = maxCoordX > 2560 ? 2160 : 1440;
-      } else if (maxCoordX <= 1280 && maxCoordY <= 720 && maxCoordX > 0) {
+      if (maxCoord > 1920) {
+        viewBoxW = maxCoord > 2560 ? 3840 : 2560;
+        viewBoxH = maxCoord > 2560 ? 2160 : 1440;
+      } else if (maxCoord <= 1280 && maxCoord > 1.0) {
         viewBoxW = 1280;
         viewBoxH = 720;
       }
@@ -3333,28 +3530,56 @@ export class FrigateEventsCard extends LitElement {
               if (!mask.polygon) return '';
               const nums = mask.polygon.split(',').map((s: string) => parseFloat(s.trim())).filter((n: number) => !isNaN(n));
               if (nums.length < 6) return '';
-              let minX = Infinity, minY = Infinity;
+              const isNormalized = nums.every((n: number) => n <= 1.0);
               const pts: string[] = [];
               for (let i = 0; i < nums.length; i += 2) {
-                const px = nums[i];
-                const py = nums[i + 1] ?? 0;
+                let px = nums[i];
+                let py = nums[i + 1] ?? 0;
+                if (isNormalized) {
+                  px = px * viewBoxW;
+                  py = py * viewBoxH;
+                }
                 pts.push(`${px},${py}`);
-                if (px < minX) minX = px;
-                if (py < minY) minY = py;
               }
-              const remainingText = this._formatMaskRemainingTime(mask.expires_at);
-              const labelText = `Mask · ${remainingText}`;
-              const labelWidth = Math.max(120, labelText.length * 7.5);
 
               return html`
                 <g class="live-mask-poly-group" @click=${(e: Event) => { e.stopPropagation(); this._showMaskManagerModal(); }}>
-                  <polygon points="${pts.join(' ')}" class="live-mask-poly" />
-                  <rect x="${Math.max(4, minX)}" y="${Math.max(4, minY - 26)}" width="${labelWidth}" height="22" rx="4" class="live-mask-label-bg" />
-                  <text x="${Math.max(10, minX + 6)}" y="${Math.max(18, minY - 10)}" class="live-mask-label-text">${labelText}</text>
+                  <polygon points="${pts.join(' ')}" class="live-mask-poly" vector-effect="non-scaling-stroke" />
                 </g>
               `;
             })}
           </svg>
+          ${cameraMasks.map((mask: any) => {
+            if (!mask.polygon) return '';
+            const nums = mask.polygon.split(',').map((s: string) => parseFloat(s.trim())).filter((n: number) => !isNaN(n));
+            if (nums.length < 6) return '';
+            const isNormalized = nums.every((n: number) => n <= 1.0);
+            let minX = Infinity, minY = Infinity;
+            for (let i = 0; i < nums.length; i += 2) {
+              let px = nums[i];
+              let py = nums[i + 1] ?? 0;
+              if (isNormalized) {
+                px = px * viewBoxW;
+                py = py * viewBoxH;
+              }
+              if (px < minX) minX = px;
+              if (py < minY) minY = py;
+            }
+            const pctX = Math.max(1, Math.min(90, (minX / viewBoxW) * 100));
+            const pctY = Math.max(2, Math.min(92, (minY / viewBoxH) * 100));
+            const remainingText = this._formatMaskRemainingTime(mask.expires_at);
+
+            return html`
+              <div
+                class="live-mask-badge"
+                style="left: ${pctX}%; top: ${pctY}%;"
+                @click=${(e: Event) => { e.stopPropagation(); this._showMaskManagerModal(); }}
+                title="Temporary mask active - click to manage"
+              >
+                <span>Mask · ${remainingText}</span>
+              </div>
+            `;
+          })}
         ` : ''}
       </div>
     `;
@@ -3685,11 +3910,13 @@ export class FrigateEventsCard extends LitElement {
 
       .live-view-mask-overlay {
         position: absolute;
-        inset: 0;
+        top: 0;
+        left: 0;
         width: 100%;
         height: 100%;
         pointer-events: auto;
-        z-index: 2;
+        z-index: 10;
+        transform: translateZ(5px);
       }
 
       .live-mask-poly-group {
@@ -3697,31 +3924,42 @@ export class FrigateEventsCard extends LitElement {
       }
 
       .live-mask-poly {
-        fill: rgba(59, 130, 246, 0.22);
-        stroke: rgba(96, 165, 250, 0.85);
-        stroke-width: 2;
-        stroke-dasharray: 6 3;
-        transition: fill 0.2s, stroke 0.2s, stroke-width 0.2s;
+        fill: rgba(59, 130, 246, 0.35);
+        stroke: #60a5fa;
+        stroke-width: 3px;
+        stroke-dasharray: 8 4;
+        vector-effect: non-scaling-stroke;
+        transition: fill 0.2s, stroke 0.2s;
       }
 
       .live-mask-poly-group:hover .live-mask-poly {
-        fill: rgba(59, 130, 246, 0.4);
+        fill: rgba(59, 130, 246, 0.55);
         stroke: #93c5fd;
-        stroke-width: 3;
+        stroke-width: 4px;
       }
 
-      .live-mask-label-bg {
-        fill: rgba(15, 23, 42, 0.9);
-        stroke: rgba(96, 165, 250, 0.6);
-        stroke-width: 1;
-      }
-
-      .live-mask-label-text {
-        fill: #f0f9ff;
+      .live-mask-badge {
+        position: absolute;
+        transform: translateY(-100%) translateY(-6px);
         font-size: 11px;
         font-weight: 600;
-        font-family: inherit;
+        color: #f0f9ff;
+        background: rgba(15, 23, 42, 0.92);
+        border: 1px solid rgba(96, 165, 250, 0.75);
+        border-radius: 4px;
+        padding: 2px 7px;
+        pointer-events: auto;
+        white-space: nowrap;
+        z-index: 12;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
+        cursor: pointer;
         user-select: none;
+        transition: transform 0.15s, background 0.15s;
+      }
+
+      .live-mask-badge:hover {
+        background: rgba(30, 58, 138, 0.95);
+        transform: translateY(-100%) translateY(-6px) scale(1.05);
       }
 
     `;

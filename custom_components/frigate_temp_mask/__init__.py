@@ -183,12 +183,19 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
 
         # Record active mask metadata
         expires_at = datetime.utcnow() + timedelta(hours=duration_hours)
+        label_val = call.data.get("label", "")
+        if not label_val and "event_data" in locals() and isinstance(event_data, dict):
+            label_val = event_data.get("label", "")
+        
         hass.data[DOMAIN]["active_masks"][mask_id] = {
             "mask_id": mask_id,
             "camera": camera,
             "polygon": poly_str,
             "duration_hours": duration_hours,
-            "expires_at": expires_at.isoformat() + "Z"
+            "expires_at": expires_at.isoformat() + "Z",
+            "event_id": event_id or mask_id,
+            "label": label_val,
+            "box": box_coords if box_coords else None,
         }
         _update_state()
 
