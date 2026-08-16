@@ -6,9 +6,9 @@ import { customElement, property, state } from 'lit/decorators.js';
 import { ref } from 'lit/directives/ref.js';
 import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/types';
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
-import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL } from './frigate/api';
+import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, deleteEvent } from './frigate/api';
 
-const CARD_VERSION = '2.3.3';
+const CARD_VERSION = '2.3.5';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -80,6 +80,9 @@ interface FrigateEventsCardConfig extends LovelaceCardConfig {
   live_view_aspect_ratio?: string;  // CSS aspect-ratio value, e.g. '16 / 9' (default)
   go2rtc_url?: string;              // Optional direct go2rtc URL (e.g. 'http://192.168.1.211:1984')
   go2rtc_stream?: string;           // Optional stream name in go2rtc (defaults to camera entity basename)
+  // Temporary false-positive masking options
+  show_temp_mask?: boolean;         // default: true
+  temp_mask_duration?: string;      // default: '24:00:00'
 }
 
 const DEFAULT_CONFIG: Partial<FrigateEventsCardConfig> = {
@@ -95,6 +98,8 @@ const DEFAULT_CONFIG: Partial<FrigateEventsCardConfig> = {
   show_zones: true,
   show_bounding_box: true,
   show_modal_navigation: false,
+  show_temp_mask: true,
+  temp_mask_duration: '24:00:00',
   title: 'Frigate Events',
   video: true,
   video_on_hover: true,
@@ -154,6 +159,8 @@ export class FrigateEventsCard extends LitElement {
   private _disconnectTimer?: number;
   private _liveVideoEl: HTMLVideoElement | null = null;
   private _remoteStream?: MediaStream;
+  private _contextMenuEl?: HTMLElement;
+  private _touchTimeout?: ReturnType<typeof setTimeout>;
 
   /**
    * Calculate the daily reset timestamp based on the configured time.
@@ -1120,6 +1127,148 @@ export class FrigateEventsCard extends LitElement {
         font-style: italic;
         white-space: pre-wrap;
       }
+
+      .frigate-events-modal-actions {
+        border-top: 1px solid var(--divider-color, rgba(255, 255, 255, 0.15));
+        padding-top: 12px;
+        margin-top: 4px;
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 8px;
+        width: 100%;
+        box-sizing: border-box;
+      }
+
+      .frigate-events-modal-mask-btn {
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        color: var(--primary-text-color, #ffffff);
+        padding: 7px 13px;
+        border-radius: 8px;
+        font-size: 12.5px;
+        font-weight: 500;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        transition: all 0.2s ease;
+        font-family: inherit;
+        user-select: none;
+        box-sizing: border-box;
+      }
+
+      .frigate-events-modal-mask-btn:hover:not(:disabled) {
+        background: rgba(255, 255, 255, 0.16);
+        border-color: rgba(255, 255, 255, 0.35);
+      }
+
+      .frigate-events-modal-mask-btn:active:not(:disabled) {
+        transform: scale(0.98);
+      }
+
+      .frigate-events-modal-mask-btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+
+      .frigate-events-modal-mask-btn.active {
+        background: rgba(239, 68, 68, 0.2);
+        border-color: rgba(239, 68, 68, 0.55);
+        color: #fca5a5;
+      }
+
+      .frigate-events-modal-mask-btn.active:hover:not(:disabled) {
+        background: rgba(239, 68, 68, 0.3);
+        border-color: rgba(239, 68, 68, 0.75);
+      }
+
+      .frigate-events-modal-mask-btn svg {
+        width: 15px;
+        height: 15px;
+        fill: currentColor;
+        flex-shrink: 0;
+        display: block;
+      }
+
+      .frigate-events-context-menu {
+        position: fixed;
+        z-index: 10000;
+        background: rgba(28, 28, 28, 0.96);
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        border-radius: 10px;
+        padding: 6px;
+        min-width: 190px;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+        backdrop-filter: blur(12px);
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        animation: frigate-menu-pop 0.15s ease-out forwards;
+        user-select: none;
+        font-family: inherit;
+        box-sizing: border-box;
+      }
+
+      @keyframes frigate-menu-pop {
+        from { opacity: 0; transform: scale(0.95); }
+        to { opacity: 1; transform: scale(1); }
+      }
+
+      .frigate-events-context-item {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 12px;
+        color: var(--primary-text-color, #ffffff);
+        font-size: 13px;
+        font-weight: 500;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: background 0.15s, color 0.15s;
+        border: none;
+        background: transparent;
+        width: 100%;
+        text-align: left;
+        box-sizing: border-box;
+        font-family: inherit;
+      }
+
+      .frigate-events-context-item:hover {
+        background: rgba(255, 255, 255, 0.12);
+      }
+
+      .frigate-events-context-item svg {
+        width: 16px;
+        height: 16px;
+        fill: currentColor;
+        flex-shrink: 0;
+        display: block;
+      }
+
+      .frigate-events-context-item.danger {
+        color: #fca5a5;
+      }
+
+      .frigate-events-context-item.danger:hover {
+        background: rgba(239, 68, 68, 0.2);
+        color: #f87171;
+      }
+
+      .frigate-events-context-item.masked {
+        color: #93c5fd;
+      }
+
+      .frigate-events-context-item.masked:hover {
+        background: rgba(59, 130, 246, 0.2);
+        color: #60a5fa;
+      }
+
+      .frigate-events-context-separator {
+        height: 1px;
+        background: rgba(255, 255, 255, 0.12);
+        margin: 4px 0;
+      }
     `;
     document.head.appendChild(style);
     FrigateEventsCard._stylesInjected = true;
@@ -1266,6 +1415,10 @@ export class FrigateEventsCard extends LitElement {
     const showDescription = this._config?.show_description !== false;
     const showCameraName = this._config?.show_camera_name !== false;
     const showZones = this._config?.show_zones !== false;
+    const showTempMask = this._config?.show_temp_mask !== false;
+    const maskId = event.id.includes('-') ? event.id.split('-')[0] : event.id;
+    const activeMask = this.hass?.states?.['input_text.frigate_temp_mask_active']?.state;
+    const isMaskActive = !!(activeMask && (activeMask === maskId || activeMask.includes(maskId)));
 
     // Check next/prev events
     const orderedEvents = this._getEventsToShow();
@@ -1332,6 +1485,17 @@ export class FrigateEventsCard extends LitElement {
                </div>`
             : ''
           }
+          ${showTempMask
+            ? `<div class="frigate-events-modal-actions">
+                 <button class="frigate-events-modal-mask-btn ${isMaskActive ? 'active' : ''}" title="${isMaskActive ? 'Click to remove temporary mask' : 'Temporarily ignore false alarms from this object for 24 hours'}">
+                   <svg viewBox="0 0 24 24">
+                     <path d="M12,1L3,5V11C3,16.55 6.84,21.74 12,23C17.16,21.74 21,16.55 21,11V5L12,1M12,5A6,6 0 0,1 18,11C18,14.07 15.63,16.63 12.64,16.96L12,17L11.36,16.96C8.37,16.63 6,14.07 6,11A6,6 0 0,1 12,5Z"/>
+                   </svg>
+                   <span class="mask-btn-text">${isMaskActive ? 'Mask Active (Click to Remove)' : 'Ignore False Alarm (24h Mask)'}</span>
+                 </button>
+               </div>`
+            : ''
+          }
         </div>
       </div>
     `;
@@ -1349,6 +1513,15 @@ export class FrigateEventsCard extends LitElement {
     // Close button handler
     const closeBtn = container.querySelector('.frigate-events-modal-close');
     closeBtn?.addEventListener('click', () => this._handleModalClose());
+
+    // Temporary mask button handler
+    if (showTempMask) {
+      const maskBtn = container.querySelector('.frigate-events-modal-mask-btn') as HTMLButtonElement | null;
+      maskBtn?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._handleToggleTempMask(event, maskBtn);
+      });
+    }
 
     // Navigation button handlers
     if (showNav && hasPrev) {
@@ -1385,6 +1558,201 @@ export class FrigateEventsCard extends LitElement {
       window.removeEventListener('keydown', this._boundKeyDownHandler);
       this._boundKeyDownHandler = undefined;
     }
+  }
+
+  private async _executeTempMaskToggle(event: FrigateEvent): Promise<boolean> {
+    if (!this.hass) return false;
+    const maskId = event.id.includes('-') ? event.id.split('-')[0] : event.id;
+    const activeMask = this.hass.states?.['input_text.frigate_temp_mask_active']?.state;
+    const isCurrentlyActive = !!(activeMask && (activeMask === maskId || activeMask.includes(maskId)));
+
+    try {
+      if (isCurrentlyActive) {
+        // Remove mask
+        if (this.hass.callService) {
+          await this.hass.callService('shell_command', 'frigate_remove_temp_mask', {
+            mask_id: maskId,
+          });
+          await this.hass.callService('timer', 'cancel', {
+            entity_id: 'timer.frigate_temp_mask',
+          });
+          await this.hass.callService('input_text', 'set_value', {
+            entity_id: 'input_text.frigate_temp_mask_active',
+            value: '',
+          });
+        }
+        this.dispatchEvent(new CustomEvent('hass-notification', {
+          detail: { message: `Temporary mask removed for ${event.camera}` },
+          bubbles: true,
+          composed: true,
+        }));
+        return false;
+      } else {
+        // Add mask
+        const duration = this._config?.temp_mask_duration || '24:00:00';
+        if (this.hass.callService) {
+          await this.hass.callService('shell_command', 'frigate_add_temp_mask', {
+            camera: event.camera,
+            event_id: event.id,
+            mask_id: maskId,
+          });
+          await this.hass.callService('timer', 'start', {
+            entity_id: 'timer.frigate_temp_mask',
+            duration: duration,
+          });
+          await this.hass.callService('input_text', 'set_value', {
+            entity_id: 'input_text.frigate_temp_mask_active',
+            value: maskId,
+          });
+        }
+        this.dispatchEvent(new CustomEvent('hass-notification', {
+          detail: { message: `Temporary 24-hour mask applied for ${event.camera}` },
+          bubbles: true,
+          composed: true,
+        }));
+        return true;
+      }
+    } catch (err) {
+      console.error('Failed to toggle temporary mask:', err);
+      return isCurrentlyActive;
+    }
+  }
+
+  private async _handleToggleTempMask(event: FrigateEvent, maskBtn: HTMLButtonElement): Promise<void> {
+    const textSpan = maskBtn.querySelector('.mask-btn-text');
+    maskBtn.disabled = true;
+    if (textSpan) textSpan.textContent = 'Updating...';
+
+    const isNowActive = await this._executeTempMaskToggle(event);
+
+    if (isNowActive) {
+      maskBtn.classList.add('active');
+      if (textSpan) textSpan.textContent = 'Mask Active (Click to Remove)';
+    } else {
+      maskBtn.classList.remove('active');
+      if (textSpan) textSpan.textContent = 'Ignore False Alarm (24h Mask)';
+    }
+    maskBtn.disabled = false;
+  }
+
+  private _handleContextMenu(e: MouseEvent, event: FrigateEvent): void {
+    e.preventDefault();
+    e.stopPropagation();
+    this._openContextMenu(e.clientX, e.clientY, event);
+  }
+
+  private _handleTouchStart(e: TouchEvent, event: FrigateEvent): void {
+    if (e.touches.length !== 1) return;
+    const touch = e.touches[0];
+    const clientX = touch.clientX;
+    const clientY = touch.clientY;
+
+    this._touchTimeout = setTimeout(() => {
+      this._openContextMenu(clientX, clientY, event);
+    }, 500);
+  }
+
+  private _handleTouchEnd(): void {
+    if (this._touchTimeout) {
+      clearTimeout(this._touchTimeout);
+      this._touchTimeout = undefined;
+    }
+  }
+
+  private _openContextMenu(x: number, y: number, event: FrigateEvent): void {
+    this._closeContextMenu();
+    this._injectModalStyles();
+
+    const maskId = event.id.includes('-') ? event.id.split('-')[0] : event.id;
+    const activeMask = this.hass?.states?.['input_text.frigate_temp_mask_active']?.state;
+    const isMaskActive = !!(activeMask && (activeMask === maskId || activeMask.includes(maskId)));
+
+    const menu = document.createElement('div');
+    menu.className = 'frigate-events-context-menu';
+
+    menu.innerHTML = `
+      <button class="frigate-events-context-item" data-action="view">
+        <svg viewBox="0 0 24 24"><path d="M12,9A3,3 0 0,0 9,12A3,3 0 0,0 12,15A3,3 0 0,0 15,12A3,3 0 0,0 12,9M12,17A5,5 0 0,1 7,12A5,5 0 0,1 12,7A5,5 0 0,1 17,12A5,5 0 0,1 12,17M12,4.5C7,4.5 2.73,7.61 1,12C2.73,16.39 7,19.5 12,19.5C17,19.5 21.27,16.39 23,12C21.27,7.61 17,4.5 12,4.5Z"/></svg>
+        <span>View Details</span>
+      </button>
+      <div class="frigate-events-context-separator"></div>
+      <button class="frigate-events-context-item ${isMaskActive ? 'masked' : ''}" data-action="mask">
+        <svg viewBox="0 0 24 24"><path d="M12,1L3,5V11C3,16.55 6.84,21.74 12,23C17.16,21.74 21,16.55 21,11V5L12,1M12,5A6,6 0 0,1 18,11C18,14.07 15.63,16.63 12.64,16.96L12,17L11.36,16.96C8.37,16.63 6,14.07 6,11A6,6 0 0,1 12,5Z"/></svg>
+        <span>${isMaskActive ? 'Unmask Object' : 'Mask Object (24h)'}</span>
+      </button>
+      <div class="frigate-events-context-separator"></div>
+      <button class="frigate-events-context-item danger" data-action="delete">
+        <svg viewBox="0 0 24 24"><path d="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z"/></svg>
+        <span>Delete Event</span>
+      </button>
+    `;
+
+    document.body.appendChild(menu);
+    const rect = menu.getBoundingClientRect();
+    let posX = x;
+    let posY = y;
+    if (posX + rect.width > window.innerWidth - 10) {
+      posX = window.innerWidth - rect.width - 10;
+    }
+    if (posY + rect.height > window.innerHeight - 10) {
+      posY = window.innerHeight - rect.height - 10;
+    }
+    menu.style.left = `${Math.max(10, posX)}px`;
+    menu.style.top = `${Math.max(10, posY)}px`;
+
+    menu.querySelector('[data-action="view"]')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this._closeContextMenu();
+      this._handleEventClick(event);
+    });
+
+    menu.querySelector('[data-action="mask"]')?.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      this._closeContextMenu();
+      await this._executeTempMaskToggle(event);
+    });
+
+    menu.querySelector('[data-action="delete"]')?.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      this._closeContextMenu();
+      await this._executeDeleteEvent(event);
+    });
+
+    const onDocClick = (ev: MouseEvent) => {
+      if (!menu.contains(ev.target as Node)) {
+        this._closeContextMenu();
+        window.removeEventListener('click', onDocClick);
+      }
+    };
+    setTimeout(() => window.addEventListener('click', onDocClick), 10);
+
+    this._contextMenuEl = menu;
+  }
+
+  private _closeContextMenu(): void {
+    if (this._contextMenuEl && this._contextMenuEl.parentNode) {
+      this._contextMenuEl.parentNode.removeChild(this._contextMenuEl);
+      this._contextMenuEl = undefined;
+    }
+  }
+
+  private async _executeDeleteEvent(event: FrigateEvent): Promise<void> {
+    const clientId = this._config?.frigate_client_id || 'frigate';
+    const success = await deleteEvent(clientId, event.id, this._config?.go2rtc_url);
+
+    // Remove from local events array immediately
+    this._events = this._events.filter(e => e.id !== event.id);
+    this.requestUpdate();
+
+    if (this._selectedEvent && this._selectedEvent.id === event.id) {
+      this._handleModalClose();
+    }
+
+    this.dispatchEvent(new CustomEvent('hass-notification', {
+      detail: { message: success ? `Event deleted` : `Failed to delete event from Frigate` },
+      bubbles: true,
+      composed: true,
+    }));
   }
 
   private _formatTime(timestamp: number): string {
@@ -1943,6 +2311,10 @@ export class FrigateEventsCard extends LitElement {
     return html`
       <div class="event"
         @click=${() => this._handleEventClick(event)}
+        @contextmenu=${(e: MouseEvent) => this._handleContextMenu(e, event)}
+        @touchstart=${(e: TouchEvent) => this._handleTouchStart(e, event)}
+        @touchend=${() => this._handleTouchEnd()}
+        @touchcancel=${() => this._handleTouchEnd()}
         @mouseenter=${() => { if (playVideoOnHover) this._hoveredEventId = event.id; }}
         @mouseleave=${() => { if (playVideoOnHover) this._hoveredEventId = undefined; }}
         style="position: relative;"

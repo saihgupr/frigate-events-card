@@ -81,3 +81,29 @@ export async function subscribeToEvents(
 
     return unsubscribe;
 }
+
+/**
+ * Delete an event from Frigate
+ */
+export async function deleteEvent(
+    clientId: string,
+    eventId: string,
+    frigateUrl?: string
+): Promise<boolean> {
+    try {
+        if (frigateUrl) {
+            const baseUrl = frigateUrl.replace(/\/$/, '');
+            const res = await fetch(`${baseUrl}/api/events/${encodeURIComponent(eventId)}`, {
+                method: 'DELETE',
+            });
+            if (res.ok) return true;
+        }
+        const proxyRes = await fetch(`/api/frigate/${encodeURIComponent(clientId)}/events/${encodeURIComponent(eventId)}`, {
+            method: 'DELETE',
+        });
+        return proxyRes.ok;
+    } catch (e) {
+        console.error('Failed to delete Frigate event:', e);
+        return false;
+    }
+}

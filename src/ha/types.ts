@@ -16,6 +16,11 @@ export interface HomeAssistant {
     states: Record<string, { state: string; last_changed?: string; attributes?: Record<string, unknown> }>;
     callWS: <T>(msg: MessageBase) => Promise<T>;
     hassUrl: (path?: string) => string;
+    callService?: (
+        domain: string,
+        service: string,
+        serviceData?: Record<string, unknown>
+    ) => Promise<void>;
 }
 
 export interface LovelaceCardConfig {
