@@ -186,15 +186,13 @@ video: true
 video_on_hover: true
 ```
 
-### Context Menu & Temporary Masking
+### Temporary Masking
 
-Right-clicking (desktop) or long-pressing (touch devices) any event thumbnail opens a context menu:
+Right-clicking (desktop) or long-pressing (touch devices) any event thumbnail opens a context menu with options to view details, delete the event, or apply a **Temporary Mask**:
 
-* **View Details**: Opens the full event snapshot or video player with complete telemetry.
-* **Delete Event**: Permanently deletes the event from Frigate storage via Frigate's `DELETE /api/events/{id}` API.
 * **Temporary Mask Object (Optional)**: Dynamically available when the companion `frigate_temp_mask` custom component is installed. Automatically calculates a 20% expanded bounding box around false detections (such as a wheelbarrow, package, or parked vehicle), injects a temporary mask into Frigate, and restarts the detector. The mask automatically expires and prunes itself after 24 hours.
 
-#### Setting Up Optional Temporary Masking (Optional Companion Integration)
+#### Setting Up Temporary Masking (Optional Companion Integration)
 
 The card works completely standalone out of the box. If you would like to enable the **Temporary Mask Object** feature:
 
