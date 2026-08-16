@@ -6,6 +6,7 @@ import asyncio
 import yaml
 from datetime import datetime, timedelta
 
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_call_later
@@ -17,11 +18,15 @@ _LOGGER = logging.getLogger(__name__)
 DEFAULT_FRIGATE_URL = "http://192.168.1.211:5000"
 DEFAULT_PADDING = 0.20
 
-async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Set up the Frigate Temporary Mask component."""
+async def _async_setup_core(hass: HomeAssistant) -> bool:
+    """Register services and initialize core data structures."""
+    if DOMAIN in hass.data and hass.data[DOMAIN].get("services_registered"):
+        return True
+
     hass.data.setdefault(DOMAIN, {
         "timers": {},
-        "active_masks": {}
+        "active_masks": {},
+        "services_registered": True
     })
 
     def _get_frigate_base_url() -> str:
@@ -271,4 +276,30 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     hass.services.async_register(DOMAIN, "prune_all", async_handle_prune_all)
 
     _update_state()
+    return True
+
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Set up the Frigate Temporary Mask component via YAML."""
+    await _async_setup_core(hass)
+
+    if DOMAIN in config and not hass.config_entries.async_entries(DOMAIN):
+        hass.async_create_task(
+            hass.config_entries.flow.async_init(
+                DOMAIN,
+                context={"source": "import"},
+                data=config.get(DOMAIN, {}) or {},
+            )
+        )
+    return True
+
+
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Set up Frigate Temporary Mask from a config entry."""
+    await _async_setup_core(hass)
+    return True
+
+
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Unload a config entry."""
     return True
