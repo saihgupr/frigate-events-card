@@ -1,0 +1,59 @@
+add_mask:
+  name: Add Temporary Mask
+  description: Adds an expanded bounding-box mask around a false detection in Frigate.
+  fields:
+    camera:
+      name: Camera
+      description: Name of the camera in Frigate.
+      example: wyze_camera
+      selector:
+        text:
+    event_id:
+      name: Event ID
+      description: Frigate event ID of the false alarm detection.
+      example: 1786887088.764725-gq35zl
+      selector:
+        text:
+    mask_id:
+      name: Mask ID
+      description: Optional custom identifier for the mask.
+      selector:
+        text:
+    box:
+      name: Bounding Box
+      description: Optional normalized [x, y, w, h] coordinates.
+      selector:
+        text:
+    duration_hours:
+      name: Duration (Hours)
+      description: Hours before the mask is automatically pruned (default 24).
+      default: 24
+      selector:
+        number:
+          min: 1
+          max: 168
+          unit_of_measurement: hours
+    padding:
+      name: Padding
+      description: Percentage padding around detection (default 0.20 for 20%).
+      default: 0.20
+      selector:
+        number:
+          min: 0.05
+          max: 0.50
+          step: 0.01
+
+remove_mask:
+  name: Remove Temporary Mask
+  description: Removes a temporary mask from Frigate config.
+  fields:
+    mask_id:
+      name: Mask ID
+      description: The identifier of the mask to remove.
+      required: true
+      selector:
+        text:
+
+prune_all:
+  name: Prune All Temporary Masks
+  description: Removes all temporary masks from Frigate configuration.

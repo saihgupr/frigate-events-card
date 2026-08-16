@@ -1,0 +1,8 @@
+{
+  "domain": "frigate_temp_mask",
+  "name": "Frigate Temporary Mask",
+  "codeowners": ["@saihgupr"],
+  "documentation": "https://github.com/saihgupr/frigate-events-card",
+  "iot_class": "local_push",
+  "version": "1.0.0"
+}

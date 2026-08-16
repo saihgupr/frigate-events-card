@@ -22,6 +22,7 @@ A simple Lovelace card for displaying recent Frigate detection events in a horiz
 - **Customizable Layout**: Reverse the rendering order or offset the timeline to build the exact dashboard you want.
 - **Daily Reset**: Optional automated clearing for a fresh daily view.
 - **Interactive Details Modal**: Deep-dive popup displaying full event information, including AI-generated descriptions (if available), duration, date, camera, zones, and accuracy. Supports interactive previous/next navigation arrows and keyboard hotkeys (ArrowLeft / ArrowRight / Escape).
+- **Right-Click & Long-Press Context Menu**: Right-click (desktop) or long-press (mobile) any event thumbnail to instantly view details, permanently delete events from Frigate, or apply 24-hour temporary false-positive masks.
 - **Configurable Modal Metadata**: Fine-grained visibility controls to show/hide specific metadata elements (like date, duration, or camera name) in the details popup.
 
 ## Installation
@@ -184,6 +185,24 @@ tracking_pan_delay:
 video: true
 video_on_hover: true
 ```
+
+### Context Menu & Temporary Masking
+
+Right-clicking (desktop) or long-pressing (touch devices) any event thumbnail opens a sleek context menu:
+
+* **View Details**: Opens the full event snapshot or video player with complete telemetry.
+* **Delete Event**: Permanently deletes the event from Frigate storage via Frigate's `DELETE /api/events/{id}` API.
+* **Temporary Mask Object (Optional)**: Dynamically available when the companion `frigate_temp_mask` custom component is installed. Automatically calculates a 20% expanded bounding box around false detections (such as a wheelbarrow, package, or parked vehicle), injects a temporary mask into Frigate, and restarts the detector. The mask automatically expires and prunes itself after 24 hours.
+
+#### Setting Up Optional Temporary Masking (Optional Companion Integration)
+
+The card works completely standalone out of the box. If you would like to enable the **Temporary Mask Object** feature:
+
+1. Copy the `custom_components/frigate_temp_mask` integration into your Home Assistant `/config/custom_components/` directory.
+2. Add `frigate_temp_mask:` to your `/config/configuration.yaml`.
+3. Reload YAML or restart Home Assistant.
+
+The card will automatically detect the integration and display the **Temporary Mask Object** / **Unmask Object** option in the right-click menu.
 
 
 ## Configuration Options
