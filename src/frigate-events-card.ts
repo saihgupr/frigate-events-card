@@ -8,7 +8,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, deleteEvent } from './frigate/api';
 
-const CARD_VERSION = '2.3.11';
+const CARD_VERSION = '2.3.12';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -805,9 +805,15 @@ export class FrigateEventsCard extends LitElement {
 
       this._events = events.sort((a, b) => (b.start_time || 0) - (a.start_time || 0));
     } catch (e: any) {
-      console.error('Failed to load Frigate events:', e);
+      console.warn('Temporary connection issue loading Frigate events:', e);
       const msg = e?.message || (typeof e === 'object' ? JSON.stringify(e) : String(e));
       this._error = `Failed to load events: ${msg}`;
+      // Automatically retry in 4 seconds in case Home Assistant or Frigate is starting up
+      setTimeout(() => {
+        if (this._error && this.isConnected) {
+          this._loadEvents();
+        }
+      }, 4000);
     } finally {
       this._loading = false;
     }
@@ -2122,15 +2128,15 @@ export class FrigateEventsCard extends LitElement {
             </div>
           ` : ''}
           ${this._config.live_view ? this._renderLiveView() : ''}
-          ${this._loading
+          ${this._loading && this._events.length === 0
             ? html`<div class="loading"></div>`
-            : this._error
-              ? html`
+            : this._error && this._events.length === 0
+              ? (this._config.debug ? html`
                 <div class="events-error">
                   <span>⚠ ${this._error}</span>
                   <span class="events-error-detail">Check your Frigate integration connection and instance ID.</span>
                 </div>
-              `
+              ` : html``)
               : html`
                   <div class="events-container">
                     ${showScrollArrows ? html`
