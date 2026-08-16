@@ -8,7 +8,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, deleteEvent } from './frigate/api';
 
-const CARD_VERSION = '2.3.8';
+const CARD_VERSION = '2.3.9';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -1570,6 +1570,11 @@ export class FrigateEventsCard extends LitElement {
       (activeMaskStr && activeMaskStr !== '0' && activeMaskStr !== 'unavailable')
     );
 
+    const hasTempMaskIntegration = !!(
+      this._config?.show_temp_mask !== false &&
+      (this.hass?.services?.['frigate_temp_mask'] || this.hass?.services?.['shell_command']?.['frigate_add_temp_mask'] || this.hass?.states?.['sensor.frigate_active_masks'])
+    );
+
     const menu = document.createElement('div');
     menu.className = 'frigate-events-context-menu';
 
@@ -1578,11 +1583,13 @@ export class FrigateEventsCard extends LitElement {
         <svg viewBox="0 0 24 24"><path d="M12,9A3,3 0 0,0 9,12A3,3 0 0,0 12,15A3,3 0 0,0 15,12A3,3 0 0,0 12,9M12,17A5,5 0 0,1 7,12A5,5 0 0,1 12,7A5,5 0 0,1 17,12A5,5 0 0,1 12,17M12,4.5C7,4.5 2.73,7.61 1,12C2.73,16.39 7,19.5 12,19.5C17,19.5 21.27,16.39 23,12C21.27,7.61 17,4.5 12,4.5Z"/></svg>
         <span>View Details</span>
       </button>
+      ${hasTempMaskIntegration ? `
       <div class="frigate-events-context-separator"></div>
       <button class="frigate-events-context-item ${isMaskActive ? 'masked' : ''}" data-action="mask">
         <svg viewBox="0 0 24 24"><path d="M12,1L3,5V11C3,16.55 6.84,21.74 12,23C17.16,21.74 21,16.55 21,11V5L12,1M12,5A6,6 0 0,1 18,11C18,14.07 15.63,16.63 12.64,16.96L12,17L11.36,16.96C8.37,16.63 6,14.07 6,11A6,6 0 0,1 12,5Z"/></svg>
         <span>${isMaskActive ? 'Unmask Object' : 'Temporary Mask Object'}</span>
       </button>
+      ` : ''}
       <div class="frigate-events-context-separator"></div>
       <button class="frigate-events-context-item danger" data-action="delete">
         <svg viewBox="0 0 24 24"><path d="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z"/></svg>
@@ -1609,11 +1616,13 @@ export class FrigateEventsCard extends LitElement {
       this._handleEventClick(event);
     });
 
-    menu.querySelector('[data-action="mask"]')?.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      this._closeContextMenu();
-      await this._executeTempMaskToggle(event);
-    });
+    if (hasTempMaskIntegration) {
+      menu.querySelector('[data-action="mask"]')?.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        this._closeContextMenu();
+        await this._executeTempMaskToggle(event);
+      });
+    }
 
     menu.querySelector('[data-action="delete"]')?.addEventListener('click', async (e) => {
       e.stopPropagation();

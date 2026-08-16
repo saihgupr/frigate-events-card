@@ -14,6 +14,7 @@ export interface HomeAssistant {
         time_zone: string;
     };
     states: Record<string, { state: string; last_changed?: string; attributes?: Record<string, unknown> }>;
+    services?: Record<string, any>;
     callWS: <T>(msg: MessageBase) => Promise<T>;
     hassUrl: (path?: string) => string;
     callService?: (
