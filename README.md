@@ -190,7 +190,8 @@ video_on_hover: true
 
 Right-clicking (desktop) or long-pressing (touch devices) any event thumbnail opens a context menu with options to view details, delete the event, or apply a **Temporary Mask**:
 
-* **Temporary Mask (Optional)**: Dynamically available when the companion `frigate_temp_mask` custom component is installed. Automatically calculates a 20% expanded bounding box around false detections (such as a wheelbarrow, package, or parked vehicle), injects a temporary mask into Frigate, and restarts the detector. The mask automatically expires and prunes itself after 24 hours.
+* **Temporary Mask (Optional)**: Dynamically available when the companion `frigate_temp_mask` custom component is installed. Automatically calculates a 20% expanded bounding box around false detections (such as a wheelbarrow, package, or parked vehicle), injects a temporary mask into Frigate, and restarts the detector. The mask automatically expires and prunes itself after the selected duration.
+* **Change Duration / Remove Mask**: Right-clicking an already masked event allows changing the mask duration on the fly (1h, 4h, 8h, 12h, 24h, 48h, 7d, or Custom hours) or instantly removing the mask.
 
 #### Setting Up Temporary Masking (Optional Companion Integration)
 
@@ -200,7 +201,7 @@ The card works completely standalone out of the box. If you would like to enable
 2. Add `frigate_temp_mask:` to your `/config/configuration.yaml`.
 3. Reload YAML or restart Home Assistant.
 
-The card will automatically detect the integration and display the **Temporary Mask** / **Remove Mask** option in the right-click menu.
+The card will automatically detect the integration and display the **Temporary Mask**, **Change Duration**, and **Remove Mask** options in the right-click menu.
 
 
 ## Configuration Options

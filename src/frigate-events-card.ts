@@ -8,7 +8,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, deleteEvent } from './frigate/api';
 
-const CARD_VERSION = '2.3.13';
+const CARD_VERSION = '2.3.14';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -1212,6 +1212,54 @@ export class FrigateEventsCard extends LitElement {
         background: rgba(255, 255, 255, 0.12);
         margin: 4px 0;
       }
+
+      .frigate-events-context-item-wrapper {
+        position: relative;
+        width: 100%;
+      }
+
+      .submenu-arrow {
+        width: 14px !important;
+        height: 14px !important;
+        margin-left: auto;
+        opacity: 0.6;
+        flex-shrink: 0;
+      }
+
+      .frigate-events-submenu {
+        position: absolute;
+        top: 0;
+        left: calc(100% + 4px);
+        background: rgba(28, 28, 28, 0.98);
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        border-radius: 10px;
+        padding: 6px;
+        min-width: 160px;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+        backdrop-filter: blur(12px);
+        display: none;
+        flex-direction: column;
+        gap: 2px;
+        animation: frigate-menu-pop 0.15s ease-out forwards;
+        user-select: none;
+        z-index: 10002;
+        box-sizing: border-box;
+      }
+
+      .frigate-events-context-item-wrapper:hover .frigate-events-submenu,
+      .frigate-events-context-item-wrapper.open .frigate-events-submenu {
+        display: flex;
+      }
+
+      .frigate-events-submenu.align-left {
+        left: auto;
+        right: calc(100% + 4px);
+      }
+
+      .frigate-events-submenu.align-top {
+        top: auto;
+        bottom: 0;
+      }
     `;
     document.head.appendChild(style);
     FrigateEventsCard._stylesInjected = true;
@@ -1479,14 +1527,26 @@ export class FrigateEventsCard extends LitElement {
     }
   }
 
+  private _getMaskDurationHours(): number {
+    const raw = this._config?.temp_mask_duration;
+    if (typeof raw === 'number' && !isNaN(raw) && raw > 0) return raw;
+    if (typeof raw === 'string') {
+      const parts = raw.split(':').map(Number);
+      if (parts.length === 3 && !parts.some(isNaN)) {
+        return parts[0] + parts[1] / 60 + parts[2] / 3600;
+      }
+      const parsed = parseFloat(raw);
+      if (!isNaN(parsed) && parsed > 0) return parsed;
+    }
+    return 24;
+  }
+
   private async _executeTempMaskToggle(event: FrigateEvent): Promise<boolean> {
     if (!this.hass) return false;
     const maskId = event.id.includes('-') ? event.id.split('-')[0] : event.id;
     const activeMasks = (this.hass.states?.['sensor.frigate_active_masks']?.attributes?.masks as any[]) || [];
-    const activeMaskStr = this.hass.states?.['sensor.frigate_active_masks']?.state;
     const isCurrentlyActive: boolean = Boolean(
-      (Array.isArray(activeMasks) && activeMasks.some((m: any) => m.mask_id === maskId)) ||
-      (activeMaskStr && activeMaskStr !== '0' && activeMaskStr !== 'unavailable')
+      Array.isArray(activeMasks) && activeMasks.some((m: any) => m.mask_id === maskId)
     );
 
     try {
@@ -1511,13 +1571,14 @@ export class FrigateEventsCard extends LitElement {
         return false;
       } else {
         // Add mask
+        const durationHours = this._getMaskDurationHours();
         if (this.hass.callService) {
           try {
             await this.hass.callService('frigate_temp_mask', 'add_mask', {
               camera: event.camera,
               event_id: event.id,
               mask_id: maskId,
-              duration_hours: 24,
+              duration_hours: durationHours,
             });
           } catch {
             await this.hass.callService('shell_command', 'frigate_add_temp_mask', {
@@ -1528,7 +1589,7 @@ export class FrigateEventsCard extends LitElement {
           }
         }
         this.dispatchEvent(new CustomEvent('hass-notification', {
-          detail: { message: `Temporary mask applied for ${event.camera}` },
+          detail: { message: `Temporary mask applied for ${event.camera} (${durationHours}h)` },
           bubbles: true,
           composed: true,
         }));
@@ -1537,6 +1598,50 @@ export class FrigateEventsCard extends LitElement {
     } catch (err) {
       console.error('Failed to toggle temporary mask:', err);
       return isCurrentlyActive;
+    }
+  }
+
+  private async _executeChangeMaskDuration(event: FrigateEvent, durationHours: number): Promise<void> {
+    if (!this.hass) return;
+    const maskId = event.id.includes('-') ? event.id.split('-')[0] : event.id;
+
+    try {
+      if (this.hass.callService) {
+        try {
+          await this.hass.callService('frigate_temp_mask', 'add_mask', {
+            camera: event.camera,
+            event_id: event.id,
+            mask_id: maskId,
+            duration_hours: durationHours,
+          });
+        } catch {
+          await this.hass.callService('shell_command', 'frigate_add_temp_mask', {
+            camera: event.camera,
+            event_id: event.id,
+            mask_id: maskId,
+          });
+        }
+      }
+
+      const durationText = durationHours === 1
+        ? '1 hour'
+        : durationHours < 24
+        ? `${durationHours} hours`
+        : durationHours === 24
+        ? '24 hours (1 day)'
+        : durationHours === 48
+        ? '48 hours (2 days)'
+        : durationHours % 24 === 0
+        ? `${durationHours / 24} days`
+        : `${durationHours} hours`;
+
+      this.dispatchEvent(new CustomEvent('hass-notification', {
+        detail: { message: `Temporary mask updated to ${durationText} for ${event.camera}` },
+        bubbles: true,
+        composed: true,
+      }));
+    } catch (err) {
+      console.error('Failed to change temporary mask duration:', err);
     }
   }
 
@@ -1570,10 +1675,8 @@ export class FrigateEventsCard extends LitElement {
 
     const maskId = event.id.includes('-') ? event.id.split('-')[0] : event.id;
     const activeMasks = (this.hass?.states?.['sensor.frigate_active_masks']?.attributes?.masks as any[]) || [];
-    const activeMaskStr = this.hass?.states?.['sensor.frigate_active_masks']?.state;
     const isMaskActive: boolean = Boolean(
-      (Array.isArray(activeMasks) && activeMasks.some((m: any) => m.mask_id === maskId)) ||
-      (activeMaskStr && activeMaskStr !== '0' && activeMaskStr !== 'unavailable')
+      Array.isArray(activeMasks) && activeMasks.some((m: any) => m.mask_id === maskId)
     );
 
     const hasTempMaskIntegration = !!(
@@ -1586,15 +1689,39 @@ export class FrigateEventsCard extends LitElement {
 
     menu.innerHTML = `
       <button class="frigate-events-context-item" data-action="view">
-        <svg viewBox="0 0 24 24"><path d="M12,9A3,3 0 0,0 9,12A3,3 0 0,0 12,15A3,3 0 0,0 15,12A3,3 0 0,0 12,9M12,17A5,5 0 0,1 7,12A5,5 0 0,1 12,7A5,5 0 0,1 17,12A5,5 0 0,1 12,17M12,4.5C7,4.5 2.73,7.61 1,12C2.73,16.39 7,19.5 12,19.5C17,19.5 21.27,16.39 23,12C21.27,7.61 17,4.5 12,4.5Z"/></svg>
+        <svg viewBox="0 0 24 24"><path d="M12,9A3,3 0 0,0 9,12A3,3 0 0,0 12,15A3,3 0 0,0 15,12A3,3 0 0,0 12,9M12,17A5,5 0 0,1 7,12A5,5 0 0,1 12,7A5,5 0 0,1 17,12A5,5 0 0,1 12,7M12,4.5C7,4.5 2.73,7.61 1,12C2.73,16.39 7,19.5 12,19.5C17,19.5 21.27,16.39 23,12C21.27,7.61 17,4.5 12,4.5Z"/></svg>
         <span>View Details</span>
       </button>
       ${hasTempMaskIntegration ? `
       <div class="frigate-events-context-separator"></div>
-      <button class="frigate-events-context-item ${isMaskActive ? 'masked' : ''}" data-action="mask">
-        <svg viewBox="0 0 24 24"><path d="M2,2H8V4H16V2H22V8H20V16H22V22H16V20H8V22H2V16H4V8H2V2M4,4V6H6V4H4M18,4V6H20V4H18M20,18V20H18V18H20M4,18V20H6V18H4M8,6V8H6V16H8V18H16V16H18V8H16V6H8M9,9H15V15H9V9Z"/></svg>
-        <span>${isMaskActive ? 'Remove Mask' : 'Temporary Mask'}</span>
+      ${isMaskActive ? `
+      <div class="frigate-events-context-item-wrapper has-submenu">
+        <button class="frigate-events-context-item masked" data-action="change-duration-trigger">
+          <svg viewBox="0 0 24 24"><path d="M12,20A8,8 0 0,0 20,12A8,8 0 0,0 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,2C6.47,22 2,17.5 2,12A10,10 0 0,1 12,2M12.5,7V12.25L17,14.92L16.25,16.15L11,13V7H12.5Z"/></svg>
+          <span>Change Duration</span>
+          <svg class="submenu-arrow" viewBox="0 0 24 24"><path d="M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z"/></svg>
+        </button>
+        <div class="frigate-events-submenu">
+          <button class="frigate-events-context-item" data-duration="1"><span>1 Hour</span></button>
+          <button class="frigate-events-context-item" data-duration="4"><span>4 Hours</span></button>
+          <button class="frigate-events-context-item" data-duration="8"><span>8 Hours</span></button>
+          <button class="frigate-events-context-item" data-duration="12"><span>12 Hours</span></button>
+          <button class="frigate-events-context-item" data-duration="24"><span>24 Hours (1 Day)</span></button>
+          <button class="frigate-events-context-item" data-duration="48"><span>48 Hours (2 Days)</span></button>
+          <button class="frigate-events-context-item" data-duration="168"><span>7 Days</span></button>
+          <button class="frigate-events-context-item" data-duration="custom"><span>Custom...</span></button>
+        </div>
+      </div>
+      <button class="frigate-events-context-item danger" data-action="mask">
+        <svg viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12S6.5 22 12 22 22 17.5 22 12 17.5 2 12 2M12 4C16.4 4 20 7.6 20 12C20 13.8 19.4 15.5 18.3 16.9L7.1 5.7C8.5 4.6 10.2 4 12 4M5.7 7.1L16.9 18.3C15.5 19.4 13.8 20 12 20C7.6 20 4 16.4 4 12C4 10.2 4.6 8.5 5.7 7.1Z"/></svg>
+        <span>Remove Mask</span>
       </button>
+      ` : `
+      <button class="frigate-events-context-item" data-action="mask">
+        <svg viewBox="0 0 24 24"><path d="M2,2H8V4H16V2H22V8H20V16H22V22H16V20H8V22H2V16H4V8H2V2M4,4V6H6V4H4M18,4V6H20V4H18M20,18V20H18V18H20M4,18V20H6V18H4M8,6V8H6V16H8V18H16V16H18V8H16V6H8M9,9H15V15H9V9Z"/></svg>
+        <span>Temporary Mask</span>
+      </button>
+      `}
       ` : ''}
       <div class="frigate-events-context-separator"></div>
       <button class="frigate-events-context-item danger" data-action="delete">
@@ -1616,6 +1743,17 @@ export class FrigateEventsCard extends LitElement {
     menu.style.left = `${Math.max(10, posX)}px`;
     menu.style.top = `${Math.max(10, posY)}px`;
 
+    const wrapper = menu.querySelector('.frigate-events-context-item-wrapper.has-submenu');
+    const submenu = menu.querySelector('.frigate-events-submenu') as HTMLElement;
+    if (submenu) {
+      if (posX + rect.width + 170 > window.innerWidth) {
+        submenu.classList.add('align-left');
+      }
+      if (posY + 260 > window.innerHeight) {
+        submenu.classList.add('align-top');
+      }
+    }
+
     menu.querySelector('[data-action="view"]')?.addEventListener('click', (e) => {
       e.stopPropagation();
       this._closeContextMenu();
@@ -1623,6 +1761,37 @@ export class FrigateEventsCard extends LitElement {
     });
 
     if (hasTempMaskIntegration) {
+      const triggerBtn = menu.querySelector('[data-action="change-duration-trigger"]');
+      if (triggerBtn && wrapper) {
+        triggerBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          wrapper.classList.toggle('open');
+        });
+      }
+
+      menu.querySelectorAll('[data-duration]').forEach((btn) => {
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const durationAttr = (btn as HTMLElement).getAttribute('data-duration');
+          this._closeContextMenu();
+
+          let hours = 24;
+          if (durationAttr === 'custom') {
+            const input = window.prompt('Enter temporary mask duration in hours:', '24');
+            if (!input) return;
+            const parsed = parseFloat(input.trim());
+            if (isNaN(parsed) || parsed <= 0) {
+              return;
+            }
+            hours = parsed;
+          } else if (durationAttr) {
+            hours = parseFloat(durationAttr);
+          }
+
+          await this._executeChangeMaskDuration(event, hours);
+        });
+      });
+
       menu.querySelector('[data-action="mask"]')?.addEventListener('click', async (e) => {
         e.stopPropagation();
         this._closeContextMenu();

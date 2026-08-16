@@ -72,7 +72,10 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         event_id = call.data.get("event_id", "")
         mask_id = call.data.get("mask_id") or (event_id.split("-")[0] if "-" in event_id else event_id or "manual")
         box_str = call.data.get("box", "")
-        duration_hours = call.data.get("duration_hours", 24)
+        try:
+            duration_hours = float(call.data.get("duration_hours", 24))
+        except (ValueError, TypeError):
+            duration_hours = 24.0
         padding = call.data.get("padding", DEFAULT_PADDING)
 
         session = async_get_clientsession(hass)
