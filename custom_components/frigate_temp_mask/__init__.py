@@ -172,6 +172,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             "mask_id": mask_id,
             "camera": camera,
             "polygon": poly_str,
+            "duration_hours": duration_hours,
             "expires_at": expires_at.isoformat() + "Z"
         }
         _update_state()

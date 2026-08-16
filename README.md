@@ -190,8 +190,13 @@ video_on_hover: true
 
 Right-clicking (desktop) or long-pressing (touch devices) any event thumbnail opens a context menu with options to view details, delete the event, or apply a **Temporary Mask**:
 
-* **Temporary Mask (Optional)**: Dynamically available when the companion `frigate_temp_mask` custom component is installed. Automatically calculates a 20% expanded bounding box around false detections (such as a wheelbarrow, package, or parked vehicle), injects a temporary mask into Frigate, and restarts the detector. The mask automatically expires and prunes itself after the selected duration.
-* **Change Duration / Remove Mask**: Right-clicking an already masked event allows changing the mask duration on the fly (1h, 4h, 8h, 12h, 24h, 48h, 7d, or Custom hours) or instantly removing the mask.
+* **Temporary Mask (Optional)**: Dynamically available when the companion `frigate_temp_mask` custom component is installed. Automatically calculates a 20% expanded bounding box around false detections (such as a wheelbarrow, package, or parked vehicle), injects a temporary mask into Frigate, and automatically restarts Frigate's backend process so the mask takes effect immediately.
+* **Change Duration / Remove Mask**: Right-clicking an already masked event allows changing the mask duration on the fly (1h, 4h, 8h, 12h, 24h, 48h, 7d, or Custom hours) or removing the mask.
+
+> [!NOTE]
+> **Restart Behavior**:
+> * **Adding or Updating Masks:** Frigate **automatically restarts** its internal detector process (~1–2 seconds) so false alarms stop immediately.
+> * **Removing or Expired (Timed Out) Masks:** The mask is cleaned from `config.yml` on disk **without restarting Frigate** to prevent dropping live video streams or interrupting daytime recordings. To have the removal take effect in active detection memory immediately, manually restart Frigate (otherwise it will load on your next routine or nightly restart).
 
 #### Setting Up Temporary Masking (Optional Companion Integration)
 
