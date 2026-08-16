@@ -8,7 +8,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, deleteEvent } from './frigate/api';
 
-const CARD_VERSION = '2.3.18';
+const CARD_VERSION = '2.3.19';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -141,7 +141,7 @@ export class FrigateEventsCard extends LitElement {
   @state() private _error?: string;
   @state() private _hoveredEventId?: string;
   @state() private _liveViewError?: string;   // Set when live feed fails gracefully
-  @state() private _showLiveMaskOverlays = true;
+  @state() private _showLiveMaskOverlays = false;
   @state() private _maskManagerSelectedCamera = 'all';
 
   private _unsubscribe?: () => void;
@@ -3343,8 +3343,8 @@ export class FrigateEventsCard extends LitElement {
                 if (py < minY) minY = py;
               }
               const remainingText = this._formatMaskRemainingTime(mask.expires_at);
-              const labelText = `🛡️ Mask · ${remainingText}`;
-              const labelWidth = Math.max(130, labelText.length * 8);
+              const labelText = `Mask · ${remainingText}`;
+              const labelWidth = Math.max(120, labelText.length * 7.5);
 
               return html`
                 <g class="live-mask-poly-group" @click=${(e: Event) => { e.stopPropagation(); this._showMaskManagerModal(); }}>
@@ -3355,20 +3355,6 @@ export class FrigateEventsCard extends LitElement {
               `;
             })}
           </svg>
-        ` : ''}
-
-        ${cameraMasks.length > 0 ? html`
-          <div
-            class="live-mask-indicator ${this._showLiveMaskOverlays ? 'overlay-on' : ''}"
-            @click=${(e: Event) => {
-              e.stopPropagation();
-              this._showMaskManagerModal();
-            }}
-            title="Click to manage temporary masks (right-click for options)"
-          >
-            <svg viewBox="0 0 24 24"><path d="M12,1L3,5V11C3,16.55 6.84,21.74 12,23C17.16,21.74 21,16.55 21,11V5L12,1M12,5A6,6 0 0,1 18,11C18,14.41 15.46,18.22 12,19.82C8.54,18.22 6,14.41 6,11A6,6 0 0,1 12,5Z"/></svg>
-            <span>${cameraMasks.length} ${cameraMasks.length === 1 ? 'Mask' : 'Masks'}</span>
-          </div>
         ` : ''}
       </div>
     `;
@@ -3736,39 +3722,6 @@ export class FrigateEventsCard extends LitElement {
         font-weight: 600;
         font-family: inherit;
         user-select: none;
-      }
-
-      .live-mask-indicator {
-        position: absolute;
-        top: 8px;
-        left: 8px;
-        z-index: 4;
-        display: flex;
-        align-items: center;
-        gap: 5px;
-        padding: 4px 9px;
-        border-radius: 6px;
-        font-size: 11px;
-        font-weight: 600;
-        color: #93c5fd;
-        background: rgba(15, 23, 42, 0.85);
-        border: 1px solid rgba(59, 130, 246, 0.5);
-        backdrop-filter: blur(8px);
-        cursor: pointer;
-        transition: background 0.15s, transform 0.15s, border-color 0.15s;
-        user-select: none;
-      }
-
-      .live-mask-indicator:hover {
-        background: rgba(30, 58, 138, 0.95);
-        transform: scale(1.03);
-        border-color: #60a5fa;
-      }
-
-      .live-mask-indicator svg {
-        width: 13px;
-        height: 13px;
-        fill: #60a5fa;
       }
 
     `;

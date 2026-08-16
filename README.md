@@ -194,8 +194,7 @@ Right-clicking (desktop) or long-pressing (touch devices) any event thumbnail op
 * **Change Duration / Remove Mask**: Right-clicking an already masked event allows changing the mask duration on the fly (1h, 4h, 8h, 12h, 24h, 48h, 7d, or Custom hours) or removing the mask.
 * **Live Video Feed Right-Click Menu & Mask Manager**: Right-clicking (or long-pressing) on the live video feed opens a dedicated management menu:
   * **Manage Temporary Masks**: Opens an interactive Mask Manager modal displaying all active masks, remaining countdown timers, polygon coordinates, per-mask duration adjustments, and individual removal or bulk "Prune All" controls.
-  * **Visual Mask Overlays on Live Feed**: Real-time translucent SVG polygons and floating countdown tags (`🛡️ Mask · 22h left`) drawn directly over masked objects on the live camera stream. Can be toggled on/off in the right-click menu.
-  * **Live Mask Indicator**: Displays a subtle badge in the corner of the live feed showing the active mask count for that camera. Clicking the badge opens the Mask Manager.
+  * **Visual Mask Overlays on Live Feed**: Real-time translucent SVG polygons and floating countdown tags (`Mask · 22h left`) drawn directly over masked objects on the live camera stream. Can be toggled on/off in the right-click menu.
 
 > [!NOTE]
 > **Restart Behavior**:
@@ -319,6 +318,6 @@ Contributions are welcome! Please submit all Pull Requests to the **develop** br
 
 If you encounter any issues, bugs, or have feature requests, please [open an issue on GitHub](https://github.com/saihgupr/frigate-events-card/issues).
 
-Frigate Events Card is open-source and free. If you find it useful, consider giving it a star ⭐ or making a donation to support development!
+Frigate Events Card is open-source and free. If you find it useful, consider giving it a star or making a donation to support development!
 
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/saihgupr)
