@@ -8,7 +8,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, deleteEvent } from './frigate/api';
 
-const CARD_VERSION = '2.3.17';
+const CARD_VERSION = '2.3.18';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -141,12 +141,16 @@ export class FrigateEventsCard extends LitElement {
   @state() private _error?: string;
   @state() private _hoveredEventId?: string;
   @state() private _liveViewError?: string;   // Set when live feed fails gracefully
+  @state() private _showLiveMaskOverlays = true;
+  @state() private _maskManagerSelectedCamera = 'all';
 
   private _unsubscribe?: () => void;
   private _pollInterval?: number;
   private _boundVisibilityHandler?: () => void;
   private _boundKeyDownHandler?: (e: KeyboardEvent) => void;
   private _modalContainer?: HTMLDivElement;
+  private _maskManagerContainer?: HTMLDivElement;
+  private _maskManagerTimer?: ReturnType<typeof setInterval>;
   private _hoverVideoCropPositions = new WeakMap<HTMLVideoElement, ObjectPositionPercent>();
   private static _stylesInjected = false;
 
@@ -161,6 +165,7 @@ export class FrigateEventsCard extends LitElement {
   private _remoteStream?: MediaStream;
   private _contextMenuEl?: HTMLElement;
   private _touchTimeout?: ReturnType<typeof setTimeout>;
+  private _liveTouchTimeout?: ReturnType<typeof setTimeout>;
 
   /**
    * Calculate the daily reset timestamp based on the configured time.
@@ -214,13 +219,21 @@ export class FrigateEventsCard extends LitElement {
 
   protected shouldUpdate(changedProps: PropertyValues): boolean {
     // If hass is the only property that changed, and it was already defined previously,
-    // check if we need to subscribe, but skip re-rendering the HTML DOM tree since
-    // render() does not depend on hass state.
+    // check if we need to subscribe, but skip re-rendering the HTML DOM tree unless
+    // active masks changed.
     if (changedProps.has('hass') && changedProps.size === 1) {
       const oldHass = changedProps.get('hass') as HomeAssistant | undefined;
       if (oldHass !== undefined) {
         if (this.hass && !this._unsubscribe) {
           this._subscribeToEvents();
+        }
+        const oldMasks = oldHass?.states?.['sensor.frigate_active_masks'];
+        const newMasks = this.hass?.states?.['sensor.frigate_active_masks'];
+        if (oldMasks !== newMasks) {
+          if (this._maskManagerContainer) {
+            this._renderMaskManagerContent(this._maskManagerContainer);
+          }
+          return true;
         }
         return false;
       }
@@ -306,6 +319,16 @@ export class FrigateEventsCard extends LitElement {
     this._intersectionObserver?.disconnect();
     this._intersectionObserver = undefined;
     this._removeModal();
+    this._removeMaskManagerModal();
+    this._closeContextMenu();
+    if (this._touchTimeout) {
+      clearTimeout(this._touchTimeout);
+      this._touchTimeout = undefined;
+    }
+    if (this._liveTouchTimeout) {
+      clearTimeout(this._liveTouchTimeout);
+      this._liveTouchTimeout = undefined;
+    }
   }
 
   /**
@@ -1286,6 +1309,333 @@ export class FrigateEventsCard extends LitElement {
         margin-left: auto;
         flex-shrink: 0;
       }
+
+      /* ─── Mask Manager Modal Styles ─── */
+      .frigate-mask-manager-modal .frigate-events-modal-content {
+        min-width: min(580px, 94vw);
+        max-width: 640px;
+        max-height: 85vh;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        box-shadow: 0 20px 40px rgba(0, 0, 0, 0.7);
+        background: #181818;
+      }
+
+      .mask-manager-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 16px 20px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        background: rgba(26, 26, 26, 0.98);
+      }
+
+      .mask-manager-header-left {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .mask-manager-title {
+        font-size: 16px;
+        font-weight: 600;
+        color: #ffffff;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .mask-manager-count-badge {
+        font-size: 11px;
+        padding: 2px 8px;
+        border-radius: 10px;
+        background: rgba(59, 130, 246, 0.2);
+        color: #93c5fd;
+        border: 1px solid rgba(59, 130, 246, 0.35);
+        font-weight: 600;
+      }
+
+      .mask-manager-header-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .mask-manager-prune-btn {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 12px;
+        border-radius: 6px;
+        font-size: 12px;
+        font-weight: 600;
+        color: #fca5a5;
+        background: rgba(239, 68, 68, 0.15);
+        border: 1px solid rgba(239, 68, 68, 0.35);
+        cursor: pointer;
+        transition: background 0.15s, color 0.15s;
+        font-family: inherit;
+      }
+
+      .mask-manager-prune-btn:hover {
+        background: rgba(239, 68, 68, 0.3);
+        color: #fecaca;
+      }
+
+      .mask-manager-body {
+        padding: 16px 20px;
+        overflow-y: auto;
+        max-height: calc(85vh - 75px);
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        box-sizing: border-box;
+      }
+
+      .mask-filter-tabs {
+        display: flex;
+        gap: 6px;
+        overflow-x: auto;
+        padding-bottom: 4px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      }
+
+      .mask-filter-tab {
+        padding: 4px 10px;
+        border-radius: 6px;
+        font-size: 12px;
+        font-weight: 500;
+        color: #aaa;
+        background: transparent;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        cursor: pointer;
+        transition: all 0.15s;
+        font-family: inherit;
+        white-space: nowrap;
+      }
+
+      .mask-filter-tab:hover {
+        background: rgba(255, 255, 255, 0.08);
+        color: #fff;
+      }
+
+      .mask-filter-tab.active {
+        background: rgba(59, 130, 246, 0.25);
+        color: #93c5fd;
+        border-color: #3b82f6;
+      }
+
+      .mask-cards-list {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .mask-card {
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 10px;
+        padding: 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        transition: border-color 0.15s;
+      }
+
+      .mask-card:hover {
+        border-color: rgba(96, 165, 250, 0.4);
+      }
+
+      .mask-card-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .mask-card-title-col {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .mask-camera-pill {
+        font-size: 12px;
+        font-weight: 600;
+        color: #fff;
+        background: rgba(255, 255, 255, 0.12);
+        padding: 3px 8px;
+        border-radius: 4px;
+        text-transform: capitalize;
+      }
+
+      .mask-id-pill {
+        font-size: 11px;
+        font-family: monospace;
+        color: #94a3b8;
+        background: rgba(0, 0, 0, 0.35);
+        padding: 3px 6px;
+        border-radius: 4px;
+      }
+
+      .mask-card-time-badge {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        font-size: 12px;
+        font-weight: 600;
+        color: #38bdf8;
+        background: rgba(56, 189, 248, 0.15);
+        padding: 3px 8px;
+        border-radius: 4px;
+      }
+
+      .mask-card-time-badge.expiring {
+        color: #fbbf24;
+        background: rgba(251, 191, 36, 0.15);
+      }
+
+      .mask-card-details {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        font-size: 12px;
+        color: #aaa;
+        background: rgba(0, 0, 0, 0.25);
+        padding: 8px 10px;
+        border-radius: 6px;
+      }
+
+      .mask-detail-row {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+
+      .mask-detail-row .detail-label {
+        color: #888;
+        font-size: 11px;
+      }
+
+      .mask-detail-row .detail-value {
+        color: #ddd;
+        font-size: 12px;
+      }
+
+      .mask-detail-row .detail-value.mono {
+        font-family: monospace;
+        font-size: 11px;
+        color: #94a3b8;
+        word-break: break-all;
+      }
+
+      .mask-card-actions {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        flex-wrap: wrap;
+        padding-top: 2px;
+      }
+
+      .mask-duration-selector {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .mask-duration-selector .duration-title {
+        font-size: 11px;
+        color: #888;
+        font-weight: 500;
+      }
+
+      .mask-duration-chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        align-items: center;
+      }
+
+      .mask-duration-chip {
+        padding: 3px 7px;
+        border-radius: 4px;
+        font-size: 11px;
+        font-weight: 500;
+        background: rgba(255, 255, 255, 0.08);
+        color: #ddd;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        cursor: pointer;
+        transition: all 0.15s;
+        font-family: inherit;
+      }
+
+      .mask-duration-chip:hover {
+        background: rgba(255, 255, 255, 0.18);
+        color: #fff;
+      }
+
+      .mask-duration-chip.active {
+        background: rgba(59, 130, 246, 0.3);
+        color: #93c5fd;
+        border-color: #60a5fa;
+        font-weight: 600;
+      }
+
+      .mask-remove-btn {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        padding: 5px 10px;
+        border-radius: 6px;
+        font-size: 12px;
+        font-weight: 600;
+        color: #fca5a5;
+        background: rgba(239, 68, 68, 0.15);
+        border: 1px solid rgba(239, 68, 68, 0.3);
+        cursor: pointer;
+        transition: all 0.15s;
+        font-family: inherit;
+        margin-left: auto;
+      }
+
+      .mask-remove-btn:hover {
+        background: rgba(239, 68, 68, 0.3);
+        color: #f87171;
+      }
+
+      .mask-empty-state {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        padding: 36px 20px;
+        gap: 10px;
+        color: #888;
+      }
+
+      .mask-empty-state svg {
+        width: 44px;
+        height: 44px;
+        fill: #475569;
+      }
+
+      .mask-empty-state h4 {
+        margin: 0;
+        font-size: 15px;
+        color: #cbd5e1;
+        font-weight: 600;
+      }
+
+      .mask-empty-state p {
+        margin: 0;
+        font-size: 13px;
+        max-width: 380px;
+        line-height: 1.5;
+        color: #71717a;
+      }
     `;
     document.head.appendChild(style);
     FrigateEventsCard._stylesInjected = true;
@@ -1903,6 +2253,505 @@ export class FrigateEventsCard extends LitElement {
     }
   }
 
+  private _formatMaskRemainingTime(expiresAt?: string): string {
+    if (!expiresAt) return '';
+    const expMs = new Date(expiresAt).getTime();
+    const nowMs = Date.now();
+    const diffMs = expMs - nowMs;
+    if (diffMs <= 0) return 'Expired';
+    const diffHrs = Math.floor(diffMs / 3600000);
+    const diffMins = Math.floor((diffMs % 3600000) / 60000);
+    const diffSecs = Math.floor((diffMs % 60000) / 1000);
+    if (diffHrs > 0) {
+      return `${diffHrs}h ${diffMins}m left`;
+    }
+    if (diffMins > 0) {
+      return `${diffMins}m ${diffSecs}s left`;
+    }
+    return `${diffSecs}s left`;
+  }
+
+  private _handleLiveViewContextMenu(e: MouseEvent): void {
+    e.preventDefault();
+    e.stopPropagation();
+    this._openLiveViewContextMenu(e.clientX, e.clientY);
+  }
+
+  private _handleLiveViewTouchStart(e: TouchEvent): void {
+    if (e.touches.length !== 1) return;
+    const touch = e.touches[0];
+    const clientX = touch.clientX;
+    const clientY = touch.clientY;
+
+    this._liveTouchTimeout = setTimeout(() => {
+      this._openLiveViewContextMenu(clientX, clientY);
+    }, 500);
+  }
+
+  private _handleLiveViewTouchEnd(): void {
+    if (this._liveTouchTimeout) {
+      clearTimeout(this._liveTouchTimeout);
+      this._liveTouchTimeout = undefined;
+    }
+  }
+
+  private _openLiveViewContextMenu(x: number, y: number): void {
+    this._closeContextMenu();
+    this._injectModalStyles();
+
+    const activeMasks = (this.hass?.states?.['sensor.frigate_active_masks']?.attributes?.masks as any[]) || [];
+    const maskCount = Array.isArray(activeMasks) ? activeMasks.length : 0;
+
+    const hasTempMaskIntegration = !!(
+      this._config?.show_temp_mask !== false &&
+      (this.hass?.services?.['frigate_temp_mask'] || this.hass?.services?.['shell_command']?.['frigate_add_temp_mask'] || this.hass?.states?.['sensor.frigate_active_masks'])
+    );
+
+    const menu = document.createElement('div');
+    menu.className = 'frigate-events-context-menu live-view-context-menu';
+
+    menu.innerHTML = `
+      ${hasTempMaskIntegration ? `
+      <button class="frigate-events-context-item masked" data-action="manage-masks">
+        <svg viewBox="0 0 24 24"><path d="M12,1L3,5V11C3,16.55 6.84,21.74 12,23C17.16,21.74 21,16.55 21,11V5L12,1M12,5A6,6 0 0,1 18,11C18,14.41 15.46,18.22 12,19.82C8.54,18.22 6,14.41 6,11A6,6 0 0,1 12,5Z"/></svg>
+        <div class="duration-label-container">
+          <span>Manage Temporary Masks</span>
+          <span class="duration-subtitle">${maskCount > 0 ? `${maskCount} active ${maskCount === 1 ? 'mask' : 'masks'}` : 'No active masks'}</span>
+        </div>
+      </button>
+      <button class="frigate-events-context-item" data-action="toggle-overlay">
+        <svg viewBox="0 0 24 24"><path d="M12,9A3,3 0 0,0 9,12A3,3 0 0,0 12,15A3,3 0 0,0 15,12A3,3 0 0,0 12,9M12,17A5,5 0 0,1 7,12A5,5 0 0,1 12,7A5,5 0 0,1 17,12A5,5 0 0,1 12,7M12,4.5C7,4.5 2.73,7.61 1,12C2.73,16.39 7,19.5 12,19.5C17,19.5 21.27,16.39 23,12C21.27,7.61 17,4.5 12,4.5Z"/></svg>
+        <span>${this._showLiveMaskOverlays ? 'Hide Mask Overlays' : 'Show Mask Overlays'}</span>
+      </button>
+      ${maskCount > 0 ? `
+      <button class="frigate-events-context-item danger" data-action="prune-all">
+        <svg viewBox="0 0 24 24"><path d="M19.36,2.72L20.78,4.14L15.06,9.85C16.13,11.39 16.28,13.24 15.38,14.44L9.06,8.12C10.26,7.22 12.11,7.37 13.65,8.44L19.36,2.72M5.93,17.57C3.92,15.56 2.69,13.16 2.35,10.92L7.23,8.83L14.67,16.27L12.58,21.15C10.34,20.81 7.94,19.58 5.93,17.57Z"/></svg>
+        <span>Prune All Masks</span>
+      </button>
+      ` : ''}
+      <div class="frigate-events-context-separator"></div>
+      ` : ''}
+      <button class="frigate-events-context-item" data-action="fullscreen">
+        <svg viewBox="0 0 24 24"><path d="M5,5H10V7H7V10H5V5M14,5H19V10H17V7H14V5M17,14H19V19H14V17H17V14M10,17V19H5V14H7V17H10Z"/></svg>
+        <span>Toggle Fullscreen</span>
+      </button>
+    `;
+
+    document.body.appendChild(menu);
+    const rect = menu.getBoundingClientRect();
+    let posX = x;
+    let posY = y;
+    if (posX + rect.width > window.innerWidth - 10) {
+      posX = window.innerWidth - rect.width - 10;
+    }
+    if (posY + rect.height > window.innerHeight - 10) {
+      posY = window.innerHeight - rect.height - 10;
+    }
+    menu.style.left = `${Math.max(10, posX)}px`;
+    menu.style.top = `${Math.max(10, posY)}px`;
+
+    menu.querySelector('[data-action="manage-masks"]')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this._closeContextMenu();
+      this._showMaskManagerModal();
+    });
+
+    menu.querySelector('[data-action="toggle-overlay"]')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this._closeContextMenu();
+      this._showLiveMaskOverlays = !this._showLiveMaskOverlays;
+      this.requestUpdate();
+    });
+
+    menu.querySelector('[data-action="prune-all"]')?.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      this._closeContextMenu();
+      await this._executePruneAllMasks();
+    });
+
+    menu.querySelector('[data-action="fullscreen"]')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this._closeContextMenu();
+      const container = this.renderRoot?.querySelector('.live-view-container') as HTMLElement | null;
+      if (container) {
+        this._handleLiveViewClick({ currentTarget: container } as any);
+      }
+    });
+
+    const onDocClick = (ev: MouseEvent) => {
+      if (!menu.contains(ev.target as Node)) {
+        this._closeContextMenu();
+        window.removeEventListener('click', onDocClick);
+      }
+    };
+    setTimeout(() => window.addEventListener('click', onDocClick), 10);
+
+    this._contextMenuEl = menu;
+  }
+
+  private _showMaskManagerModal(): void {
+    this._closeContextMenu();
+    this._injectModalStyles();
+
+    if (this._maskManagerContainer) {
+      this._renderMaskManagerContent(this._maskManagerContainer);
+      return;
+    }
+
+    const container = document.createElement('div');
+    container.className = 'frigate-events-modal frigate-mask-manager-modal';
+    this._maskManagerContainer = container;
+
+    this._renderMaskManagerContent(container);
+
+    container.addEventListener('click', (e) => {
+      if (e.target === container) {
+        this._removeMaskManagerModal();
+      }
+    });
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        this._removeMaskManagerModal();
+        window.removeEventListener('keydown', onKeyDown);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+
+    if (this._maskManagerTimer) {
+      clearInterval(this._maskManagerTimer);
+    }
+    this._maskManagerTimer = setInterval(() => {
+      if (this._maskManagerContainer) {
+        this._updateMaskManagerTimers(this._maskManagerContainer);
+      }
+    }, 1000);
+
+    document.body.appendChild(container);
+  }
+
+  private _removeMaskManagerModal(): void {
+    if (this._maskManagerContainer && this._maskManagerContainer.parentNode) {
+      this._maskManagerContainer.parentNode.removeChild(this._maskManagerContainer);
+      this._maskManagerContainer = undefined;
+    }
+    if (this._maskManagerTimer) {
+      clearInterval(this._maskManagerTimer);
+      this._maskManagerTimer = undefined;
+    }
+  }
+
+  private _updateMaskManagerTimers(container: HTMLElement): void {
+    const activeMasks = (this.hass?.states?.['sensor.frigate_active_masks']?.attributes?.masks as any[]) || [];
+    if (!Array.isArray(activeMasks)) return;
+    const map = new Map<string, any>();
+    activeMasks.forEach(m => map.set(m.mask_id, m));
+
+    container.querySelectorAll('[data-timer-mask-id]').forEach(el => {
+      const maskId = el.getAttribute('data-timer-mask-id');
+      const mask = maskId ? map.get(maskId) : undefined;
+      if (mask && mask.expires_at) {
+        const text = this._formatMaskRemainingTime(mask.expires_at);
+        const span = el.querySelector('.timer-text');
+        if (span) span.textContent = text;
+      }
+    });
+  }
+
+  private _renderMaskManagerContent(container: HTMLElement): void {
+    const rawMasks = (this.hass?.states?.['sensor.frigate_active_masks']?.attributes?.masks as any[]) || [];
+    const activeMasks = Array.isArray(rawMasks) ? rawMasks : [];
+    const totalCount = activeMasks.length;
+
+    // Get unique cameras
+    const cameras = Array.from(new Set(activeMasks.map((m: any) => m.camera).filter(Boolean)));
+    const filterCamera = this._maskManagerSelectedCamera || 'all';
+
+    const filteredMasks = filterCamera === 'all'
+      ? activeMasks
+      : activeMasks.filter((m: any) => m.camera === filterCamera);
+
+    const durationPresets = [
+      { hours: 1, label: '1h' },
+      { hours: 4, label: '4h' },
+      { hours: 8, label: '8h' },
+      { hours: 12, label: '12h' },
+      { hours: 24, label: '24h' },
+      { hours: 48, label: '48h' },
+      { hours: 168, label: '7d' },
+    ];
+
+    container.innerHTML = `
+      <div class="frigate-events-modal-content mask-manager-content">
+        <div class="mask-manager-header">
+          <div class="mask-manager-header-left">
+            <div class="mask-manager-title">
+              <svg viewBox="0 0 24 24" style="width: 20px; height: 20px; fill: #60a5fa;"><path d="M12,1L3,5V11C3,16.55 6.84,21.74 12,23C17.16,21.74 21,16.55 21,11V5L12,1M12,5A6,6 0 0,1 18,11C18,14.41 15.46,18.22 12,19.82C8.54,18.22 6,14.41 6,11A6,6 0 0,1 12,5Z"/></svg>
+              <span>Temporary Masks</span>
+            </div>
+            <span class="mask-manager-count-badge">${totalCount} Active</span>
+          </div>
+          <div class="mask-manager-header-actions">
+            ${totalCount > 0 ? `
+              <button class="mask-manager-prune-btn" data-action="prune-all">
+                <svg viewBox="0 0 24 24" style="width: 14px; height: 14px; fill: currentColor;"><path d="M19.36,2.72L20.78,4.14L15.06,9.85C16.13,11.39 16.28,13.24 15.38,14.44L9.06,8.12C10.26,7.22 12.11,7.37 13.65,8.44L19.36,2.72M5.93,17.57C3.92,15.56 2.69,13.16 2.35,10.92L7.23,8.83L14.67,16.27L12.58,21.15C10.34,20.81 7.94,19.58 5.93,17.57Z"/></svg>
+                <span>Prune All</span>
+              </button>
+            ` : ''}
+            <button class="frigate-events-modal-close" data-action="close">✕</button>
+          </div>
+        </div>
+
+        <div class="mask-manager-body">
+          ${cameras.length > 1 ? `
+            <div class="mask-filter-tabs">
+              <button class="mask-filter-tab ${filterCamera === 'all' ? 'active' : ''}" data-camera-filter="all">
+                All Cameras (${totalCount})
+              </button>
+              ${cameras.map(c => `
+                <button class="mask-filter-tab ${filterCamera === c ? 'active' : ''}" data-camera-filter="${c}">
+                  ${this._formatCameraName(c)} (${activeMasks.filter((m: any) => m.camera === c).length})
+                </button>
+              `).join('')}
+            </div>
+          ` : ''}
+
+          ${filteredMasks.length === 0 ? `
+            <div class="mask-empty-state">
+              <svg viewBox="0 0 24 24"><path d="M12,1L3,5V11C3,16.55 6.84,21.74 12,23C17.16,21.74 21,16.55 21,11V5L12,1M12,5A6,6 0 0,1 18,11C18,14.41 15.46,18.22 12,19.82C8.54,18.22 6,14.41 6,11A6,6 0 0,1 12,5Z"/></svg>
+              <h4>No Active Temporary Masks</h4>
+              <p>Apply temporary false-positive masks by right-clicking any event thumbnail below or from actionable notifications.</p>
+            </div>
+          ` : `
+            <div class="mask-cards-list">
+              ${filteredMasks.map((mask: any) => {
+                const currentDurationHours = typeof mask.duration_hours === 'number' ? mask.duration_hours : 24;
+                const isCustom = !durationPresets.some(p => Math.abs(p.hours - currentDurationHours) < 0.01);
+                const remainingText = this._formatMaskRemainingTime(mask.expires_at);
+
+                return `
+                  <div class="mask-card" data-mask-id="${mask.mask_id}">
+                    <div class="mask-card-header">
+                      <div class="mask-card-title-col">
+                        <span class="mask-camera-pill">${this._formatCameraName(mask.camera || 'Camera')}</span>
+                        <span class="mask-id-pill">#${mask.mask_id}</span>
+                      </div>
+                      <div class="mask-card-time-badge" data-timer-mask-id="${mask.mask_id}">
+                        <svg viewBox="0 0 24 24" style="width: 13px; height: 13px; fill: currentColor;"><path d="M12,20A8,8 0 0,0 20,12A8,8 0 0,0 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,2C6.47,22 2,17.5 2,12A10,10 0 0,1 12,2M12.5,7V12.25L17,14.92L16.25,16.15L11,13V7H12.5Z"/></svg>
+                        <span class="timer-text">${remainingText}</span>
+                      </div>
+                    </div>
+                    <div class="mask-card-details">
+                      <div class="mask-detail-row">
+                        <span class="detail-label">Duration:</span>
+                        <span class="detail-value">${currentDurationHours} ${currentDurationHours === 1 ? 'hour' : 'hours'}</span>
+                      </div>
+                      ${mask.polygon ? `
+                      <div class="mask-detail-row">
+                        <span class="detail-label">Polygon:</span>
+                        <span class="detail-value mono">${mask.polygon}</span>
+                      </div>
+                      ` : ''}
+                    </div>
+                    <div class="mask-card-actions">
+                      <div class="mask-duration-selector">
+                        <span class="duration-title">Duration:</span>
+                        <div class="mask-duration-chips">
+                          ${durationPresets.map(p => {
+                            const isSelected = Math.abs(p.hours - currentDurationHours) < 0.01;
+                            return `
+                              <button class="mask-duration-chip ${isSelected ? 'active' : ''}" data-action="set-duration" data-mask-id="${mask.mask_id}" data-camera="${mask.camera || ''}" data-hours="${p.hours}" data-poly="${mask.polygon || ''}">
+                                ${p.label}
+                              </button>
+                            `;
+                          }).join('')}
+                          <button class="mask-duration-chip ${isCustom ? 'active' : ''}" data-action="custom-duration" data-mask-id="${mask.mask_id}" data-camera="${mask.camera || ''}" data-poly="${mask.polygon || ''}">
+                            ${isCustom ? `Custom (${currentDurationHours}h)` : 'Custom...'}
+                          </button>
+                        </div>
+                      </div>
+                      <button class="mask-remove-btn" data-action="remove-mask" data-mask-id="${mask.mask_id}" data-camera="${mask.camera || ''}">
+                        <svg viewBox="0 0 24 24" style="width: 14px; height: 14px; fill: currentColor;"><path d="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z"/></svg>
+                        <span>Remove</span>
+                      </button>
+                    </div>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          `}
+        </div>
+      </div>
+    `;
+
+    // Attach listeners
+    const content = container.querySelector('.mask-manager-content');
+    content?.addEventListener('click', (e) => e.stopPropagation());
+
+    container.querySelector('[data-action="close"]')?.addEventListener('click', () => {
+      this._removeMaskManagerModal();
+    });
+
+    container.querySelector('[data-action="prune-all"]')?.addEventListener('click', async () => {
+      await this._executePruneAllMasks();
+    });
+
+    container.querySelectorAll('[data-camera-filter]').forEach(tab => {
+      tab.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._maskManagerSelectedCamera = (tab as HTMLElement).getAttribute('data-camera-filter') || 'all';
+        this._renderMaskManagerContent(container);
+      });
+    });
+
+    container.querySelectorAll('[data-action="set-duration"]').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const maskId = (btn as HTMLElement).getAttribute('data-mask-id');
+        const camera = (btn as HTMLElement).getAttribute('data-camera') || '';
+        const hours = parseFloat((btn as HTMLElement).getAttribute('data-hours') || '24');
+        const polygon = (btn as HTMLElement).getAttribute('data-poly') || undefined;
+        if (maskId) {
+          await this._executeChangeMaskDurationById(maskId, camera, hours, polygon);
+        }
+      });
+    });
+
+    container.querySelectorAll('[data-action="custom-duration"]').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const maskId = (btn as HTMLElement).getAttribute('data-mask-id');
+        const camera = (btn as HTMLElement).getAttribute('data-camera') || '';
+        const polygon = (btn as HTMLElement).getAttribute('data-poly') || undefined;
+        const input = window.prompt('Enter temporary mask duration in hours:', '24');
+        if (!input) return;
+        const parsed = parseFloat(input.trim());
+        if (isNaN(parsed) || parsed <= 0) return;
+        if (maskId) {
+          await this._executeChangeMaskDurationById(maskId, camera, parsed, polygon);
+        }
+      });
+    });
+
+    container.querySelectorAll('[data-action="remove-mask"]').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const maskId = (btn as HTMLElement).getAttribute('data-mask-id');
+        const camera = (btn as HTMLElement).getAttribute('data-camera') || '';
+        if (maskId) {
+          await this._executeRemoveMask(maskId, camera);
+        }
+      });
+    });
+  }
+
+  private async _executeRemoveMask(maskId: string, camera?: string): Promise<void> {
+    if (!this.hass) return;
+    try {
+      if (this.hass.callService) {
+        try {
+          await this.hass.callService('frigate_temp_mask', 'remove_mask', {
+            mask_id: maskId,
+          });
+        } catch {
+          await this.hass.callService('shell_command', 'frigate_remove_temp_mask', {
+            mask_id: maskId,
+          });
+        }
+      }
+      this.dispatchEvent(new CustomEvent('hass-notification', {
+        detail: { message: `Temporary mask #${maskId} removed ${camera ? `for ${camera}` : ''}` },
+        bubbles: true,
+        composed: true,
+      }));
+      this.requestUpdate();
+      if (this._maskManagerContainer) {
+        setTimeout(() => {
+          if (this._maskManagerContainer) this._renderMaskManagerContent(this._maskManagerContainer);
+        }, 300);
+      }
+    } catch (err) {
+      console.error('Failed to remove mask:', err);
+    }
+  }
+
+  private async _executePruneAllMasks(): Promise<void> {
+    if (!this.hass) return;
+    try {
+      if (this.hass.callService) {
+        try {
+          await this.hass.callService('frigate_temp_mask', 'prune_all', {});
+        } catch {
+          await this.hass.callService('shell_command', 'frigate_prune_all_temp_masks', {});
+        }
+      }
+      this.dispatchEvent(new CustomEvent('hass-notification', {
+        detail: { message: 'All temporary masks pruned from Frigate' },
+        bubbles: true,
+        composed: true,
+      }));
+      this.requestUpdate();
+      if (this._maskManagerContainer) {
+        setTimeout(() => {
+          if (this._maskManagerContainer) this._renderMaskManagerContent(this._maskManagerContainer);
+        }, 300);
+      }
+    } catch (err) {
+      console.error('Failed to prune all masks:', err);
+    }
+  }
+
+  private async _executeChangeMaskDurationById(
+    maskId: string,
+    camera: string,
+    durationHours: number,
+    polygon?: string
+  ): Promise<void> {
+    if (!this.hass) return;
+    try {
+      if (this.hass.callService) {
+        try {
+          await this.hass.callService('frigate_temp_mask', 'add_mask', {
+            mask_id: maskId,
+            camera: camera,
+            duration_hours: durationHours,
+            polygon: polygon,
+          });
+        } catch {
+          await this.hass.callService('shell_command', 'frigate_add_temp_mask', {
+            mask_id: maskId,
+            camera: camera,
+          });
+        }
+      }
+      const durationText = durationHours === 1
+        ? '1 hour'
+        : durationHours < 24
+        ? `${durationHours} hours`
+        : durationHours === 24
+        ? '24 hours (1 day)'
+        : durationHours === 48
+        ? '48 hours (2 days)'
+        : durationHours % 24 === 0
+        ? `${durationHours / 24} days`
+        : `${durationHours} hours`;
+
+      this.dispatchEvent(new CustomEvent('hass-notification', {
+        detail: { message: `Temporary mask #${maskId} updated to ${durationText}` },
+        bubbles: true,
+        composed: true,
+      }));
+      this.requestUpdate();
+      if (this._maskManagerContainer) {
+        setTimeout(() => {
+          if (this._maskManagerContainer) this._renderMaskManagerContent(this._maskManagerContainer);
+        }, 300);
+      }
+    } catch (err) {
+      console.error('Failed to update mask duration:', err);
+    }
+  }
+
   private async _executeDeleteEvent(event: FrigateEvent): Promise<void> {
     const clientId = this._config?.frigate_client_id || 'frigate';
     const success = await deleteEvent(clientId, event.id, this._config?.go2rtc_url);
@@ -2419,11 +3268,40 @@ export class FrigateEventsCard extends LitElement {
       return html`
         <div class="live-view-container" style="aspect-ratio: ${aspectRatio};">
           <div class="live-view-error">
-            <span>⚠ Live feed unavailable</span>
+            <span>Live feed unavailable</span>
             <span class="live-view-error-detail">${this._liveViewError}</span>
           </div>
         </div>
       `;
+    }
+
+    const liveEntity = this._config?.live_view_entity || '';
+    const liveCamera = liveEntity.replace(/^camera\./, '').replace(/_(live|sub|detect)$/, '');
+    const activeMasks = (this.hass?.states?.['sensor.frigate_active_masks']?.attributes?.masks as any[]) || [];
+    const cameraMasks = Array.isArray(activeMasks)
+      ? activeMasks.filter((m: any) => !liveCamera || m.camera === liveCamera || m.camera === liveEntity.replace(/^camera\./, ''))
+      : [];
+
+    let viewBoxW = 1920;
+    let viewBoxH = 1080;
+    if (cameraMasks.length > 0) {
+      let maxCoordX = 0;
+      let maxCoordY = 0;
+      for (const m of cameraMasks) {
+        if (!m.polygon) continue;
+        const nums = m.polygon.split(',').map((s: string) => parseFloat(s.trim())).filter((n: number) => !isNaN(n));
+        for (let i = 0; i < nums.length; i += 2) {
+          if (nums[i] > maxCoordX) maxCoordX = nums[i];
+          if ((nums[i + 1] ?? 0) > maxCoordY) maxCoordY = nums[i + 1];
+        }
+      }
+      if (maxCoordX > 1920 || maxCoordY > 1080) {
+        viewBoxW = maxCoordX > 2560 ? 3840 : 2560;
+        viewBoxH = maxCoordX > 2560 ? 2160 : 1440;
+      } else if (maxCoordX <= 1280 && maxCoordY <= 720 && maxCoordX > 0) {
+        viewBoxW = 1280;
+        viewBoxH = 720;
+      }
     }
 
     return html`
@@ -2431,7 +3309,11 @@ export class FrigateEventsCard extends LitElement {
         class="live-view-container"
         style="aspect-ratio: ${aspectRatio};"
         @click=${(e: Event) => this._handleLiveViewClick(e)}
-        title="Click for fullscreen"
+        @contextmenu=${(e: MouseEvent) => this._handleLiveViewContextMenu(e)}
+        @touchstart=${(e: TouchEvent) => this._handleLiveViewTouchStart(e)}
+        @touchend=${() => this._handleLiveViewTouchEnd()}
+        @touchcancel=${() => this._handleLiveViewTouchEnd()}
+        title="Click for fullscreen · Right-click for temporary masks"
       >
         <video
           class="live-view-video"
@@ -2444,6 +3326,50 @@ export class FrigateEventsCard extends LitElement {
           poster="data:image/png;base64,iVBORw0KGgoAAAANSU5EUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
           ${ref(this._handleLiveVideoRef)}
         ></video>
+
+        ${this._showLiveMaskOverlays && cameraMasks.length > 0 ? html`
+          <svg class="live-view-mask-overlay" viewBox="0 0 ${viewBoxW} ${viewBoxH}" preserveAspectRatio="none">
+            ${cameraMasks.map((mask: any) => {
+              if (!mask.polygon) return '';
+              const nums = mask.polygon.split(',').map((s: string) => parseFloat(s.trim())).filter((n: number) => !isNaN(n));
+              if (nums.length < 6) return '';
+              let minX = Infinity, minY = Infinity;
+              const pts: string[] = [];
+              for (let i = 0; i < nums.length; i += 2) {
+                const px = nums[i];
+                const py = nums[i + 1] ?? 0;
+                pts.push(`${px},${py}`);
+                if (px < minX) minX = px;
+                if (py < minY) minY = py;
+              }
+              const remainingText = this._formatMaskRemainingTime(mask.expires_at);
+              const labelText = `🛡️ Mask · ${remainingText}`;
+              const labelWidth = Math.max(130, labelText.length * 8);
+
+              return html`
+                <g class="live-mask-poly-group" @click=${(e: Event) => { e.stopPropagation(); this._showMaskManagerModal(); }}>
+                  <polygon points="${pts.join(' ')}" class="live-mask-poly" />
+                  <rect x="${Math.max(4, minX)}" y="${Math.max(4, minY - 26)}" width="${labelWidth}" height="22" rx="4" class="live-mask-label-bg" />
+                  <text x="${Math.max(10, minX + 6)}" y="${Math.max(18, minY - 10)}" class="live-mask-label-text">${labelText}</text>
+                </g>
+              `;
+            })}
+          </svg>
+        ` : ''}
+
+        ${cameraMasks.length > 0 ? html`
+          <div
+            class="live-mask-indicator ${this._showLiveMaskOverlays ? 'overlay-on' : ''}"
+            @click=${(e: Event) => {
+              e.stopPropagation();
+              this._showMaskManagerModal();
+            }}
+            title="Click to manage temporary masks (right-click for options)"
+          >
+            <svg viewBox="0 0 24 24"><path d="M12,1L3,5V11C3,16.55 6.84,21.74 12,23C17.16,21.74 21,16.55 21,11V5L12,1M12,5A6,6 0 0,1 18,11C18,14.41 15.46,18.22 12,19.82C8.54,18.22 6,14.41 6,11A6,6 0 0,1 12,5Z"/></svg>
+            <span>${cameraMasks.length} ${cameraMasks.length === 1 ? 'Mask' : 'Masks'}</span>
+          </div>
+        ` : ''}
       </div>
     `;
   }
@@ -2769,6 +3695,80 @@ export class FrigateEventsCard extends LitElement {
         opacity: 0.7;
         max-width: 80%;
         text-align: center;
+      }
+
+      .live-view-mask-overlay {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: auto;
+        z-index: 2;
+      }
+
+      .live-mask-poly-group {
+        cursor: pointer;
+      }
+
+      .live-mask-poly {
+        fill: rgba(59, 130, 246, 0.22);
+        stroke: rgba(96, 165, 250, 0.85);
+        stroke-width: 2;
+        stroke-dasharray: 6 3;
+        transition: fill 0.2s, stroke 0.2s, stroke-width 0.2s;
+      }
+
+      .live-mask-poly-group:hover .live-mask-poly {
+        fill: rgba(59, 130, 246, 0.4);
+        stroke: #93c5fd;
+        stroke-width: 3;
+      }
+
+      .live-mask-label-bg {
+        fill: rgba(15, 23, 42, 0.9);
+        stroke: rgba(96, 165, 250, 0.6);
+        stroke-width: 1;
+      }
+
+      .live-mask-label-text {
+        fill: #f0f9ff;
+        font-size: 11px;
+        font-weight: 600;
+        font-family: inherit;
+        user-select: none;
+      }
+
+      .live-mask-indicator {
+        position: absolute;
+        top: 8px;
+        left: 8px;
+        z-index: 4;
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        padding: 4px 9px;
+        border-radius: 6px;
+        font-size: 11px;
+        font-weight: 600;
+        color: #93c5fd;
+        background: rgba(15, 23, 42, 0.85);
+        border: 1px solid rgba(59, 130, 246, 0.5);
+        backdrop-filter: blur(8px);
+        cursor: pointer;
+        transition: background 0.15s, transform 0.15s, border-color 0.15s;
+        user-select: none;
+      }
+
+      .live-mask-indicator:hover {
+        background: rgba(30, 58, 138, 0.95);
+        transform: scale(1.03);
+        border-color: #60a5fa;
+      }
+
+      .live-mask-indicator svg {
+        width: 13px;
+        height: 13px;
+        fill: #60a5fa;
       }
 
     `;

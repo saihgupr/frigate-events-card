@@ -86,6 +86,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         session = async_get_clientsession(hass)
         base_url = _get_frigate_base_url()
 
+        polygon_arg = call.data.get("polygon", "")
         box_coords = None
         if box_str and box_str.strip() not in ["", "none", "unknown"]:
             try:
@@ -93,7 +94,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
             except Exception:
                 pass
 
-        if not box_coords and event_id:
+        if not box_coords and not polygon_arg and event_id:
             try:
                 async with session.get(f"{base_url}/api/events/{event_id}", timeout=10) as resp:
                     if resp.status == 200:
@@ -104,23 +105,32 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
             except Exception as e:
                 _LOGGER.error("Error fetching Frigate event %s: %s", event_id, e)
 
-        if not box_coords:
-            _LOGGER.error("No valid bounding box or event ID found for mask addition.")
+        poly_str = polygon_arg
+        if not box_coords and not poly_str:
+            # Check if mask_id already exists in active_masks to reuse polygon and camera
+            if mask_id in hass.data[DOMAIN]["active_masks"]:
+                poly_str = hass.data[DOMAIN]["active_masks"][mask_id].get("polygon", "")
+                if not camera or camera == "wyze_camera":
+                    camera = hass.data[DOMAIN]["active_masks"][mask_id].get("camera", camera)
+
+        if not box_coords and not poly_str:
+            _LOGGER.error("No valid bounding box, polygon, or event ID found for mask addition.")
             return
 
-        # Fetch camera detect stream resolution
-        width, height = 1920, 1080
-        try:
-            async with session.get(f"{base_url}/api/config", timeout=10) as resp:
-                if resp.status == 200:
-                    cfg = await resp.json()
-                    detect_cfg = cfg.get("cameras", {}).get(camera, {}).get("detect", {})
-                    width = detect_cfg.get("width", 1920)
-                    height = detect_cfg.get("height", 1080)
-        except Exception as e:
-            _LOGGER.warning("Using fallback resolution 1920x1080: %s", e)
+        if not poly_str:
+            # Fetch camera detect stream resolution
+            width, height = 1920, 1080
+            try:
+                async with session.get(f"{base_url}/api/config", timeout=10) as resp:
+                    if resp.status == 200:
+                        cfg = await resp.json()
+                        detect_cfg = cfg.get("cameras", {}).get(camera, {}).get("detect", {})
+                        width = detect_cfg.get("width", 1920)
+                        height = detect_cfg.get("height", 1080)
+            except Exception as e:
+                _LOGGER.warning("Using fallback resolution 1920x1080: %s", e)
 
-        poly_str = _box_to_polygon(box_coords, width, height, padding)
+            poly_str = _box_to_polygon(box_coords, width, height, padding)
         tag = f"# TEMP_MASK_{mask_id}"
 
         # Fetch raw config

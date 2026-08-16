@@ -192,6 +192,10 @@ Right-clicking (desktop) or long-pressing (touch devices) any event thumbnail op
 
 * **Temporary Mask (Optional)**: Dynamically available when the companion `frigate_temp_mask` custom component is installed. Automatically calculates a 20% expanded bounding box around false detections (such as a wheelbarrow, package, or parked vehicle), injects a temporary mask into Frigate, and automatically restarts Frigate's backend process so the mask takes effect immediately.
 * **Change Duration / Remove Mask**: Right-clicking an already masked event allows changing the mask duration on the fly (1h, 4h, 8h, 12h, 24h, 48h, 7d, or Custom hours) or removing the mask.
+* **Live Video Feed Right-Click Menu & Mask Manager**: Right-clicking (or long-pressing) on the live video feed opens a dedicated management menu:
+  * **Manage Temporary Masks**: Opens an interactive Mask Manager modal displaying all active masks, remaining countdown timers, polygon coordinates, per-mask duration adjustments, and individual removal or bulk "Prune All" controls.
+  * **Visual Mask Overlays on Live Feed**: Real-time translucent SVG polygons and floating countdown tags (`🛡️ Mask · 22h left`) drawn directly over masked objects on the live camera stream. Can be toggled on/off in the right-click menu.
+  * **Live Mask Indicator**: Displays a subtle badge in the corner of the live feed showing the active mask count for that camera. Clicking the badge opens the Mask Manager.
 
 > [!NOTE]
 > **Restart Behavior**:
@@ -206,7 +210,7 @@ The card works completely standalone out of the box. If you would like to enable
 2. Add `frigate_temp_mask:` to your `/config/configuration.yaml`.
 3. Reload YAML or restart Home Assistant.
 
-The card will automatically detect the integration and display the **Temporary Mask**, **Change Duration**, and **Remove Mask** options in the right-click menu.
+The card will automatically detect the integration and display the **Temporary Mask**, **Change Duration**, and **Remove Mask** options in the right-click menu, as well as the Live Video Feed Mask Manager.
 
 
 ## Configuration Options
