@@ -8,7 +8,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, deleteEvent } from './frigate/api';
 
-const CARD_VERSION = '2.3.29';
+const CARD_VERSION = '2.3.34';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -1701,124 +1701,87 @@ export class FrigateEventsCard extends LitElement {
         color: #71717a;
       }
 
-      .mask-restart-banner {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-        background: rgba(245, 158, 11, 0.12);
-        border: 1px solid rgba(245, 158, 11, 0.35);
-        border-radius: 8px;
-        padding: 10px 14px;
-        margin-bottom: 4px;
-      }
-
-      .mask-restart-banner-info {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-      }
-
-      .restart-warning-icon {
-        width: 22px;
-        height: 22px;
-        fill: #fbbf24;
-        flex-shrink: 0;
-      }
-
-      .restart-banner-title {
-        font-size: 13px;
-        font-weight: 600;
-        color: #fde68a;
-      }
-
-      .restart-banner-desc {
-        font-size: 11px;
-        color: #d1d5db;
-        line-height: 1.3;
-        margin-top: 2px;
-      }
-
-      .mask-restart-btn {
+      .mask-manager-header-restart-btn {
         display: flex;
         align-items: center;
         gap: 6px;
-        padding: 6px 12px;
+        padding: 4px 9px;
         border-radius: 6px;
-        font-size: 12px;
-        font-weight: 600;
-        color: #1e1b4b;
-        background: #fbbf24;
-        border: none;
+        font-size: 11px;
+        font-weight: 500;
+        color: #cbd5e1;
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.15);
         cursor: pointer;
-        transition: background 0.15s, transform 0.15s;
+        transition: all 0.15s;
         font-family: inherit;
-        white-space: nowrap;
-        flex-shrink: 0;
       }
 
-      .mask-restart-btn:hover {
-        background: #f59e0b;
-        transform: scale(1.02);
+      .mask-manager-header-restart-btn:hover {
+        background: rgba(255, 255, 255, 0.15);
+        color: #fff;
+        border-color: rgba(255, 255, 255, 0.25);
       }
 
-      .mask-restart-btn svg {
-        width: 14px;
-        height: 14px;
+      .mask-manager-header-restart-btn svg {
+        width: 13px;
+        height: 13px;
         fill: currentColor;
       }
 
-      .mask-restart-btn-small {
-        display: inline-flex;
-        align-items: center;
-        gap: 5px;
-        padding: 4px 10px;
-        border-radius: 5px;
-        font-size: 11px;
-        font-weight: 600;
-        color: #1e1b4b;
-        background: #fbbf24;
-        border: none;
-        cursor: pointer;
-        transition: background 0.15s;
-        font-family: inherit;
-        margin-left: auto;
-      }
-
-      .mask-restart-btn-small:hover {
-        background: #f59e0b;
-      }
-
       .pending-masks-section {
-        margin-top: 12px;
-        padding-top: 12px;
-        border-top: 1px dashed rgba(245, 158, 11, 0.3);
+        margin-top: 10px;
+        padding-top: 10px;
+        border-top: 1px solid rgba(255, 255, 255, 0.08);
         display: flex;
         flex-direction: column;
-        gap: 10px;
+        gap: 8px;
       }
 
       .pending-section-title {
-        font-size: 12px;
+        font-size: 11px;
         font-weight: 600;
-        color: #fbbf24;
+        color: #64748b;
         text-transform: uppercase;
         letter-spacing: 0.5px;
       }
 
       .mask-card.pending-restart {
-        border-color: rgba(245, 158, 11, 0.35);
-        background: rgba(245, 158, 11, 0.05);
+        opacity: 0.65;
+        border-style: dashed;
       }
 
       .mask-card-time-badge.pending {
-        background: rgba(245, 158, 11, 0.2);
-        color: #fbbf24;
+        background: rgba(255, 255, 255, 0.08);
+        color: #94a3b8;
       }
 
-      .pending-notice {
-        color: #fde68a !important;
-        font-size: 11px !important;
+      .mask-pending-restart-action {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 4px 8px;
+        border-radius: 5px;
+        font-size: 11px;
+        font-weight: 500;
+        color: #94a3b8;
+        background: rgba(255, 255, 255, 0.06);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        cursor: pointer;
+        transition: all 0.15s;
+        font-family: inherit;
+        margin-left: auto;
+      }
+
+      .mask-pending-restart-action:hover {
+        background: rgba(255, 255, 255, 0.12);
+        color: #e2e8f0;
+      }
+
+      .mask-pending-restart-action svg {
+        width: 12px;
+        height: 12px;
+        fill: currentColor;
       }
     `;
     document.head.appendChild(style);
@@ -2157,7 +2120,7 @@ export class FrigateEventsCard extends LitElement {
           }
         }
         this.dispatchEvent(new CustomEvent('hass-notification', {
-          detail: { message: `Temporary mask applied for ${event.camera} (${durationHours}h)` },
+          detail: { message: `Temporary mask applied for ${event.camera}` },
           bubbles: true,
           composed: true,
         }));
@@ -2613,27 +2576,17 @@ export class FrigateEventsCard extends LitElement {
             <span class="mask-manager-count-badge">${totalCount} Active</span>
           </div>
           <div class="mask-manager-header-actions">
+            ${pendingMasks.length > 0 ? `
+              <button class="mask-manager-header-restart-btn" data-action="restart-frigate" title="Restart Frigate detector process to apply pending removals">
+                <svg viewBox="0 0 24 24"><path d="M12,4V1L8,5L12,9V6A6,6 0 0,1 18,12C18,13.34 17.56,14.58 16.82,15.58L18.25,17C19.34,15.61 20,13.88 20,12A8,8 0 0,0 12,4M12,18A6,6 0 0,1 6,12C6,10.66 6.44,9.42 7.18,8.42L5.75,7C4.66,8.39 4,10.12 4,12A8,8 0 0,0 12,20V23L16,19L12,15V18Z"/></svg>
+                <span>Restart Frigate</span>
+              </button>
+            ` : ''}
             <button class="frigate-events-modal-close" data-action="close">✕</button>
           </div>
         </div>
 
         <div class="mask-manager-body">
-          ${pendingMasks.length > 0 ? `
-            <div class="mask-restart-banner">
-              <div class="mask-restart-banner-info">
-                <svg viewBox="0 0 24 24" class="restart-warning-icon"><path d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,4A8,8 0 0,1 20,12A8,8 0 0,1 12,20A8,8 0 0,1 4,12A8,8 0 0,1 12,4M11,7V13H13V7H11M11,15V17H13V15H11Z"/></svg>
-                <div class="restart-banner-text">
-                  <div class="restart-banner-title">Restart Pending (${pendingMasks.length} removed ${pendingMasks.length === 1 ? 'mask' : 'masks'})</div>
-                  <div class="restart-banner-desc">Masks were removed from config on disk. Restart Frigate to unload them from detector memory now.</div>
-                </div>
-              </div>
-              <button class="mask-restart-btn" data-action="restart-frigate" title="Restart Frigate detector process now">
-                <svg viewBox="0 0 24 24"><path d="M12,4V1L8,5L12,9V6A6,6 0 0,1 18,12C18,13.34 17.56,14.58 16.82,15.58L18.25,17C19.34,15.61 20,13.88 20,12A8,8 0 0,0 12,4M12,18A6,6 0 0,1 6,12C6,10.66 6.44,9.42 7.18,8.42L5.75,7C4.66,8.39 4,10.12 4,12A8,8 0 0,0 12,20V23L16,19L12,15V18Z"/></svg>
-                <span>Restart Frigate</span>
-              </button>
-            </div>
-          ` : ''}
-
           ${cameras.length > 1 ? `
             <div class="mask-filter-tabs">
               <button class="mask-filter-tab ${filterCamera === 'all' ? 'active' : ''}" data-camera-filter="all">
@@ -2772,12 +2725,12 @@ export class FrigateEventsCard extends LitElement {
                           ${durationPresets.map(p => {
                             const isSelected = Math.abs(p.hours - currentDurationHours) < 0.01;
                             return `
-                              <button class="mask-duration-chip ${isSelected ? 'active' : ''}" data-action="set-duration" data-mask-id="${mask.mask_id}" data-camera="${mask.camera || ''}" data-hours="${p.hours}" data-poly="${mask.polygon || ''}">
+                              <button class="mask-duration-chip ${isSelected ? 'active' : ''}" data-action="set-duration" data-mask-id="${mask.mask_id}" data-camera="${mask.camera || ''}" data-hours="${p.hours}" data-poly="${mask.polygon || ''}" data-label="${mask.label || ''}">
                                 ${p.label}
                               </button>
                             `;
                           }).join('')}
-                          <button class="mask-duration-chip ${isCustom ? 'active' : ''}" data-action="custom-duration" data-mask-id="${mask.mask_id}" data-camera="${mask.camera || ''}" data-poly="${mask.polygon || ''}">
+                          <button class="mask-duration-chip ${isCustom ? 'active' : ''}" data-action="custom-duration" data-mask-id="${mask.mask_id}" data-camera="${mask.camera || ''}" data-poly="${mask.polygon || ''}" data-label="${mask.label || ''}">
                             ${isCustom ? `Custom (${currentDurationHours}h)` : 'Custom...'}
                           </button>
                         </div>
@@ -2796,7 +2749,7 @@ export class FrigateEventsCard extends LitElement {
           ${filteredPending.length > 0 ? `
             <div class="pending-masks-section">
               <div class="pending-section-title">
-                <span>Removed Masks (Pending Frigate Restart)</span>
+                <span>Removed (Pending Restart)</span>
               </div>
               <div class="mask-cards-list">
                 ${filteredPending.map((mask: any) => {
@@ -2826,22 +2779,19 @@ export class FrigateEventsCard extends LitElement {
                               <span class="mask-camera-pill">${this._formatCameraName(mask.camera || 'Camera')}</span>
                               <span class="mask-id-pill">#${mask.mask_id}</span>
                             </div>
-                            <div class="mask-card-time-badge pending">
-                              <span>Pending Restart</span>
-                            </div>
                           </div>
                           <div class="mask-card-details">
                             <div class="mask-detail-row">
                               <span class="detail-label">Status:</span>
-                              <span class="detail-value pending-notice">Removed from config · Awaiting Frigate restart to unload</span>
+                              <span class="detail-value" style="color: #94a3b8; font-size: 11px;">Removed from config (unloads on Frigate restart)</span>
                             </div>
                           </div>
                         </div>
                       </div>
                       <div class="mask-card-actions">
-                        <button class="mask-restart-btn-small" data-action="restart-frigate">
-                          <svg viewBox="0 0 24 24" style="width: 13px; height: 13px; fill: currentColor;"><path d="M12,4V1L8,5L12,9V6A6,6 0 0,1 18,12C18,13.34 17.56,14.58 16.82,15.58L18.25,17C19.34,15.61 20,13.88 20,12A8,8 0 0,0 12,4M12,18A6,6 0 0,1 6,12C6,10.66 6.44,9.42 7.18,8.42L5.75,7C4.66,8.39 4,10.12 4,12A8,8 0 0,0 12,20V23L16,19L12,15V18Z"/></svg>
-                          <span>Restart Frigate Now</span>
+                        <button class="mask-pending-restart-action" data-action="restart-frigate">
+                          <svg viewBox="0 0 24 24"><path d="M12,4V1L8,5L12,9V6A6,6 0 0,1 18,12C18,13.34 17.56,14.58 16.82,15.58L18.25,17C19.34,15.61 20,13.88 20,12A8,8 0 0,0 12,4M12,18A6,6 0 0,1 6,12C6,10.66 6.44,9.42 7.18,8.42L5.75,7C4.66,8.39 4,10.12 4,12A8,8 0 0,0 12,20V23L16,19L12,15V18Z"/></svg>
+                          <span>Restart Frigate</span>
                         </button>
                       </div>
                     </div>
@@ -2884,8 +2834,9 @@ export class FrigateEventsCard extends LitElement {
         const camera = (btn as HTMLElement).getAttribute('data-camera') || '';
         const hours = parseFloat((btn as HTMLElement).getAttribute('data-hours') || '24');
         const polygon = (btn as HTMLElement).getAttribute('data-poly') || undefined;
+        const label = (btn as HTMLElement).getAttribute('data-label') || undefined;
         if (maskId) {
-          await this._executeChangeMaskDurationById(maskId, camera, hours, polygon);
+          await this._executeChangeMaskDurationById(maskId, camera, hours, polygon, label);
         }
       });
     });
@@ -2896,12 +2847,13 @@ export class FrigateEventsCard extends LitElement {
         const maskId = (btn as HTMLElement).getAttribute('data-mask-id');
         const camera = (btn as HTMLElement).getAttribute('data-camera') || '';
         const polygon = (btn as HTMLElement).getAttribute('data-poly') || undefined;
+        const label = (btn as HTMLElement).getAttribute('data-label') || undefined;
         const input = window.prompt('Enter temporary mask duration in hours:', '24');
         if (!input) return;
         const parsed = parseFloat(input.trim());
         if (isNaN(parsed) || parsed <= 0) return;
         if (maskId) {
-          await this._executeChangeMaskDurationById(maskId, camera, parsed, polygon);
+          await this._executeChangeMaskDurationById(maskId, camera, parsed, polygon, label);
         }
       });
     });
@@ -3016,7 +2968,8 @@ export class FrigateEventsCard extends LitElement {
     maskId: string,
     camera: string,
     durationHours: number,
-    polygon?: string
+    polygon?: string,
+    label?: string
   ): Promise<void> {
     if (!this.hass) return;
     try {
@@ -3027,6 +2980,7 @@ export class FrigateEventsCard extends LitElement {
             camera: camera,
             duration_hours: durationHours,
             polygon: polygon,
+            label: label,
           });
         } catch {
           await this.hass.callService('shell_command', 'frigate_add_temp_mask', {

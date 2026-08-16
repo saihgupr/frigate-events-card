@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import asyncio
+import re
 import yaml
 from datetime import datetime, timedelta
 
@@ -138,6 +139,9 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
 
             poly_str = _box_to_polygon(box_coords, width, height, padding)
         tag = f"# TEMP_MASK_{mask_id}"
+        label_val = call.data.get("label", "")
+        if not label_val and "event_data" in locals() and isinstance(event_data, dict):
+            label_val = event_data.get("label", "")
 
         # Fetch raw config
         raw_config = ""
@@ -149,22 +153,68 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
             _LOGGER.error("Failed to read Frigate config: %s", e)
             return
 
-        # Remove existing instance if replacing
-        if tag in raw_config:
-            lines = [l for l in raw_config.splitlines() if tag not in l]
-            raw_config = "\n".join(lines) + "\n"
+        def _inject_temp_mask(config_text: str, polygon: str, mask_tag: str, obj_label: str = "") -> str:
+            lines = [l for l in config_text.splitlines() if mask_tag not in l]
+            cleaned = "\n".join(lines) + "\n"
+            obj_label = obj_label.lower().strip() if obj_label else ""
+            if obj_label in ["people", "person", "human", "persons"]:
+                obj_label = "person"
 
-        target_needle = "objects:\n  mask:"
-        new_entry = f"objects:\n  mask:\n  - {poly_str} {tag}"
+            if obj_label:
+                f_match = re.search(r"^([ ]*)filters:\s*$", cleaned, re.MULTILINE)
+                if f_match:
+                    f_indent = f_match.group(1)
+                    label_pattern = rf"^{f_indent}  {re.escape(obj_label)}:\s*$"
+                    l_match = re.search(label_pattern, cleaned, re.MULTILINE)
+                    if l_match:
+                        label_pos = l_match.end()
+                        rest = cleaned[label_pos:]
+                        mask_match = re.search(rf"^([ ]+)mask:\s*$", rest, re.MULTILINE)
+                        next_peer = re.search(rf"^{f_indent}  [a-zA-Z0-9_-]+:\s*$", rest, re.MULTILINE)
+                        
+                        if mask_match and (not next_peer or mask_match.start() < next_peer.start()):
+                            mask_indent = mask_match.group(1)
+                            mask_line_end = label_pos + mask_match.end()
+                            after_mask = cleaned[mask_line_end:]
+                            
+                            item_match = re.search(r"^\n?([ ]*)- ", after_mask)
+                            item_indent = item_match.group(1) if item_match else mask_indent
+                            
+                            insertion = f"\n{item_indent}- {polygon} {mask_tag}"
+                            return cleaned[:mask_line_end] + insertion + cleaned[mask_line_end:]
+                        else:
+                            label_indent = f_indent + "  "
+                            mask_indent = label_indent + "  "
+                            item_indent = mask_indent
+                            insertion = f"\n{mask_indent}mask:\n{item_indent}- {polygon} {mask_tag}"
+                            return cleaned[:label_pos] + insertion + cleaned[label_pos:]
+                    else:
+                        f_pos = f_match.end()
+                        label_indent = f_indent + "  "
+                        mask_indent = label_indent + "  "
+                        item_indent = mask_indent
+                        insertion = f"\n{label_indent}{obj_label}:\n{mask_indent}mask:\n{item_indent}- {polygon} {mask_tag}"
+                        return cleaned[:f_pos] + insertion + cleaned[f_pos:]
 
-        if target_needle in raw_config:
-            updated_config = raw_config.replace(target_needle, new_entry, 1)
-        else:
-            data = yaml.safe_load(raw_config) or {}
-            data.setdefault("objects", {}).setdefault("mask", [])
-            if isinstance(data["objects"]["mask"], list):
-                data["objects"]["mask"].append(f"{poly_str} {tag}")
-            updated_config = yaml.dump(data, default_flow_style=False, sort_keys=False)
+            obj_match = re.search(r"^([ ]*)objects:\s*$", cleaned, re.MULTILINE)
+            if obj_match:
+                obj_indent = obj_match.group(1)
+                rest = cleaned[obj_match.end():]
+                mask_match = re.search(rf"^([ ]+)mask:\s*$", rest, re.MULTILINE)
+                if mask_match:
+                    mask_line_end = obj_match.end() + mask_match.end()
+                    after_mask = cleaned[mask_line_end:]
+                    item_match = re.search(r"^\n?([ ]*)- ", after_mask)
+                    item_indent = item_match.group(1) if item_match else mask_match.group(1)
+                    insertion = f"\n{item_indent}- {polygon} {mask_tag}"
+                    return cleaned[:mask_line_end] + insertion + cleaned[mask_line_end:]
+                else:
+                    insertion = f"\n{obj_indent}  mask:\n{obj_indent}  - {polygon} {mask_tag}"
+                    return cleaned[:obj_match.end()] + insertion + cleaned[obj_match.end():]
+
+            return cleaned + f"\nobjects:\n  mask:\n  - {polygon} {mask_tag}\n"
+
+        updated_config = _inject_temp_mask(raw_config, poly_str, tag, label_val)
 
         # Save and restart Frigate process
         try:
@@ -191,9 +241,6 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
 
         # Record active mask metadata
         expires_at = datetime.utcnow() + timedelta(hours=duration_hours)
-        label_val = call.data.get("label", "")
-        if not label_val and "event_data" in locals() and isinstance(event_data, dict):
-            label_val = event_data.get("label", "")
         
         # Remove from pending if re-adding
         hass.data[DOMAIN]["pending_restart_masks"].pop(mask_id, None)
