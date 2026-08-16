@@ -111,20 +111,19 @@ frigate_prune_all_temp_masks: python3 /config/scripts/frigate_temp_mask.py prune
 * `input_text.frigate_temp_mask_active`: Stores active mask ID.
 
 ### D. Automations
-* `automation.frigate_notifications`: Includes `Ignore False Alarm (24h Mask)` actionable notification button with event ID tag.
-* `automation.frigate_handle_temporary_mask_action`: Catches `mobile_app_notification_action` and `ios.notification_action_fired` (action: `MUTE_TEMPORARY_OBJECT`), triggers injection, starts 24h timer.
+* `automation.frigate_notifications`: Includes `Temporary Mask Object` actionable notification button with event ID tag.
+* `automation.frigate_handle_temporary_mask_action`: Catches `mobile_app_notification_action` and `ios.notification_action_fired` (action: `MUTE_TEMPORARY_OBJECT`), triggers injection, starts timer.
 * `automation.frigate_clean_up_temporary_mask_on_expiry_or_cancel`: Triggers on `timer.finished` or `CANCEL_FRIGATE_MASK` action to prune mask from Frigate config.
 
 ---
 
 ## 4. Frigate Events Card Frontend Integration Design
 
-When adding this functionality directly into `frigate-events-card`:
-
-### A. UI Placement
-Add an action button or context menu option on each event card item:
-* **Icon:** `mdi:shield-outline` or `mdi:eye-off-outline`
-* **Tooltip / Label:** `Ignore False Alarm (24h Mask)`
+### A. Context Menu Placement
+Right-click on desktop or long-press on mobile touch devices:
+* **Icon:** `mdi:shield-outline`
+* **Label:** `Temporary Mask Object` / `Unmask Object`
+* **Delete Action:** `Delete Event` (calls Frigate DELETE API)
 
 ### B. Service Call Execution
 The card interacts with Home Assistant using the standard `this.hass.callService()` API:
