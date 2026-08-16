@@ -8,7 +8,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, deleteEvent } from './frigate/api';
 
-const CARD_VERSION = '2.3.5';
+const CARD_VERSION = '2.3.6';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -1128,69 +1128,6 @@ export class FrigateEventsCard extends LitElement {
         white-space: pre-wrap;
       }
 
-      .frigate-events-modal-actions {
-        border-top: 1px solid var(--divider-color, rgba(255, 255, 255, 0.15));
-        padding-top: 12px;
-        margin-top: 4px;
-        display: flex;
-        align-items: center;
-        justify-content: flex-end;
-        gap: 8px;
-        width: 100%;
-        box-sizing: border-box;
-      }
-
-      .frigate-events-modal-mask-btn {
-        background: rgba(255, 255, 255, 0.08);
-        border: 1px solid rgba(255, 255, 255, 0.18);
-        color: var(--primary-text-color, #ffffff);
-        padding: 7px 13px;
-        border-radius: 8px;
-        font-size: 12.5px;
-        font-weight: 500;
-        cursor: pointer;
-        display: inline-flex;
-        align-items: center;
-        gap: 7px;
-        transition: all 0.2s ease;
-        font-family: inherit;
-        user-select: none;
-        box-sizing: border-box;
-      }
-
-      .frigate-events-modal-mask-btn:hover:not(:disabled) {
-        background: rgba(255, 255, 255, 0.16);
-        border-color: rgba(255, 255, 255, 0.35);
-      }
-
-      .frigate-events-modal-mask-btn:active:not(:disabled) {
-        transform: scale(0.98);
-      }
-
-      .frigate-events-modal-mask-btn:disabled {
-        opacity: 0.6;
-        cursor: not-allowed;
-      }
-
-      .frigate-events-modal-mask-btn.active {
-        background: rgba(239, 68, 68, 0.2);
-        border-color: rgba(239, 68, 68, 0.55);
-        color: #fca5a5;
-      }
-
-      .frigate-events-modal-mask-btn.active:hover:not(:disabled) {
-        background: rgba(239, 68, 68, 0.3);
-        border-color: rgba(239, 68, 68, 0.75);
-      }
-
-      .frigate-events-modal-mask-btn svg {
-        width: 15px;
-        height: 15px;
-        fill: currentColor;
-        flex-shrink: 0;
-        display: block;
-      }
-
       .frigate-events-context-menu {
         position: fixed;
         z-index: 10000;
@@ -1415,10 +1352,6 @@ export class FrigateEventsCard extends LitElement {
     const showDescription = this._config?.show_description !== false;
     const showCameraName = this._config?.show_camera_name !== false;
     const showZones = this._config?.show_zones !== false;
-    const showTempMask = this._config?.show_temp_mask !== false;
-    const maskId = event.id.includes('-') ? event.id.split('-')[0] : event.id;
-    const activeMask = this.hass?.states?.['input_text.frigate_temp_mask_active']?.state;
-    const isMaskActive = !!(activeMask && (activeMask === maskId || activeMask.includes(maskId)));
 
     // Check next/prev events
     const orderedEvents = this._getEventsToShow();
@@ -1485,17 +1418,6 @@ export class FrigateEventsCard extends LitElement {
                </div>`
             : ''
           }
-          ${showTempMask
-            ? `<div class="frigate-events-modal-actions">
-                 <button class="frigate-events-modal-mask-btn ${isMaskActive ? 'active' : ''}" title="${isMaskActive ? 'Click to remove temporary mask' : 'Temporarily ignore false alarms from this object for 24 hours'}">
-                   <svg viewBox="0 0 24 24">
-                     <path d="M12,1L3,5V11C3,16.55 6.84,21.74 12,23C17.16,21.74 21,16.55 21,11V5L12,1M12,5A6,6 0 0,1 18,11C18,14.07 15.63,16.63 12.64,16.96L12,17L11.36,16.96C8.37,16.63 6,14.07 6,11A6,6 0 0,1 12,5Z"/>
-                   </svg>
-                   <span class="mask-btn-text">${isMaskActive ? 'Mask Active (Click to Remove)' : 'Ignore False Alarm (24h Mask)'}</span>
-                 </button>
-               </div>`
-            : ''
-          }
         </div>
       </div>
     `;
@@ -1513,15 +1435,6 @@ export class FrigateEventsCard extends LitElement {
     // Close button handler
     const closeBtn = container.querySelector('.frigate-events-modal-close');
     closeBtn?.addEventListener('click', () => this._handleModalClose());
-
-    // Temporary mask button handler
-    if (showTempMask) {
-      const maskBtn = container.querySelector('.frigate-events-modal-mask-btn') as HTMLButtonElement | null;
-      maskBtn?.addEventListener('click', (e) => {
-        e.stopPropagation();
-        this._handleToggleTempMask(event, maskBtn);
-      });
-    }
 
     // Navigation button handlers
     if (showNav && hasPrev) {
@@ -1616,23 +1529,6 @@ export class FrigateEventsCard extends LitElement {
       console.error('Failed to toggle temporary mask:', err);
       return isCurrentlyActive;
     }
-  }
-
-  private async _handleToggleTempMask(event: FrigateEvent, maskBtn: HTMLButtonElement): Promise<void> {
-    const textSpan = maskBtn.querySelector('.mask-btn-text');
-    maskBtn.disabled = true;
-    if (textSpan) textSpan.textContent = 'Updating...';
-
-    const isNowActive = await this._executeTempMaskToggle(event);
-
-    if (isNowActive) {
-      maskBtn.classList.add('active');
-      if (textSpan) textSpan.textContent = 'Mask Active (Click to Remove)';
-    } else {
-      maskBtn.classList.remove('active');
-      if (textSpan) textSpan.textContent = 'Ignore False Alarm (24h Mask)';
-    }
-    maskBtn.disabled = false;
   }
 
   private _handleContextMenu(e: MouseEvent, event: FrigateEvent): void {
