@@ -188,7 +188,7 @@ video_on_hover: true
 
 ### Context Menu & Temporary Masking
 
-Right-clicking (desktop) or long-pressing (touch devices) any event thumbnail opens a sleek context menu:
+Right-clicking (desktop) or long-pressing (touch devices) any event thumbnail opens a context menu:
 
 * **View Details**: Opens the full event snapshot or video player with complete telemetry.
 * **Delete Event**: Permanently deletes the event from Frigate storage via Frigate's `DELETE /api/events/{id}` API.
