@@ -8,7 +8,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, deleteEvent } from './frigate/api';
 
-const CARD_VERSION = '2.3.12';
+const CARD_VERSION = '2.3.13';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -2119,24 +2119,12 @@ export class FrigateEventsCard extends LitElement {
     return html`
       <ha-card>
         <div class="content">
-          ${this._config.debug ? html`
-            <div class="debug-banner">
-              <span>v${CARD_VERSION} • Instance: ${this._config.frigate_client_id || 'frigate'} • Events: ${this._events.length}</span>
-              ${!this._loading && !this._error && this._events.length === 0 ? html`
-                <div class="debug-warning">0 events returned. Verify Frigate has <code>snapshots: enabled: true</code>.</div>
-              ` : ''}
-            </div>
-          ` : ''}
+          ${this._config.debug ? html`<div class="debug-version">v${CARD_VERSION}</div>` : ''}
           ${this._config.live_view ? this._renderLiveView() : ''}
           ${this._loading && this._events.length === 0
             ? html`<div class="loading"></div>`
             : this._error && this._events.length === 0
-              ? (this._config.debug ? html`
-                <div class="events-error">
-                  <span>⚠ ${this._error}</span>
-                  <span class="events-error-detail">Check your Frigate integration connection and instance ID.</span>
-                </div>
-              ` : html``)
+              ? html``
               : html`
                   <div class="events-container">
                     ${showScrollArrows ? html`
@@ -2456,43 +2444,13 @@ export class FrigateEventsCard extends LitElement {
         display: block;
       }
       
-      .debug-banner {
+      .debug-version {
         font-size: 10px;
         color: var(--secondary-text-color, #aaa);
         padding: 2px 8px;
         text-align: right;
         font-family: monospace;
         opacity: 0.8;
-        display: flex;
-        flex-direction: column;
-        align-items: flex-end;
-        gap: 2px;
-      }
-
-      .debug-warning {
-        color: var(--warning-color, #f59e0b);
-        font-size: 10px;
-      }
-
-      .events-error {
-        min-height: 80px;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        gap: 6px;
-        color: var(--secondary-text-color, #aaa);
-        font-size: 13px;
-        padding: 16px;
-        text-align: center;
-        background: rgba(0, 0, 0, 0.2);
-        border-radius: 12px;
-      }
-
-      .events-error-detail {
-        font-size: 11px;
-        opacity: 0.7;
-        max-width: 90%;
       }
 
       /* ─── Live view ────────────────────────────────────────── */
