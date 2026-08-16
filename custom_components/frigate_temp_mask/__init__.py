@@ -89,6 +89,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         except (ValueError, TypeError):
             duration_hours = 24.0
         padding = call.data.get("padding", DEFAULT_PADDING)
+        label_val = call.data.get("label", "")
 
         session = async_get_clientsession(hass)
         base_url = _get_frigate_base_url()
@@ -138,11 +139,16 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
 
         poly_str = polygon_arg
         if not box_coords and not poly_str:
-            # Check if mask_id already exists in active_masks to reuse polygon and camera
+            # Check if mask_id already exists in active_masks to reuse polygon, camera, and label
             if mask_id in hass.data[DOMAIN]["active_masks"]:
-                poly_str = hass.data[DOMAIN]["active_masks"][mask_id].get("polygon", "")
+                existing = hass.data[DOMAIN]["active_masks"][mask_id]
+                poly_str = existing.get("polygon", "")
                 if not camera or camera == "wyze_camera":
-                    camera = hass.data[DOMAIN]["active_masks"][mask_id].get("camera", camera)
+                    camera = existing.get("camera", camera)
+                if not label_val:
+                    label_val = existing.get("label", "")
+                if not box_coords:
+                    box_coords = existing.get("box")
 
         if not box_coords and not poly_str:
             _LOGGER.error("No valid bounding box, polygon, or event ID found for mask addition.")
@@ -247,24 +253,40 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
 
         updated_config = _inject_temp_mask(raw_config, poly_str, tag, label_val)
 
-        # Save and restart Frigate process
-        try:
-            async with session.post(
-                f"{base_url}/api/config/save",
-                data=updated_config.encode("utf-8"),
-                headers={"Content-Type": "text/plain"},
-                timeout=15
-            ) as resp:
-                resp.raise_for_status()
-            
-            # Restart backend to load into memory
-            async with session.post(f"{base_url}/api/restart", timeout=10) as restart_resp:
-                _LOGGER.info("Frigate restart triggered: %s", restart_resp.status)
-                # Restart applied all pending changes
-                hass.data[DOMAIN]["pending_restart_masks"].clear()
-        except Exception as e:
-            _LOGGER.error("Failed to save Frigate config: %s", e)
-            return
+        # Check if the mask is already active and config is unchanged (duration-only update)
+        existing_mask = hass.data[DOMAIN]["active_masks"].get(mask_id)
+        tag_already_in_config = tag in raw_config
+        is_same_geometry = existing_mask and existing_mask.get("polygon") == poly_str
+        is_config_identical = updated_config.strip() == raw_config.strip()
+        is_pending_restart = mask_id in hass.data[DOMAIN]["pending_restart_masks"]
+
+        is_duration_only = tag_already_in_config and not is_pending_restart and (is_same_geometry or is_config_identical)
+
+        if is_duration_only:
+            _LOGGER.info(
+                "Temporary mask %s is already active in Frigate config. Updated duration to %s hours without Frigate restart.",
+                mask_id,
+                duration_hours
+            )
+        else:
+            # Save and restart Frigate process
+            try:
+                async with session.post(
+                    f"{base_url}/api/config/save",
+                    data=updated_config.encode("utf-8"),
+                    headers={"Content-Type": "text/plain"},
+                    timeout=15
+                ) as resp:
+                    resp.raise_for_status()
+                
+                # Restart backend to load into memory
+                async with session.post(f"{base_url}/api/restart", timeout=10) as restart_resp:
+                    _LOGGER.info("Frigate restart triggered: %s", restart_resp.status)
+                    # Restart applied all pending changes
+                    hass.data[DOMAIN]["pending_restart_masks"].clear()
+            except Exception as e:
+                _LOGGER.error("Failed to save Frigate config: %s", e)
+                return
 
         # Cancel any previous timer for this mask
         if mask_id in hass.data[DOMAIN]["timers"]:
@@ -396,6 +418,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
             _LOGGER.error("Failed to restart Frigate: %s", e)
 
     hass.services.async_register(DOMAIN, "add_mask", async_handle_add_mask)
+    hass.services.async_register(DOMAIN, "set_duration", async_handle_add_mask)
     hass.services.async_register(DOMAIN, "remove_mask", async_handle_remove_mask)
     hass.services.async_register(DOMAIN, "prune_all", async_handle_prune_all)
     hass.services.async_register(DOMAIN, "restart", async_handle_restart)
