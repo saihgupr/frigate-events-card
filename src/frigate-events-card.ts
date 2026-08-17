@@ -8,7 +8,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, deleteEvent } from './frigate/api';
 
-const CARD_VERSION = '2.3.36';
+const CARD_VERSION = '2.3.37';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -2265,6 +2265,10 @@ export class FrigateEventsCard extends LitElement {
         <svg viewBox="0 0 24 24"><path d="M12,9A3,3 0 0,0 9,12A3,3 0 0,0 12,15A3,3 0 0,0 15,12A3,3 0 0,0 12,9M12,17A5,5 0 0,1 7,12A5,5 0 0,1 12,7A5,5 0 0,1 17,12A5,5 0 0,1 12,7M12,4.5C7,4.5 2.73,7.61 1,12C2.73,16.39 7,19.5 12,19.5C17,19.5 21.27,16.39 23,12C21.27,7.61 17,4.5 12,4.5Z"/></svg>
         <span>View Details</span>
       </button>
+      <button class="frigate-events-context-item" data-action="open-mask-manager">
+        <svg viewBox="0 0 24 24"><path d="M2,2H8V4H16V2H22V8H20V16H22V22H16V20H8V22H2V16H4V8H2V2M4,4V6H6V4H4M18,4V6H20V4H18M20,18V20H18V18H20M4,18V20H6V18H4M8,6V8H6V16H8V18H16V16H18V8H16V6H8M9,9H15V15H9V9Z"/></svg>
+        <span>Manage Temp Masks</span>
+      </button>
       ${hasTempMaskIntegration ? `
       <div class="frigate-events-context-separator"></div>
       ${isMaskActive ? `
@@ -2347,6 +2351,12 @@ export class FrigateEventsCard extends LitElement {
       e.stopPropagation();
       this._closeContextMenu();
       this._handleEventClick(event);
+    });
+
+    menu.querySelector('[data-action="open-mask-manager"]')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this._closeContextMenu();
+      this._showMaskManagerModal();
     });
 
     if (hasTempMaskIntegration) {
@@ -3454,8 +3464,17 @@ export class FrigateEventsCard extends LitElement {
     }
 
     let renderedEvents = eventsToShow.map(event => this._renderEvent(event));
-    let renderedPlaceholders = Array(placeholderCount).fill(0).map(() => 
-      html`<div class="placeholder" title="No events found. Check that snapshots: enabled: true in Frigate."></div>`
+    const hasTempMask = !!(this._config?.show_temp_mask !== false &&
+      (this.hass?.services?.['frigate_temp_mask'] || this.hass?.states?.['sensor.frigate_active_masks']));
+    let renderedPlaceholders = Array(placeholderCount).fill(0).map(() =>
+      html`<div
+        class="placeholder"
+        title="No events found. Check that snapshots: enabled: true in Frigate."
+        @contextmenu=${hasTempMask ? (e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); this._showMaskManagerModal(); } : undefined}
+        @touchstart=${hasTempMask ? (e: TouchEvent) => { if (e.touches.length !== 1) return; this._liveTouchTimeout = setTimeout(() => this._showMaskManagerModal(), 500); } : undefined}
+        @touchend=${hasTempMask ? () => { if (this._liveTouchTimeout) { clearTimeout(this._liveTouchTimeout); this._liveTouchTimeout = undefined; } } : undefined}
+        @touchcancel=${hasTempMask ? () => { if (this._liveTouchTimeout) { clearTimeout(this._liveTouchTimeout); this._liveTouchTimeout = undefined; } } : undefined}
+      ></div>`
     );
     
     let allItems = [...renderedEvents, ...renderedPlaceholders];
@@ -3550,7 +3569,6 @@ export class FrigateEventsCard extends LitElement {
         @touchstart=${(e: TouchEvent) => this._handleLiveViewTouchStart(e)}
         @touchend=${() => this._handleLiveViewTouchEnd()}
         @touchcancel=${() => this._handleLiveViewTouchEnd()}
-        title="Click for fullscreen · Right-click for temporary masks"
       >
         <video
           class="live-view-video"
