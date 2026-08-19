@@ -5,12 +5,12 @@ import logging
 import asyncio
 import re
 import yaml
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.event import async_call_later
+from homeassistant.helpers.event import async_call_later, async_track_time_interval
 from homeassistant.helpers.typing import ConfigType
 
 DOMAIN = "frigate_temp_mask"
@@ -18,18 +18,29 @@ _LOGGER = logging.getLogger(__name__)
 
 DEFAULT_FRIGATE_URL = "http://192.168.1.211:5000"
 DEFAULT_PADDING = 0.20
+SYNC_INTERVAL_SECONDS = 30
+
+
+def _parse_iso_to_timestamp(iso_str: str | None) -> float | None:
+    """Parse ISO formatted timestamp string to float epoch seconds."""
+    if not iso_str:
+        return None
+    try:
+        clean_str = iso_str.replace("Z", "+00:00")
+        return datetime.fromisoformat(clean_str).timestamp()
+    except Exception:
+        return None
+
 
 async def _async_setup_core(hass: HomeAssistant) -> bool:
     """Register services and initialize core data structures."""
-    if DOMAIN in hass.data and hass.data[DOMAIN].get("services_registered"):
-        return True
-
-    hass.data.setdefault(DOMAIN, {
-        "timers": {},
-        "active_masks": {},
-        "pending_restart_masks": {},
-        "services_registered": True
-    })
+    hass.data.setdefault(DOMAIN, {})
+    domain_data = hass.data[DOMAIN]
+    domain_data.setdefault("timers", {})
+    domain_data.setdefault("active_masks", {})
+    domain_data.setdefault("pending_restart_masks", {})
+    domain_data.setdefault("services_registered", False)
+    domain_data.setdefault("unsub_sync", None)
 
     def _get_frigate_base_url() -> str:
         # Check if Frigate integration data is available
@@ -62,8 +73,8 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         return f"{x_min},{y_min},{x_max},{y_min},{x_max},{y_max},{x_min},{y_max}"
 
     def _update_state():
-        active = hass.data[DOMAIN].get("active_masks", {})
-        pending = hass.data[DOMAIN].get("pending_restart_masks", {})
+        active = domain_data.get("active_masks", {})
+        pending = domain_data.get("pending_restart_masks", {})
         count = len(active)
         pending_count = len(pending)
         hass.states.async_set(
@@ -78,6 +89,65 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                 "pending_count": pending_count,
             }
         )
+
+    async def _async_sync_frigate_state() -> None:
+        """Synchronize mask state with running Frigate process uptime and active config."""
+        session = async_get_clientsession(hass)
+        base_url = _get_frigate_base_url()
+
+        frigate_boot_ts: float | None = None
+        try:
+            async with session.get(f"{base_url}/api/stats", timeout=5) as resp:
+                if resp.status == 200:
+                    stats = await resp.json()
+                    service_info = stats.get("service", {})
+                    uptime = service_info.get("uptime")
+                    last_updated = service_info.get("last_updated")
+                    if uptime is not None:
+                        ref_time = float(last_updated) if last_updated else datetime.now(timezone.utc).timestamp()
+                        frigate_boot_ts = ref_time - float(uptime)
+        except Exception as e:
+            _LOGGER.debug("Could not fetch Frigate stats for restart sync: %s", e)
+
+        # 1. Prune pending restart masks if Frigate booted after the mask was removed
+        pending = domain_data.get("pending_restart_masks", {})
+        if pending and frigate_boot_ts is not None:
+            to_prune: list[str] = []
+            for mask_id, mask_data in list(pending.items()):
+                removed_at_str = mask_data.get("removed_at")
+                removed_ts = _parse_iso_to_timestamp(removed_at_str)
+                if removed_ts is not None:
+                    # If Frigate booted after (or within 10s of) removal, Frigate loaded without the mask
+                    if removed_ts <= frigate_boot_ts + 10:
+                        to_prune.append(mask_id)
+                else:
+                    # No timestamp, but Frigate has booted
+                    to_prune.append(mask_id)
+
+            if to_prune:
+                for mask_id in to_prune:
+                    _LOGGER.info(
+                        "Frigate restarted after mask %s removal (Frigate boot time: %s). Auto-cleared pending restart state.",
+                        mask_id,
+                        datetime.fromtimestamp(frigate_boot_ts, timezone.utc).isoformat()
+                    )
+                    pending.pop(mask_id, None)
+                _update_state()
+
+        # 2. Check for any active masks whose duration expired while offline or timers stalled
+        active = domain_data.get("active_masks", {})
+        if active:
+            now_ts = datetime.now(timezone.utc).timestamp()
+            expired_ids: list[str] = []
+            for mask_id, mask_data in list(active.items()):
+                exp_str = mask_data.get("expires_at")
+                exp_ts = _parse_iso_to_timestamp(exp_str)
+                if exp_ts is not None and exp_ts <= now_ts:
+                    expired_ids.append(mask_id)
+
+            for mask_id in expired_ids:
+                _LOGGER.info("Active mask %s expired during sync check, pruning...", mask_id)
+                await async_handle_remove_mask(ServiceCall(DOMAIN, "remove_mask", {"mask_id": mask_id}))
 
     async def async_handle_add_mask(call: ServiceCall):
         camera = call.data.get("camera", "wyze_camera")
@@ -140,8 +210,8 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         poly_str = polygon_arg
         if not box_coords and not poly_str:
             # Check if mask_id already exists in active_masks to reuse polygon, camera, and label
-            if mask_id in hass.data[DOMAIN]["active_masks"]:
-                existing = hass.data[DOMAIN]["active_masks"][mask_id]
+            if mask_id in domain_data["active_masks"]:
+                existing = domain_data["active_masks"][mask_id]
                 poly_str = existing.get("polygon", "")
                 if not camera or camera == "wyze_camera":
                     camera = existing.get("camera", camera)
@@ -254,11 +324,11 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         updated_config = _inject_temp_mask(raw_config, poly_str, tag, label_val)
 
         # Check if the mask is already active and config is unchanged (duration-only update)
-        existing_mask = hass.data[DOMAIN]["active_masks"].get(mask_id)
+        existing_mask = domain_data["active_masks"].get(mask_id)
         tag_already_in_config = tag in raw_config
         is_same_geometry = existing_mask and existing_mask.get("polygon") == poly_str
         is_config_identical = updated_config.strip() == raw_config.strip()
-        is_pending_restart = mask_id in hass.data[DOMAIN]["pending_restart_masks"]
+        is_pending_restart = mask_id in domain_data["pending_restart_masks"]
 
         is_duration_only = tag_already_in_config and not is_pending_restart and (is_same_geometry or is_config_identical)
 
@@ -283,27 +353,27 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                 async with session.post(f"{base_url}/api/restart", timeout=10) as restart_resp:
                     _LOGGER.info("Frigate restart triggered: %s", restart_resp.status)
                     # Restart applied all pending changes
-                    hass.data[DOMAIN]["pending_restart_masks"].clear()
+                    domain_data["pending_restart_masks"].clear()
             except Exception as e:
                 _LOGGER.error("Failed to save Frigate config: %s", e)
                 return
 
         # Cancel any previous timer for this mask
-        if mask_id in hass.data[DOMAIN]["timers"]:
-            hass.data[DOMAIN]["timers"][mask_id]()
+        if mask_id in domain_data["timers"]:
+            domain_data["timers"][mask_id]()
 
         # Record active mask metadata
-        expires_at = datetime.utcnow() + timedelta(hours=duration_hours)
+        expires_at = datetime.now(timezone.utc) + timedelta(hours=duration_hours)
         
         # Remove from pending if re-adding
-        hass.data[DOMAIN]["pending_restart_masks"].pop(mask_id, None)
+        domain_data["pending_restart_masks"].pop(mask_id, None)
 
-        hass.data[DOMAIN]["active_masks"][mask_id] = {
+        domain_data["active_masks"][mask_id] = {
             "mask_id": mask_id,
             "camera": camera,
             "polygon": poly_str,
             "duration_hours": duration_hours,
-            "expires_at": expires_at.isoformat() + "Z",
+            "expires_at": expires_at.isoformat().replace("+00:00", "Z"),
             "event_id": event_id or mask_id,
             "label": label_val,
             "box": box_coords if box_coords else None,
@@ -317,7 +387,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
 
         duration_seconds = int(duration_hours * 3600)
         unsub = async_call_later(hass, duration_seconds, _expire_callback)
-        hass.data[DOMAIN]["timers"][mask_id] = unsub
+        domain_data["timers"][mask_id] = unsub
 
         _LOGGER.info("Added temporary mask %s for %s (%s hours)", mask_id, camera, duration_hours)
 
@@ -327,14 +397,14 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
             return
 
         # Cancel expiration timer
-        if mask_id in hass.data[DOMAIN]["timers"]:
-            hass.data[DOMAIN]["timers"][mask_id]()
-            del hass.data[DOMAIN]["timers"][mask_id]
+        if mask_id in domain_data["timers"]:
+            domain_data["timers"][mask_id]()
+            del domain_data["timers"][mask_id]
 
-        if mask_id in hass.data[DOMAIN]["active_masks"]:
-            removed_mask = dict(hass.data[DOMAIN]["active_masks"].pop(mask_id))
-            removed_mask["removed_at"] = datetime.utcnow().isoformat() + "Z"
-            hass.data[DOMAIN]["pending_restart_masks"][mask_id] = removed_mask
+        if mask_id in domain_data["active_masks"]:
+            removed_mask = dict(domain_data["active_masks"].pop(mask_id))
+            removed_mask["removed_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            domain_data["pending_restart_masks"][mask_id] = removed_mask
         _update_state()
 
         session = async_get_clientsession(hass)
@@ -368,15 +438,15 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
 
     async def async_handle_prune_all(call: ServiceCall):
         # Cancel all timers
-        for unsub in hass.data[DOMAIN]["timers"].values():
+        for unsub in domain_data["timers"].values():
             unsub()
-        hass.data[DOMAIN]["timers"].clear()
+        domain_data["timers"].clear()
 
-        for m_id, m_val in hass.data[DOMAIN]["active_masks"].items():
+        for m_id, m_val in domain_data["active_masks"].items():
             removed_mask = dict(m_val)
-            removed_mask["removed_at"] = datetime.utcnow().isoformat() + "Z"
-            hass.data[DOMAIN]["pending_restart_masks"][m_id] = removed_mask
-        hass.data[DOMAIN]["active_masks"].clear()
+            removed_mask["removed_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            domain_data["pending_restart_masks"][m_id] = removed_mask
+        domain_data["active_masks"].clear()
         _update_state()
 
         session = async_get_clientsession(hass)
@@ -412,19 +482,48 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         try:
             async with session.post(f"{base_url}/api/restart", timeout=10) as resp:
                 _LOGGER.info("Frigate restart triggered via service: %s", resp.status)
-                hass.data[DOMAIN]["pending_restart_masks"].clear()
+                domain_data["pending_restart_masks"].clear()
                 _update_state()
         except Exception as e:
             _LOGGER.error("Failed to restart Frigate: %s", e)
 
-    hass.services.async_register(DOMAIN, "add_mask", async_handle_add_mask)
-    hass.services.async_register(DOMAIN, "set_duration", async_handle_add_mask)
-    hass.services.async_register(DOMAIN, "remove_mask", async_handle_remove_mask)
-    hass.services.async_register(DOMAIN, "prune_all", async_handle_prune_all)
-    hass.services.async_register(DOMAIN, "restart", async_handle_restart)
-    hass.services.async_register(DOMAIN, "restart_frigate", async_handle_restart)
+    async def async_handle_sync(call: ServiceCall):
+        _LOGGER.debug("Manual sync of temporary masks triggered")
+        await _async_sync_frigate_state()
 
+    async def async_handle_dismiss_pending(call: ServiceCall):
+        mask_id = call.data.get("mask_id")
+        if mask_id:
+            domain_data["pending_restart_masks"].pop(str(mask_id), None)
+            _LOGGER.info("Dismissed pending restart mask %s", mask_id)
+        else:
+            domain_data["pending_restart_masks"].clear()
+            _LOGGER.info("Dismissed all pending restart masks")
+        _update_state()
+
+    if not domain_data.get("services_registered"):
+        hass.services.async_register(DOMAIN, "add_mask", async_handle_add_mask)
+        hass.services.async_register(DOMAIN, "set_duration", async_handle_add_mask)
+        hass.services.async_register(DOMAIN, "remove_mask", async_handle_remove_mask)
+        hass.services.async_register(DOMAIN, "prune_all", async_handle_prune_all)
+        hass.services.async_register(DOMAIN, "restart", async_handle_restart)
+        hass.services.async_register(DOMAIN, "restart_frigate", async_handle_restart)
+        hass.services.async_register(DOMAIN, "sync", async_handle_sync)
+        hass.services.async_register(DOMAIN, "dismiss_pending", async_handle_dismiss_pending)
+        domain_data["services_registered"] = True
+
+    # Periodic background synchronization
+    if not domain_data.get("unsub_sync"):
+        async def _periodic_sync_cb(_now):
+            await _async_sync_frigate_state()
+        domain_data["unsub_sync"] = async_track_time_interval(
+            hass, _periodic_sync_cb, timedelta(seconds=SYNC_INTERVAL_SECONDS)
+        )
+
+    # Initial state update & background sync with running Frigate process
     _update_state()
+    hass.async_create_task(_async_sync_frigate_state())
+
     return True
 
 
@@ -451,4 +550,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
+    if DOMAIN in hass.data:
+        unsub = hass.data[DOMAIN].get("unsub_sync")
+        if unsub:
+            unsub()
+            hass.data[DOMAIN]["unsub_sync"] = None
+        for timer_unsub in hass.data[DOMAIN].get("timers", {}).values():
+            timer_unsub()
+        hass.data[DOMAIN]["timers"].clear()
     return True

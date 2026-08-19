@@ -8,7 +8,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, deleteEvent } from './frigate/api';
 
-const CARD_VERSION = '2.3.37';
+const CARD_VERSION = '2.3.39';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -1740,6 +1740,9 @@ export class FrigateEventsCard extends LitElement {
       }
 
       .pending-section-title {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
         font-size: 11px;
         font-weight: 600;
         color: #64748b;
@@ -1747,14 +1750,67 @@ export class FrigateEventsCard extends LitElement {
         letter-spacing: 0.5px;
       }
 
+      .mask-section-dismiss-all-btn {
+        background: transparent;
+        border: none;
+        color: #60a5fa;
+        font-size: 10px;
+        font-weight: 500;
+        cursor: pointer;
+        padding: 2px 6px;
+        border-radius: 4px;
+        text-transform: none;
+        transition: all 0.15s;
+      }
+
+      .mask-section-dismiss-all-btn:hover {
+        background: rgba(96, 165, 250, 0.15);
+        color: #93c5fd;
+      }
+
       .mask-card.pending-restart {
-        opacity: 0.65;
+        opacity: 0.75;
         border-style: dashed;
       }
 
       .mask-card-time-badge.pending {
         background: rgba(255, 255, 255, 0.08);
         color: #94a3b8;
+      }
+
+      .mask-card-pending-actions {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-left: auto;
+      }
+
+      .mask-pending-dismiss-action {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 4px 8px;
+        border-radius: 5px;
+        font-size: 11px;
+        font-weight: 500;
+        color: #94a3b8;
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        cursor: pointer;
+        transition: all 0.15s;
+        font-family: inherit;
+      }
+
+      .mask-pending-dismiss-action:hover {
+        background: rgba(239, 68, 68, 0.15);
+        color: #f87171;
+        border-color: rgba(239, 68, 68, 0.3);
+      }
+
+      .mask-pending-dismiss-action svg {
+        width: 12px;
+        height: 12px;
+        fill: currentColor;
       }
 
       .mask-pending-restart-action {
@@ -1771,7 +1827,6 @@ export class FrigateEventsCard extends LitElement {
         cursor: pointer;
         transition: all 0.15s;
         font-family: inherit;
-        margin-left: auto;
       }
 
       .mask-pending-restart-action:hover {
@@ -2471,6 +2526,13 @@ export class FrigateEventsCard extends LitElement {
     this._closeContextMenu();
     this._injectModalStyles();
 
+    // Trigger background sync with Frigate status/uptime
+    try {
+      if (this.hass?.callService) {
+        this.hass.callService('frigate_temp_mask', 'sync', {});
+      }
+    } catch {}
+
     if (this._maskManagerContainer) {
       this._renderMaskManagerContent(this._maskManagerContainer);
       return;
@@ -2761,6 +2823,11 @@ export class FrigateEventsCard extends LitElement {
             <div class="pending-masks-section">
               <div class="pending-section-title">
                 <span>Removed (Pending Restart)</span>
+                ${filteredPending.length > 1 ? `
+                  <button class="mask-section-dismiss-all-btn" data-action="dismiss-all-pending" title="Dismiss all pending restart notifications">
+                    Dismiss All
+                  </button>
+                ` : ''}
               </div>
               <div class="mask-cards-list">
                 ${filteredPending.map((mask: any) => {
@@ -2794,13 +2861,17 @@ export class FrigateEventsCard extends LitElement {
                           <div class="mask-card-details">
                             <div class="mask-detail-row">
                               <span class="detail-label">Status:</span>
-                              <span class="detail-value" style="color: #94a3b8; font-size: 11px;">Removed from config (unloads on Frigate restart)</span>
+                              <span class="detail-value" style="color: #94a3b8; font-size: 11px;">Removed from config (applied on Frigate restart)</span>
                             </div>
                           </div>
                         </div>
                       </div>
-                      <div class="mask-card-actions">
-                        <button class="mask-pending-restart-action" data-action="restart-frigate">
+                      <div class="mask-card-actions mask-card-pending-actions">
+                        <button class="mask-pending-dismiss-action" data-action="dismiss-pending" data-mask-id="${mask.mask_id}" title="Dismiss without restarting">
+                          <svg viewBox="0 0 24 24"><path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"/></svg>
+                          <span>Dismiss</span>
+                        </button>
+                        <button class="mask-pending-restart-action" data-action="restart-frigate" title="Restart Frigate detector process now">
                           <svg viewBox="0 0 24 24"><path d="M12,4V1L8,5L12,9V6A6,6 0 0,1 18,12C18,13.34 17.56,14.58 16.82,15.58L18.25,17C19.34,15.61 20,13.88 20,12A8,8 0 0,0 12,4M12,18A6,6 0 0,1 6,12C6,10.66 6.44,9.42 7.18,8.42L5.75,7C4.66,8.39 4,10.12 4,12A8,8 0 0,0 12,20V23L16,19L12,15V18Z"/></svg>
                           <span>Restart Frigate</span>
                         </button>
@@ -2827,6 +2898,23 @@ export class FrigateEventsCard extends LitElement {
       btn.addEventListener('click', async (e) => {
         e.stopPropagation();
         await this._executeRestartFrigate();
+      });
+    });
+
+    container.querySelectorAll('[data-action="dismiss-pending"]').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const maskId = (btn as HTMLElement).getAttribute('data-mask-id');
+        if (maskId) {
+          await this._executeDismissPendingMask(maskId);
+        }
+      });
+    });
+
+    container.querySelectorAll('[data-action="dismiss-all-pending"]').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        await this._executeDismissPendingMask();
       });
     });
 
@@ -2909,6 +2997,26 @@ export class FrigateEventsCard extends LitElement {
       }
     } catch (err) {
       console.error('Failed to restart Frigate:', err);
+    }
+  }
+
+  private async _executeDismissPendingMask(maskId?: string): Promise<void> {
+    if (!this.hass) return;
+    if (maskId) {
+      this._localPendingMasks = this._localPendingMasks.filter(m => String(m.mask_id) !== String(maskId));
+    } else {
+      this._localPendingMasks = [];
+    }
+    try {
+      if (this.hass.callService) {
+        await this.hass.callService('frigate_temp_mask', 'dismiss_pending', maskId ? { mask_id: maskId } : {});
+      }
+      this.requestUpdate();
+      if (this._maskManagerContainer) {
+        this._renderMaskManagerContent(this._maskManagerContainer);
+      }
+    } catch (err) {
+      console.error('Failed to dismiss pending mask:', err);
     }
   }
 

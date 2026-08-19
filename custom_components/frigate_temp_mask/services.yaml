@@ -82,3 +82,17 @@ prune_all:
 restart:
   name: Restart Frigate
   description: Restarts the Frigate detector backend to apply pending configuration changes.
+
+sync:
+  name: Sync Temporary Masks
+  description: Synchronizes temporary mask state with Frigate uptime and active configuration.
+
+dismiss_pending:
+  name: Dismiss Pending Mask
+  description: Dismisses a pending restart mask notification without restarting Frigate.
+  fields:
+    mask_id:
+      name: Mask ID
+      description: Optional specific mask identifier to dismiss. If omitted, all pending masks are dismissed.
+      selector:
+        text:
