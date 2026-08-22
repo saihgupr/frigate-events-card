@@ -21,7 +21,7 @@ add_mask:
         text:
     box:
       name: Bounding Box
-      description: Optional normalized [x, y, w, h] coordinates.
+      description: Optional [x, y, width, height] coordinates, in pixels or normalized to 0–1. Normally inferred from event_id.
       selector:
         text:
     duration_hours:

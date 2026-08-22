@@ -2,6 +2,7 @@
  * Frigate event types
  */
 
+/** Frigate event API format: [x, y, width, height], normally normalized to 0–1. */
 export type FrigateBoundingBox = [number, number, number, number];
 export type FrigatePathPoint = [[number, number], number];
 

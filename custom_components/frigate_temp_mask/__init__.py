@@ -23,6 +23,40 @@ DEFAULT_PADDING = 0.20
 SYNC_INTERVAL_SECONDS = 30
 
 
+def _coerce_frigate_box(value: object) -> list[float] | None:
+    """Return a valid Frigate API box: [x, y, width, height]."""
+    if not isinstance(value, (list, tuple)) or len(value) != 4:
+        return None
+
+    try:
+        box = [float(coordinate) for coordinate in value]
+    except (TypeError, ValueError):
+        return None
+
+    if not all(coordinate == coordinate and abs(coordinate) != float("inf") for coordinate in box):
+        return None
+
+    return box
+
+
+def _get_event_box(event_data: object) -> list[float] | None:
+    """Get the snapshot bounding box from a Frigate event response."""
+    if not isinstance(event_data, dict):
+        return None
+
+    data = event_data.get("data")
+    if isinstance(data, dict):
+        # data.box is the box used for the event snapshot. It is [x, y, width,
+        # height], normalized to the detection frame. Prefer it so the generated
+        # mask matches the false detection the user selected.
+        for candidate in (data.get("box"), (data.get("snapshot") or {}).get("box") if isinstance(data.get("snapshot"), dict) else None):
+            box = _coerce_frigate_box(candidate)
+            if box:
+                return box
+
+    return _coerce_frigate_box(event_data.get("box"))
+
+
 class FrigateRecordingSnapshotView(HomeAssistantView):
     """View to proxy uncropped recording snapshot frames from Frigate."""
 
@@ -95,18 +129,24 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         return DEFAULT_FRIGATE_URL
 
     def _box_to_polygon(box: list[float], width: int, height: int, padding: float = DEFAULT_PADDING) -> str:
-        if len(box) != 4:
+        box = _coerce_frigate_box(box)
+        if not box or width <= 0 or height <= 0:
             return ""
-        ymin_norm, xmin_norm, ymax_norm, xmax_norm = box
-        y_top = min(ymin_norm, ymax_norm)
-        y_bottom = max(ymin_norm, ymax_norm)
-        x_left = min(xmin_norm, xmax_norm)
-        x_right = max(xmin_norm, xmax_norm)
+        # Frigate's event API uses [x, y, width, height]. The last two values
+        # are dimensions, not bottom-right coordinates.
+        x_val, y_val, box_width_val, box_height_val = box
+        if box_width_val <= 0 or box_height_val <= 0:
+            return ""
 
-        x1_px = x_left * width
-        y1_px = y_top * height
-        x2_px = x_right * width
-        y2_px = y_bottom * height
+        # Detect if values are normalized (0.0 to 1.0) or already in pixels
+        is_normalized = all(0.0 <= v <= 1.0 for v in box)
+        scale_x = width if is_normalized else 1.0
+        scale_y = height if is_normalized else 1.0
+
+        x1_px = x_val * scale_x
+        y1_px = y_val * scale_y
+        x2_px = (x_val + box_width_val) * scale_x
+        y2_px = (y_val + box_height_val) * scale_y
 
         w = max(1.0, x2_px - x1_px)
         h = max(1.0, y2_px - y1_px)
@@ -114,8 +154,8 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         pad_y_top = h * padding
         pad_y_bottom = h * (padding + 0.05)  # Extra ground margin for shadows
 
-        x_min = max(0, int(round(x1_px - pad_x)))
-        y_min = max(0, int(round(y1_px - pad_y_top)))
+        x_min = max(0, int(round(min(x1_px, x2_px) - pad_x)))
+        y_min = max(0, int(round(min(y1_px, y2_px) - pad_y_top)))
         x_max = min(width, int(round(x2_px + pad_x)))
         y_max = min(height, int(round(y2_px + pad_y_bottom)))
 
@@ -207,7 +247,11 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
             duration_hours = float(call.data.get("duration_hours", 24))
         except (ValueError, TypeError):
             duration_hours = 24.0
-        padding = call.data.get("padding", DEFAULT_PADDING)
+        try:
+            padding = float(call.data.get("padding", DEFAULT_PADDING))
+        except (ValueError, TypeError):
+            padding = DEFAULT_PADDING
+        padding = max(0.0, padding)
         label_val = call.data.get("label", "")
 
         session = async_get_clientsession(hass)
@@ -217,7 +261,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         box_coords = None
         if box_str and box_str.strip() not in ["", "none", "unknown"]:
             try:
-                box_coords = [float(v.strip()) for v in box_str.split(",")]
+                box_coords = _coerce_frigate_box([v.strip() for v in box_str.split(",")])
             except Exception:
                 pass
 
@@ -228,7 +272,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                     async with session.get(f"{base_url}/api/events/{event_id}", timeout=10) as resp:
                         if resp.status == 200:
                             event_data = await resp.json()
-                            box_coords = event_data.get("data", {}).get("box")
+                            box_coords = _get_event_box(event_data)
                             if not camera:
                                 camera = event_data.get("camera", "wyze_camera")
                             if not label_val:
@@ -245,7 +289,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                             if isinstance(evts, list) and len(evts) > 0:
                                 event_data = evts[0]
                                 event_id = event_data.get("id", "")
-                                box_coords = event_data.get("data", {}).get("box")
+                                box_coords = _get_event_box(event_data)
                                 if not camera:
                                     camera = event_data.get("camera", "wyze_camera")
                                 if not label_val:
@@ -273,9 +317,9 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
             _LOGGER.error("No valid bounding box, polygon, or event ID found for mask addition.")
             return
 
+        width, height = 1920, 1080
         if not poly_str:
             # Fetch camera detect stream resolution
-            width, height = 1920, 1080
             try:
                 async with session.get(f"{base_url}/api/config", timeout=10) as resp:
                     if resp.status == 200:
@@ -287,6 +331,9 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                 _LOGGER.warning("Using fallback resolution 1920x1080: %s", e)
 
             poly_str = _box_to_polygon(box_coords, width, height, padding)
+            if not poly_str:
+                _LOGGER.error("Could not create a temporary mask from invalid box data: %s", box_coords)
+                return
         tag = f"# TEMP_MASK_{mask_id}"
         if not label_val and event_data and isinstance(event_data, dict):
             label_val = event_data.get("label", "")

@@ -8,7 +8,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, deleteEvent } from './frigate/api';
 
-const CARD_VERSION = '2.3.50';
+const CARD_VERSION = '2.3.55';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -2180,7 +2180,6 @@ export class FrigateEventsCard extends LitElement {
         // Add mask
         this._localPendingMasks = [];
         const durationHours = this._getMaskDurationHours();
-        const boxData = Array.isArray(event.box) ? event.box.join(',') : (event.data?.box ? event.data.box.join(',') : '');
         if (this.hass.callService) {
           try {
             await this.hass.callService('frigate_temp_mask', 'add_mask', {
@@ -2189,7 +2188,6 @@ export class FrigateEventsCard extends LitElement {
               mask_id: maskId,
               duration_hours: durationHours,
               label: event.label,
-              box: boxData,
             });
           } catch {
             await this.hass.callService('shell_command', 'frigate_add_temp_mask', {
@@ -2215,8 +2213,6 @@ export class FrigateEventsCard extends LitElement {
   private async _executeChangeMaskDuration(event: FrigateEvent, durationHours: number): Promise<void> {
     if (!this.hass) return;
     const maskId = event.id.includes('-') ? event.id.split('-')[0] : event.id;
-    const boxData = Array.isArray(event.box) ? event.box.join(',') : (event.data?.box ? event.data.box.join(',') : '');
-
     try {
       if (this.hass.callService) {
         try {
@@ -2226,7 +2222,6 @@ export class FrigateEventsCard extends LitElement {
             mask_id: maskId,
             duration_hours: durationHours,
             label: event.label,
-            box: boxData,
           });
         } catch {
           await this.hass.callService('shell_command', 'frigate_add_temp_mask', {
@@ -2698,20 +2693,16 @@ export class FrigateEventsCard extends LitElement {
     } else {
       const rawBox = mask.box || matchedEvent?.data?.box || (Array.isArray(matchedEvent?.box) ? matchedEvent?.box : null);
       if (rawBox && Array.isArray(rawBox) && rawBox.length === 4) {
-        const [b0, b1, b2, b3] = rawBox;
-        // In Frigate, box is [ymin, xmin, ymax, xmax]
-        const y_top = Math.min(b0, b2);
-        const y_bottom = Math.max(b0, b2);
-        const x_left = Math.min(b1, b3);
-        const x_right = Math.max(b1, b3);
+        // Frigate event boxes are [x, y, width, height].
+        const [x, y, boxWidth, boxHeight] = rawBox;
 
         const isNorm = rawBox.every((n: number) => n <= 1.0);
         const scaleW = isNorm ? viewBoxW : 1;
         const scaleH = isNorm ? viewBoxH : 1;
-        const x1_px = x_left * scaleW;
-        const y1_px = y_top * scaleH;
-        const x2_px = x_right * scaleW;
-        const y2_px = y_bottom * scaleH;
+        const x1_px = x * scaleW;
+        const y1_px = y * scaleH;
+        const x2_px = (x + boxWidth) * scaleW;
+        const y2_px = (y + boxHeight) * scaleH;
         polyPts = `${x1_px},${y1_px} ${x2_px},${y1_px} ${x2_px},${y2_px} ${x1_px},${y2_px}`;
         maskW = x2_px - x1_px;
         maskH = y2_px - y1_px;
@@ -2724,10 +2715,10 @@ export class FrigateEventsCard extends LitElement {
         posName = vert === 'Middle' && horiz === 'Center' ? 'Center' : `${vert}-${horiz}`;
 
         cropRegion = {
-          x: isNorm ? x_left : x_left / viewBoxW,
-          y: isNorm ? y_top : y_top / viewBoxH,
-          w: isNorm ? (x_right - x_left) : maskW / viewBoxW,
-          h: isNorm ? (y_bottom - y_top) : maskH / viewBoxH,
+          x: isNorm ? x : x / viewBoxW,
+          y: isNorm ? y : y / viewBoxH,
+          w: isNorm ? boxWidth : boxWidth / viewBoxW,
+          h: isNorm ? boxHeight : boxHeight / viewBoxH,
         };
       }
     }
@@ -2735,16 +2726,13 @@ export class FrigateEventsCard extends LitElement {
     // Fallback crop region from matched event if available
     const eventRegion = matchedEvent?.data?.region || matchedEvent?.data?.box;
     if (eventRegion && Array.isArray(eventRegion) && eventRegion.length === 4 && !cropRegion) {
-      const [r0, r1, r2, r3] = eventRegion;
-      const y_top = Math.min(r0, r2);
-      const y_bottom = Math.max(r0, r2);
-      const x_left = Math.min(r1, r3);
-      const x_right = Math.max(r1, r3);
+      const [x, y, width, height] = eventRegion;
+      const isNorm = eventRegion.every((n: number) => n <= 1.0);
       cropRegion = {
-        x: x_left,
-        y: y_top,
-        w: Math.max(0.05, x_right - x_left),
-        h: Math.max(0.05, y_bottom - y_top),
+        x: isNorm ? x : x / viewBoxW,
+        y: isNorm ? y : y / viewBoxH,
+        w: Math.max(0.05, isNorm ? width : width / viewBoxW),
+        h: Math.max(0.05, isNorm ? height : height / viewBoxH),
       };
     }
 
@@ -3418,10 +3406,8 @@ export class FrigateEventsCard extends LitElement {
     return Array.isArray(box) &&
       box.length === 4 &&
       box.every(value => typeof value === 'number' && Number.isFinite(value)) &&
-      (
-        (box[2] > box[0] && box[3] > box[1]) ||
-        (box[2] > 0 && box[3] > 0)
-      );
+      box[2] > 0 &&
+      box[3] > 0;
   }
 
   private _isNormalizedBox(box: FrigateBoundingBox): boolean {
@@ -3446,22 +3432,18 @@ export class FrigateEventsCard extends LitElement {
   }
 
   private _getBoxCenter(box: FrigateBoundingBox, videoWidth: number, videoHeight: number): { x: number; y: number } {
-    const [a, b, c, d] = box;
+    const [x, y, width, height] = box;
 
     if (this._isNormalizedBox(box)) {
-      const isCenterWidthHeight = a + (c / 2) > 1 || b + (d / 2) > 1;
-      const normalizedX = isCenterWidthHeight ? a : a + (c / 2);
-      const normalizedY = isCenterWidthHeight ? b : b + (d / 2);
-
       return {
-        x: normalizedX * videoWidth,
-        y: normalizedY * videoHeight,
+        x: (x + width / 2) * videoWidth,
+        y: (y + height / 2) * videoHeight,
       };
     }
 
     return {
-      x: (a + c) / 2,
-      y: (b + d) / 2,
+      x: x + width / 2,
+      y: y + height / 2,
     };
   }
 
