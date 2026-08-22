@@ -8,7 +8,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, deleteEvent } from './frigate/api';
 
-const CARD_VERSION = '2.3.49';
+const CARD_VERSION = '2.3.50';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -2638,13 +2638,18 @@ export class FrigateEventsCard extends LitElement {
     let viewBoxH = 1080;
     let cropRegion: { x: number; y: number; w: number; h: number } | null = null;
 
+    if (typeof mask?.width === 'number' && typeof mask?.height === 'number' && mask.width > 0 && mask.height > 0) {
+      viewBoxW = mask.width;
+      viewBoxH = mask.height;
+    }
+
     const polyStr = mask.polygon || matchedEvent?.polygon;
     if (polyStr) {
       const nums = polyStr.split(',').map((s: string) => parseFloat(s.trim())).filter((n: number) => !isNaN(n));
       if (nums.length >= 6) {
         const isNormalized = nums.every((n: number) => n <= 1.0);
-        let maxCoord = 0;
-        if (!isNormalized) {
+        if (!isNormalized && (!mask?.width || !mask?.height)) {
+          let maxCoord = 0;
           for (const n of nums) {
             if (n > maxCoord) maxCoord = n;
           }
@@ -2652,8 +2657,6 @@ export class FrigateEventsCard extends LitElement {
             viewBoxW = 3840; viewBoxH = 2160;
           } else if (maxCoord > 1920) {
             viewBoxW = 2560; viewBoxH = 1440;
-          } else if (maxCoord <= 1280 && maxCoord > 1.0) {
-            viewBoxW = 1280; viewBoxH = 720;
           }
         }
 
@@ -2693,42 +2696,55 @@ export class FrigateEventsCard extends LitElement {
         };
       }
     } else {
-      const rawBox = mask.box || matchedEvent?.data?.region || matchedEvent?.data?.box || (Array.isArray(matchedEvent?.box) ? matchedEvent?.box : null);
+      const rawBox = mask.box || matchedEvent?.data?.box || (Array.isArray(matchedEvent?.box) ? matchedEvent?.box : null);
       if (rawBox && Array.isArray(rawBox) && rawBox.length === 4) {
-        const [bx, by, bw, bh] = rawBox;
+        const [b0, b1, b2, b3] = rawBox;
+        // In Frigate, box is [ymin, xmin, ymax, xmax]
+        const y_top = Math.min(b0, b2);
+        const y_bottom = Math.max(b0, b2);
+        const x_left = Math.min(b1, b3);
+        const x_right = Math.max(b1, b3);
+
         const isNorm = rawBox.every((n: number) => n <= 1.0);
         const scaleW = isNorm ? viewBoxW : 1;
         const scaleH = isNorm ? viewBoxH : 1;
-        const x1_px = bx * scaleW;
-        const y1_px = by * scaleH;
-        const x2_px = (bx + bw) * scaleW;
-        const y2_px = (by + bh) * scaleH;
+        const x1_px = x_left * scaleW;
+        const y1_px = y_top * scaleH;
+        const x2_px = x_right * scaleW;
+        const y2_px = y_bottom * scaleH;
         polyPts = `${x1_px},${y1_px} ${x2_px},${y1_px} ${x2_px},${y2_px} ${x1_px},${y2_px}`;
         maskW = x2_px - x1_px;
         maskH = y2_px - y1_px;
-        const normCenterX = isNorm ? (bx + bw / 2) : ((x1_px + x2_px) / (2 * viewBoxW));
-        const normCenterY = isNorm ? (by + bh / 2) : ((y1_px + y2_px) / (2 * viewBoxH));
+        const centerX = (x1_px + x2_px) / 2;
+        const centerY = (y1_px + y2_px) / 2;
+        const normCenterX = centerX / viewBoxW;
+        const normCenterY = centerY / viewBoxH;
         const vert = normCenterY < 0.35 ? 'Top' : (normCenterY > 0.65 ? 'Bottom' : 'Middle');
         const horiz = normCenterX < 0.35 ? 'Left' : (normCenterX > 0.65 ? 'Right' : 'Center');
         posName = vert === 'Middle' && horiz === 'Center' ? 'Center' : `${vert}-${horiz}`;
 
         cropRegion = {
-          x: isNorm ? bx : bx / viewBoxW,
-          y: isNorm ? by : by / viewBoxH,
-          w: isNorm ? bw : bw / viewBoxW,
-          h: isNorm ? bh : bh / viewBoxH,
+          x: isNorm ? x_left : x_left / viewBoxW,
+          y: isNorm ? y_top : y_top / viewBoxH,
+          w: isNorm ? (x_right - x_left) : maskW / viewBoxW,
+          h: isNorm ? (y_bottom - y_top) : maskH / viewBoxH,
         };
       }
     }
 
     // Fallback crop region from matched event if available
     const eventRegion = matchedEvent?.data?.region || matchedEvent?.data?.box;
-    if (eventRegion && Array.isArray(eventRegion) && eventRegion.length === 4) {
+    if (eventRegion && Array.isArray(eventRegion) && eventRegion.length === 4 && !cropRegion) {
+      const [r0, r1, r2, r3] = eventRegion;
+      const y_top = Math.min(r0, r2);
+      const y_bottom = Math.max(r0, r2);
+      const x_left = Math.min(r1, r3);
+      const x_right = Math.max(r1, r3);
       cropRegion = {
-        x: eventRegion[0],
-        y: eventRegion[1],
-        w: eventRegion[2],
-        h: eventRegion[3],
+        x: x_left,
+        y: y_top,
+        w: Math.max(0.05, x_right - x_left),
+        h: Math.max(0.05, y_bottom - y_top),
       };
     }
 

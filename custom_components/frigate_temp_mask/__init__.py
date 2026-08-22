@@ -95,14 +95,21 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         return DEFAULT_FRIGATE_URL
 
     def _box_to_polygon(box: list[float], width: int, height: int, padding: float = DEFAULT_PADDING) -> str:
-        x_norm, y_norm, w_norm, h_norm = box
-        x1_px = x_norm * width
-        y1_px = y_norm * height
-        x2_px = (x_norm + w_norm) * width
-        y2_px = (y_norm + h_norm) * height
+        if len(box) != 4:
+            return ""
+        ymin_norm, xmin_norm, ymax_norm, xmax_norm = box
+        y_top = min(ymin_norm, ymax_norm)
+        y_bottom = max(ymin_norm, ymax_norm)
+        x_left = min(xmin_norm, xmax_norm)
+        x_right = max(xmin_norm, xmax_norm)
 
-        w = x2_px - x1_px
-        h = y2_px - y1_px
+        x1_px = x_left * width
+        y1_px = y_top * height
+        x2_px = x_right * width
+        y2_px = y_bottom * height
+
+        w = max(1.0, x2_px - x1_px)
+        h = max(1.0, y2_px - y1_px)
         pad_x = w * padding
         pad_y_top = h * padding
         pad_y_bottom = h * (padding + 0.05)  # Extra ground margin for shadows
@@ -419,6 +426,8 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
             "event_id": event_id or mask_id,
             "label": label_val,
             "box": box_coords if box_coords else None,
+            "width": width,
+            "height": height,
         }
         _update_state()
 
