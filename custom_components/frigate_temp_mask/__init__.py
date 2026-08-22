@@ -7,6 +7,8 @@ import re
 import yaml
 from datetime import datetime, timedelta, timezone
 
+from aiohttp import web
+from homeassistant.components.http import HomeAssistantView
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -19,6 +21,46 @@ _LOGGER = logging.getLogger(__name__)
 DEFAULT_FRIGATE_URL = "http://192.168.1.211:5000"
 DEFAULT_PADDING = 0.20
 SYNC_INTERVAL_SECONDS = 30
+
+
+class FrigateRecordingSnapshotView(HomeAssistantView):
+    """View to proxy uncropped recording snapshot frames from Frigate."""
+
+    url = "/api/frigate_temp_mask/recording_snapshot/{camera}/{timestamp:[.0-9]+}"
+    extra_urls = ["/api/frigate_temp_mask/recording_snapshot/{camera}"]
+    name = "api:frigate_temp_mask:recording_snapshot"
+    requires_auth = False
+
+    def __init__(self, hass: HomeAssistant, get_base_url_fn) -> None:
+        self.hass = hass
+        self._get_base_url = get_base_url_fn
+
+    async def get(self, request: web.Request, camera: str, timestamp: str = "") -> web.Response:
+        session = async_get_clientsession(self.hass)
+        base_url = self._get_base_url()
+        ts = timestamp or request.query.get("ts", "")
+        if ts:
+            clean_ts = ts.split(".")[0]
+            frigate_url = f"{base_url}/api/{camera}/recordings/{clean_ts}/snapshot.png"
+            try:
+                async with session.get(frigate_url, timeout=10) as resp:
+                    if resp.status == 200:
+                        data = await resp.read()
+                        return web.Response(body=data, content_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
+            except Exception as e:
+                _LOGGER.debug("Error fetching recording snapshot from Frigate: %s", e)
+
+        # Fallback to latest camera detect frame
+        try:
+            latest_url = f"{base_url}/api/{camera}/latest.jpg"
+            async with session.get(latest_url, timeout=10) as resp:
+                if resp.status == 200:
+                    data = await resp.read()
+                    return web.Response(body=data, content_type="image/jpeg", headers={"Cache-Control": "public, max-age=60"})
+        except Exception as e:
+            _LOGGER.error("Error fetching latest camera snapshot for %s: %s", camera, e)
+
+        return web.Response(status=404)
 
 
 def _parse_iso_to_timestamp(iso_str: str | None) -> float | None:
@@ -511,6 +553,10 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         hass.services.async_register(DOMAIN, "sync", async_handle_sync)
         hass.services.async_register(DOMAIN, "dismiss_pending", async_handle_dismiss_pending)
         domain_data["services_registered"] = True
+
+    if not domain_data.get("view_registered"):
+        hass.http.register_view(FrigateRecordingSnapshotView(hass, _get_frigate_base_url))
+        domain_data["view_registered"] = True
 
     # Periodic background synchronization
     if not domain_data.get("unsub_sync"):

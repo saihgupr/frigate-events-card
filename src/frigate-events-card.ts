@@ -8,7 +8,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, deleteEvent } from './frigate/api';
 
-const CARD_VERSION = '2.3.39';
+const CARD_VERSION = '2.3.44';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -41,6 +41,7 @@ type ObjectPositionPercent = { x: number; y: number };
 
 interface FrigateEventsCardConfig extends LovelaceCardConfig {
   frigate_client_id?: string;
+  frigate_url?: string;
   event_count?: number;
   cameras?: string[];
   labels?: string[];
@@ -1446,31 +1447,37 @@ export class FrigateEventsCard extends LitElement {
 
       .mask-visual-preview {
         position: relative;
-        width: 100px;
-        min-width: 100px;
-        height: 72px;
+        width: 120px;
+        min-width: 120px;
+        aspect-ratio: 16 / 9;
+        height: auto;
         border-radius: 6px;
         overflow: hidden;
-        background: #090d16;
-        border: 1px solid rgba(59, 130, 246, 0.3);
+        background: radial-gradient(circle at center, #1e293b 0%, #0f172a 100%);
+        border: 1px solid rgba(59, 130, 246, 0.35);
         flex-shrink: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
       }
 
       .mask-preview-thumb {
+        position: absolute;
+        inset: 0;
         width: 100%;
         height: 100%;
         object-fit: cover;
         display: block;
+        z-index: 1;
       }
 
       .mask-preview-minimap {
+        position: absolute;
+        inset: 0;
         width: 100%;
         height: 100%;
-        position: relative;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        background: radial-gradient(circle at center, #1e293b 0%, #0f172a 100%);
+        z-index: 2;
+        pointer-events: none;
       }
 
       .mask-preview-minimap svg {
@@ -1483,8 +1490,15 @@ export class FrigateEventsCard extends LitElement {
       .minimap-poly {
         fill: rgba(59, 130, 246, 0.45);
         stroke: #60a5fa;
-        stroke-width: 25px;
+        stroke-width: 2.5px;
         vector-effect: non-scaling-stroke;
+        filter: drop-shadow(0 0 3px rgba(59, 130, 246, 0.8));
+      }
+
+      .mask-card.pending-restart .minimap-poly {
+        fill: rgba(245, 158, 11, 0.3);
+        stroke: #fbbf24;
+        stroke-dasharray: 4 2;
       }
 
       .minimap-pos-tag {
@@ -1494,10 +1508,13 @@ export class FrigateEventsCard extends LitElement {
         font-size: 9px;
         font-weight: 600;
         color: #93c5fd;
-        background: rgba(15, 23, 42, 0.85);
-        padding: 1px 4px;
+        background: rgba(15, 23, 42, 0.9);
+        border: 1px solid rgba(96, 165, 250, 0.4);
+        padding: 1px 5px;
         border-radius: 3px;
-        z-index: 2;
+        z-index: 3;
+        line-height: 1.2;
+        backdrop-filter: blur(2px);
       }
 
       .mask-card-info {
@@ -2598,6 +2615,119 @@ export class FrigateEventsCard extends LitElement {
     });
   }
 
+  private _getMaskPreviewGeometry(mask: any, matchedEvent?: any): {
+    polyPts: string;
+    posName: string;
+    maskW: number;
+    maskH: number;
+    viewBoxW: number;
+    viewBoxH: number;
+    cropRegion: { x: number; y: number; w: number; h: number } | null;
+  } {
+    let posName = 'Center';
+    let polyPts = '';
+    let maskW = 0, maskH = 0;
+    let viewBoxW = 1920;
+    let viewBoxH = 1080;
+    let cropRegion: { x: number; y: number; w: number; h: number } | null = null;
+
+    const polyStr = mask.polygon || matchedEvent?.polygon;
+    if (polyStr) {
+      const nums = polyStr.split(',').map((s: string) => parseFloat(s.trim())).filter((n: number) => !isNaN(n));
+      if (nums.length >= 6) {
+        const isNormalized = nums.every((n: number) => n <= 1.0);
+        let maxCoord = 0;
+        if (!isNormalized) {
+          for (const n of nums) {
+            if (n > maxCoord) maxCoord = n;
+          }
+          if (maxCoord > 2560) {
+            viewBoxW = 3840; viewBoxH = 2160;
+          } else if (maxCoord > 1920) {
+            viewBoxW = 2560; viewBoxH = 1440;
+          } else if (maxCoord <= 1280 && maxCoord > 1.0) {
+            viewBoxW = 1280; viewBoxH = 720;
+          }
+        }
+
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        const pts: string[] = [];
+        for (let i = 0; i < nums.length; i += 2) {
+          let px = nums[i];
+          let py = nums[i + 1] ?? 0;
+          if (isNormalized) {
+            px = px * viewBoxW;
+            py = py * viewBoxH;
+          }
+          pts.push(`${px},${py}`);
+          if (px < minX) minX = px;
+          if (py < minY) minY = py;
+          if (px > maxX) maxX = px;
+          if (py > maxY) maxY = py;
+        }
+        polyPts = pts.join(' ');
+        maskW = maxX - minX;
+        maskH = maxY - minY;
+
+        const centerX = (minX + maxX) / 2;
+        const centerY = (minY + maxY) / 2;
+        const normCenterX = centerX / viewBoxW;
+        const normCenterY = centerY / viewBoxH;
+
+        const vert = normCenterY < 0.35 ? 'Top' : (normCenterY > 0.65 ? 'Bottom' : 'Middle');
+        const horiz = normCenterX < 0.35 ? 'Left' : (normCenterX > 0.65 ? 'Right' : 'Center');
+        posName = vert === 'Middle' && horiz === 'Center' ? 'Center' : `${vert}-${horiz}`;
+
+        cropRegion = {
+          x: minX / viewBoxW,
+          y: minY / viewBoxH,
+          w: maskW / viewBoxW,
+          h: maskH / viewBoxH,
+        };
+      }
+    } else {
+      const rawBox = mask.box || matchedEvent?.data?.region || matchedEvent?.data?.box || (Array.isArray(matchedEvent?.box) ? matchedEvent?.box : null);
+      if (rawBox && Array.isArray(rawBox) && rawBox.length === 4) {
+        const [bx, by, bw, bh] = rawBox;
+        const isNorm = rawBox.every((n: number) => n <= 1.0);
+        const scaleW = isNorm ? viewBoxW : 1;
+        const scaleH = isNorm ? viewBoxH : 1;
+        const x1_px = bx * scaleW;
+        const y1_px = by * scaleH;
+        const x2_px = (bx + bw) * scaleW;
+        const y2_px = (by + bh) * scaleH;
+        polyPts = `${x1_px},${y1_px} ${x2_px},${y1_px} ${x2_px},${y2_px} ${x1_px},${y2_px}`;
+        maskW = x2_px - x1_px;
+        maskH = y2_px - y1_px;
+        const normCenterX = isNorm ? (bx + bw / 2) : ((x1_px + x2_px) / (2 * viewBoxW));
+        const normCenterY = isNorm ? (by + bh / 2) : ((y1_px + y2_px) / (2 * viewBoxH));
+        const vert = normCenterY < 0.35 ? 'Top' : (normCenterY > 0.65 ? 'Bottom' : 'Middle');
+        const horiz = normCenterX < 0.35 ? 'Left' : (normCenterX > 0.65 ? 'Right' : 'Center');
+        posName = vert === 'Middle' && horiz === 'Center' ? 'Center' : `${vert}-${horiz}`;
+
+        cropRegion = {
+          x: isNorm ? bx : bx / viewBoxW,
+          y: isNorm ? by : by / viewBoxH,
+          w: isNorm ? bw : bw / viewBoxW,
+          h: isNorm ? bh : bh / viewBoxH,
+        };
+      }
+    }
+
+    // Fallback crop region from matched event if available
+    const eventRegion = matchedEvent?.data?.region || matchedEvent?.data?.box;
+    if (eventRegion && Array.isArray(eventRegion) && eventRegion.length === 4) {
+      cropRegion = {
+        x: eventRegion[0],
+        y: eventRegion[1],
+        w: eventRegion[2],
+        h: eventRegion[3],
+      };
+    }
+
+    return { polyPts, posName, maskW, maskH, viewBoxW, viewBoxH, cropRegion };
+  }
+
   private _renderMaskManagerContent(container: HTMLElement): void {
     const rawMasks = (this.hass?.states?.['sensor.frigate_active_masks']?.attributes?.masks as any[]) || [];
     const activeMasks = Array.isArray(rawMasks) ? rawMasks : [];
@@ -2635,26 +2765,19 @@ export class FrigateEventsCard extends LitElement {
       { hours: 12, label: '12h' },
       { hours: 24, label: '24h' },
       { hours: 48, label: '48h' },
+      { hours: 72, label: '72h' },
       { hours: 168, label: '7d' },
     ];
 
     container.innerHTML = `
-      <div class="frigate-events-modal-content mask-manager-content">
+      <div class="frigate-events-modal-backdrop" data-action="close"></div>
+      <div class="frigate-events-modal-content">
         <div class="mask-manager-header">
           <div class="mask-manager-header-left">
-            <div class="mask-manager-title">
-              <svg viewBox="0 0 24 24" style="width: 20px; height: 20px; fill: #60a5fa;"><path d="M2,2H8V4H16V2H22V8H20V16H22V22H16V20H8V22H2V16H4V8H2V2M4,4V6H6V4H4M18,4V6H20V4H18M20,18V20H18V18H20M4,18V20H6V18H4M8,6V8H6V16H8V18H16V16H18V8H16V6H8M9,9H15V15H9V9Z"/></svg>
-              <span>Temporary Masks</span>
-            </div>
-            <span class="mask-manager-count-badge">${totalCount} Active</span>
+            <h2 class="mask-manager-title">Temporary False-Positive Masks</h2>
+            <span class="mask-manager-count-badge">${totalCount} active</span>
           </div>
           <div class="mask-manager-header-actions">
-            ${pendingMasks.length > 0 ? `
-              <button class="mask-manager-header-restart-btn" data-action="restart-frigate" title="Restart Frigate detector process to apply pending removals">
-                <svg viewBox="0 0 24 24"><path d="M12,4V1L8,5L12,9V6A6,6 0 0,1 18,12C18,13.34 17.56,14.58 16.82,15.58L18.25,17C19.34,15.61 20,13.88 20,12A8,8 0 0,0 12,4M12,18A6,6 0 0,1 6,12C6,10.66 6.44,9.42 7.18,8.42L5.75,7C4.66,8.39 4,10.12 4,12A8,8 0 0,0 12,20V23L16,19L12,15V18Z"/></svg>
-                <span>Restart Frigate</span>
-              </button>
-            ` : ''}
             <button class="frigate-events-modal-close" data-action="close">✕</button>
           </div>
         </div>
@@ -2663,20 +2786,24 @@ export class FrigateEventsCard extends LitElement {
           ${cameras.length > 1 ? `
             <div class="mask-filter-tabs">
               <button class="mask-filter-tab ${filterCamera === 'all' ? 'active' : ''}" data-camera-filter="all">
-                All Cameras (${totalCount})
+                All Cameras (${activeMasks.length + pendingMasks.length})
               </button>
-              ${cameras.map(c => `
-                <button class="mask-filter-tab ${filterCamera === c ? 'active' : ''}" data-camera-filter="${c}">
-                  ${this._formatCameraName(c)} (${activeMasks.filter((m: any) => m.camera === c).length})
-                </button>
-              `).join('')}
+              ${cameras.map(cam => {
+                const count = activeMasks.filter((m: any) => m.camera === cam).length +
+                              pendingMasks.filter((m: any) => m.camera === cam).length;
+                return `
+                  <button class="mask-filter-tab ${filterCamera === cam ? 'active' : ''}" data-camera-filter="${cam}">
+                    ${this._formatCameraName(cam)} (${count})
+                  </button>
+                `;
+              }).join('')}
             </div>
           ` : ''}
 
           ${filteredMasks.length === 0 && filteredPending.length === 0 ? `
-            <div class="mask-empty-state">
-              <svg viewBox="0 0 24 24"><path d="M2,2H8V4H16V2H22V8H20V16H22V22H16V20H8V22H2V16H4V8H2V2M4,4V6H6V4H4M18,4V6H20V4H18M20,18V20H18V18H20M4,18V20H6V18H4M8,6V8H6V16H8V18H16V16H18V8H16V6H8M9,9H15V15H9V9Z"/></svg>
-              <h4>No Active Temporary Masks</h4>
+            <div class="mask-manager-empty">
+              <svg viewBox="0 0 24 24" class="mask-empty-icon"><path d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,4A8,8 0 0,1 20,12A8,8 0 0,1 12,20A8,8 0 0,1 4,12A8,8 0 0,1 12,4M11,16.5L6.5,12L7.91,10.59L11,13.67L16.59,8.09L18,9.5L11,16.5Z"/></svg>
+              <h3>No Active Temporary Masks</h3>
               <p>Apply temporary false-positive masks by right-clicking any event thumbnail below or from actionable notifications.</p>
             </div>
           ` : ''}
@@ -2702,64 +2829,83 @@ export class FrigateEventsCard extends LitElement {
                 const objectLabel = (matchedEvent?.label || mask.label || 'Detected Object').toUpperCase();
                 const scoreText = matchedEvent?.top_score ? ` (${Math.round(matchedEvent.top_score * 100)}%)` : '';
                 const timeText = matchedEvent?.start_time ? this._formatTime(matchedEvent.start_time) : '';
+                const cameraName = mask.camera || matchedEvent?.camera || '';
+                const rawTs = matchedEvent?.start_time || (eventId.includes('.') ? parseFloat(eventId.split('-')[0]) : 0);
+                const eventTs = rawTs ? Math.floor(rawTs) : 0;
 
-                // Build snapshot image URL
-                const snapshotUrl = getEventSnapshotURL(clientId, matchedEvent ? matchedEvent.id : eventId, {
-                  bbox: true,
+                const frigateBase = this._config?.frigate_url ? this._config.frigate_url.replace(/\/+$/, '') : 'http://192.168.1.211:5000';
+                const directRecordingUrl = (cameraName && eventTs)
+                  ? `${frigateBase}/api/${encodeURIComponent(cameraName)}/recordings/${eventTs}/snapshot.png`
+                  : '';
+                const haProxyUrl = (cameraName && eventTs)
+                  ? `/api/frigate_temp_mask/recording_snapshot/${encodeURIComponent(cameraName)}/${eventTs}`
+                  : '';
+                const fallbackSnapshotUrl = getEventSnapshotURL(clientId, matchedEvent ? matchedEvent.id : eventId, {
+                  bbox: false,
                   crop: false
                 });
 
-                // Parse polygon for location/dimensions
-                let posName = 'Center';
-                let polyPts = '';
-                let maskW = 0, maskH = 0;
-                if (mask.polygon) {
-                  const nums = mask.polygon.split(',').map((s: string) => parseFloat(s.trim())).filter((n: number) => !isNaN(n));
-                  if (nums.length >= 6) {
-                    const isNormalized = nums.every((n: number) => n <= 1.0);
-                    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-                    const pts: string[] = [];
-                    for (let i = 0; i < nums.length; i += 2) {
-                      let px = nums[i];
-                      let py = nums[i + 1] ?? 0;
-                      if (isNormalized) {
-                        px = px * 1920;
-                        py = py * 1080;
-                      }
-                      pts.push(`${px},${py}`);
-                      if (px < minX) minX = px;
-                      if (py < minY) minY = py;
-                      if (px > maxX) maxX = px;
-                      if (py > maxY) maxY = py;
-                    }
-                    polyPts = pts.join(' ');
-                    maskW = maxX - minX;
-                    maskH = maxY - minY;
+                const primaryUrl = directRecordingUrl || haProxyUrl || fallbackSnapshotUrl;
 
-                    const centerX = (minX + maxX) / 2;
-                    const centerY = (minY + maxY) / 2;
-                    const vert = centerY < 360 ? 'Top' : (centerY > 720 ? 'Bottom' : 'Middle');
-                    const horiz = centerX < 640 ? 'Left' : (centerX > 1280 ? 'Right' : 'Center');
-                    posName = vert === 'Middle' && horiz === 'Center' ? 'Center' : `${vert}-${horiz}`;
-                  }
-                }
+                // Compute polygon geometry & minimap coordinates
+                const geo = this._getMaskPreviewGeometry(mask, matchedEvent);
 
                 return `
                   <div class="mask-card" data-mask-id="${mask.mask_id}">
                     <div class="mask-card-main-row">
                       <div class="mask-visual-preview">
-                        <img
-                          src="${snapshotUrl}"
-                          class="mask-preview-thumb"
-                          alt="${objectLabel}"
-                          loading="lazy"
-                          onerror="this.style.display='none'; if(this.nextElementSibling) this.nextElementSibling.style.display='flex';"
-                        />
-                        <div class="mask-preview-minimap" style="${snapshotUrl ? 'display: none;' : 'display: flex;'}">
-                          <svg viewBox="0 0 1920 1080" preserveAspectRatio="none">
-                            <polygon points="${polyPts}" class="minimap-poly" />
+                        ${primaryUrl ? `
+                          <img
+                            src="${primaryUrl}"
+                            class="mask-preview-thumb"
+                            alt="${objectLabel}"
+                            loading="lazy"
+                            data-crop-x="${geo.cropRegion ? geo.cropRegion.x : ''}"
+                            data-crop-y="${geo.cropRegion ? geo.cropRegion.y : ''}"
+                            data-crop-w="${geo.cropRegion ? geo.cropRegion.w : ''}"
+                            data-crop-h="${geo.cropRegion ? geo.cropRegion.h : ''}"
+                            data-ha-proxy="${haProxyUrl}"
+                            data-fallback-url="${fallbackSnapshotUrl}"
+                            onload="((img) => {
+                              var ar = img.naturalWidth / (img.naturalHeight || 1);
+                              if (ar < 1.45 && img.dataset.cropX) {
+                                var x = Math.max(0, Math.min(100, parseFloat(img.dataset.cropX) * 100));
+                                var y = Math.max(0, Math.min(100, parseFloat(img.dataset.cropY) * 100));
+                                var w = Math.max(12, Math.min(100 - x, parseFloat(img.dataset.cropW) * 100));
+                                var h = Math.max(12, Math.min(100 - y, parseFloat(img.dataset.cropH) * 100));
+                                img.style.left = x + '%';
+                                img.style.top = y + '%';
+                                img.style.width = w + '%';
+                                img.style.height = h + '%';
+                                img.style.borderRadius = '3px';
+                                img.style.boxShadow = '0 0 6px rgba(0,0,0,0.7)';
+                              } else {
+                                img.style.left = '0';
+                                img.style.top = '0';
+                                img.style.width = '100%';
+                                img.style.height = '100%';
+                                img.style.borderRadius = '0';
+                                img.style.boxShadow = 'none';
+                              }
+                            })(this)"
+                            onerror="((img) => {
+                              if (!img.dataset.triedHa && img.dataset.haProxy && img.src !== img.dataset.haProxy) {
+                                img.dataset.triedHa = 'true';
+                                img.src = img.dataset.haProxy;
+                              } else if (!img.dataset.triedFallback && img.dataset.fallbackUrl && img.src !== img.dataset.fallbackUrl) {
+                                img.dataset.triedFallback = 'true';
+                                img.src = img.dataset.fallbackUrl;
+                              } else {
+                                img.style.display = 'none';
+                              }
+                            })(this)"
+                          />
+                        ` : ''}
+                        <div class="mask-preview-minimap">
+                          <svg viewBox="0 0 ${geo.viewBoxW} ${geo.viewBoxH}" preserveAspectRatio="none">
+                            ${geo.polyPts ? `<polygon points="${geo.polyPts}" class="minimap-poly" vector-effect="non-scaling-stroke" />` : ''}
                           </svg>
-                          <span class="minimap-pos-tag">${posName}</span>
+                          <span class="minimap-pos-tag">${geo.posName}</span>
                         </div>
                       </div>
 
@@ -2771,7 +2917,7 @@ export class FrigateEventsCard extends LitElement {
                             <span class="mask-id-pill">#${mask.mask_id}</span>
                           </div>
                           <div class="mask-card-time-badge" data-timer-mask-id="${mask.mask_id}">
-                            <svg viewBox="0 0 24 24" style="width: 13px; height: 13px; fill: currentColor;"><path d="M12,20A8,8 0 0,0 20,12A8,8 0 0,0 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,2C6.47,22 2,17.5 2,12A10,10 0 0,1 12,2M12.5,7V12.25L17,14.92L16.25,16.15L11,13V7H12.5Z"/></svg>
+                            <svg viewBox="0 0 24 24" style="width: 13px; height: 13px; fill: currentColor;"><path d="M12,20A8,8 0 0,0 20,12A8,8 0 0,0 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,2C6.47,22 2,17.5 2,12A10,10 0 0,1 12,2M12.5,7V12.25L17,14.92L16.25,16.15L11,13 V7H12.5Z"/></svg>
                             <span class="timer-text">${remainingText}</span>
                           </div>
                         </div>
@@ -2779,7 +2925,7 @@ export class FrigateEventsCard extends LitElement {
                         <div class="mask-card-details">
                           <div class="mask-detail-row">
                             <span class="detail-label">Location:</span>
-                            <span class="detail-value">${posName} on camera ${maskW > 0 ? `(${Math.round(maskW)} × ${Math.round(maskH)} px)` : ''}</span>
+                            <span class="detail-value">${geo.posName} on camera ${geo.maskW > 0 ? `(${Math.round(geo.maskW)} × ${Math.round(geo.maskH)} px)` : ''}</span>
                           </div>
                           ${timeText ? `
                           <div class="mask-detail-row">
@@ -2836,19 +2982,79 @@ export class FrigateEventsCard extends LitElement {
                   const eventId = String(mask.event_id || maskId);
                   const matchedEvent = this._events?.find(e => e.id === eventId || e.id.startsWith(maskId) || maskId.startsWith(e.id));
                   const objectLabel = (matchedEvent?.label || mask.label || 'Detected Object').toUpperCase();
-                  const snapshotUrl = getEventSnapshotURL(clientId, matchedEvent ? matchedEvent.id : eventId, { bbox: true, crop: false });
+                  
+                  const cameraName = mask.camera || matchedEvent?.camera || '';
+                  const rawTs = matchedEvent?.start_time || (eventId.includes('.') ? parseFloat(eventId.split('-')[0]) : 0);
+                  const eventTs = rawTs ? Math.floor(rawTs) : 0;
+
+                  const frigateBase = this._config?.frigate_url ? this._config.frigate_url.replace(/\/+$/, '') : 'http://192.168.1.211:5000';
+                  const directRecordingUrl = (cameraName && eventTs)
+                    ? `${frigateBase}/api/${encodeURIComponent(cameraName)}/recordings/${eventTs}/snapshot.png`
+                    : '';
+                  const haProxyUrl = (cameraName && eventTs)
+                    ? `/api/frigate_temp_mask/recording_snapshot/${encodeURIComponent(cameraName)}/${eventTs}`
+                    : '';
+                  const fallbackSnapshotUrl = getEventSnapshotURL(clientId, matchedEvent ? matchedEvent.id : eventId, { bbox: false, crop: false });
+                  const primaryUrl = directRecordingUrl || haProxyUrl || fallbackSnapshotUrl;
+                  const geo = this._getMaskPreviewGeometry(mask, matchedEvent);
 
                   return `
                     <div class="mask-card pending-restart" data-mask-id="${mask.mask_id}">
                       <div class="mask-card-main-row">
                         <div class="mask-visual-preview">
-                          <img
-                            src="${snapshotUrl}"
-                            class="mask-preview-thumb"
-                            alt="${objectLabel}"
-                            loading="lazy"
-                            onerror="this.style.display='none';"
-                          />
+                          ${primaryUrl ? `
+                            <img
+                              src="${primaryUrl}"
+                              class="mask-preview-thumb"
+                              alt="${objectLabel}"
+                              loading="lazy"
+                              data-crop-x="${geo.cropRegion ? geo.cropRegion.x : ''}"
+                              data-crop-y="${geo.cropRegion ? geo.cropRegion.y : ''}"
+                              data-crop-w="${geo.cropRegion ? geo.cropRegion.w : ''}"
+                              data-crop-h="${geo.cropRegion ? geo.cropRegion.h : ''}"
+                              data-ha-proxy="${haProxyUrl}"
+                              data-fallback-url="${fallbackSnapshotUrl}"
+                              onload="((img) => {
+                                var ar = img.naturalWidth / (img.naturalHeight || 1);
+                                if (ar < 1.45 && img.dataset.cropX) {
+                                  var x = Math.max(0, Math.min(100, parseFloat(img.dataset.cropX) * 100));
+                                  var y = Math.max(0, Math.min(100, parseFloat(img.dataset.cropY) * 100));
+                                  var w = Math.max(12, Math.min(100 - x, parseFloat(img.dataset.cropW) * 100));
+                                  var h = Math.max(12, Math.min(100 - y, parseFloat(img.dataset.cropH) * 100));
+                                  img.style.left = x + '%';
+                                  img.style.top = y + '%';
+                                  img.style.width = w + '%';
+                                  img.style.height = h + '%';
+                                  img.style.borderRadius = '3px';
+                                  img.style.boxShadow = '0 0 6px rgba(0,0,0,0.7)';
+                                } else {
+                                  img.style.left = '0';
+                                  img.style.top = '0';
+                                  img.style.width = '100%';
+                                  img.style.height = '100%';
+                                  img.style.borderRadius = '0';
+                                  img.style.boxShadow = 'none';
+                                }
+                              })(this)"
+                              onerror="((img) => {
+                                if (!img.dataset.triedHa && img.dataset.haProxy && img.src !== img.dataset.haProxy) {
+                                  img.dataset.triedHa = 'true';
+                                  img.src = img.dataset.haProxy;
+                                } else if (!img.dataset.triedFallback && img.dataset.fallbackUrl && img.src !== img.dataset.fallbackUrl) {
+                                  img.dataset.triedFallback = 'true';
+                                  img.src = img.dataset.fallbackUrl;
+                                } else {
+                                  img.style.display = 'none';
+                                }
+                              })(this)"
+                            />
+                          ` : ''}
+                          <div class="mask-preview-minimap">
+                            <svg viewBox="0 0 ${geo.viewBoxW} ${geo.viewBoxH}" preserveAspectRatio="none">
+                              ${geo.polyPts ? `<polygon points="${geo.polyPts}" class="minimap-poly" vector-effect="non-scaling-stroke" />` : ''}
+                            </svg>
+                            <span class="minimap-pos-tag">${geo.posName}</span>
+                          </div>
                         </div>
                         <div class="mask-card-info">
                           <div class="mask-card-header">
