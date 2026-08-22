@@ -8,7 +8,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, deleteEvent } from './frigate/api';
 
-const CARD_VERSION = '2.3.46';
+const CARD_VERSION = '2.3.49';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -905,16 +905,14 @@ export class FrigateEventsCard extends LitElement {
   }
 
   private _injectModalStyles(): void {
-    if (FrigateEventsCard._stylesInjected) return;
-
     const styleId = 'frigate-events-card-modal-styles';
-    if (document.getElementById(styleId)) {
-      FrigateEventsCard._stylesInjected = true;
-      return;
+    let style = document.getElementById(styleId) as HTMLStyleElement | null;
+    if (!style) {
+      style = document.createElement('style');
+      style.id = styleId;
+      document.head.appendChild(style);
     }
 
-    const style = document.createElement('style');
-    style.id = styleId;
     style.textContent = `
       .frigate-events-modal {
         position: fixed;
@@ -1687,7 +1685,8 @@ export class FrigateEventsCard extends LitElement {
         border-color: rgba(255, 255, 255, 0.28);
       }
 
-      .mask-empty-state {
+      .mask-empty-state,
+      .mask-manager-empty {
         display: flex;
         flex-direction: column;
         align-items: center;
@@ -1698,20 +1697,26 @@ export class FrigateEventsCard extends LitElement {
         color: #888;
       }
 
-      .mask-empty-state svg {
+      .mask-empty-state svg,
+      .mask-manager-empty svg {
         width: 44px;
         height: 44px;
         fill: #475569;
+        flex-shrink: 0;
       }
 
-      .mask-empty-state h4 {
+      .mask-empty-state h3,
+      .mask-empty-state h4,
+      .mask-manager-empty h3,
+      .mask-manager-empty h4 {
         margin: 0;
         font-size: 15px;
         color: #cbd5e1;
         font-weight: 600;
       }
 
-      .mask-empty-state p {
+      .mask-empty-state p,
+      .mask-manager-empty p {
         margin: 0;
         font-size: 13px;
         max-width: 380px;
@@ -1857,7 +1862,9 @@ export class FrigateEventsCard extends LitElement {
         fill: currentColor;
       }
     `;
-    document.head.appendChild(style);
+    if (!style.parentNode) {
+      document.head.appendChild(style);
+    }
     FrigateEventsCard._stylesInjected = true;
   }
 
@@ -2801,9 +2808,9 @@ export class FrigateEventsCard extends LitElement {
           ` : ''}
 
           ${filteredMasks.length === 0 && filteredPending.length === 0 ? `
-            <div class="mask-manager-empty">
-              <svg viewBox="0 0 24 24" class="mask-empty-icon"><path d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,4A8,8 0 0,1 20,12A8,8 0 0,1 12,20A8,8 0 0,1 4,12A8,8 0 0,1 12,4M11,16.5L6.5,12L7.91,10.59L11,13.67L16.59,8.09L18,9.5L11,16.5Z"/></svg>
-              <h3>No Active Temporary Masks</h3>
+            <div class="mask-empty-state">
+              <svg viewBox="0 0 24 24"><path d="M2,2H8V4H16V2H22V8H20V16H22V22H16V20H8V22H2V16H4V8H2V2M4,4V6H6V4H4M18,4V6H20V4H18M20,18V20H18V18H20M4,18V20H6V18H4M8,6V8H6V16H8V18H16V16H18V8H16V6H8M9,9H15V15H9V9Z"/></svg>
+              <h4>No Active Temporary Masks</h4>
               <p>Apply temporary false-positive masks by right-clicking any event thumbnail below or from actionable notifications.</p>
             </div>
           ` : ''}
