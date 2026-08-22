@@ -8,7 +8,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, deleteEvent } from './frigate/api';
 
-const CARD_VERSION = '2.3.44';
+const CARD_VERSION = '2.3.45';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -2905,7 +2905,6 @@ export class FrigateEventsCard extends LitElement {
                           <svg viewBox="0 0 ${geo.viewBoxW} ${geo.viewBoxH}" preserveAspectRatio="none">
                             ${geo.polyPts ? `<polygon points="${geo.polyPts}" class="minimap-poly" vector-effect="non-scaling-stroke" />` : ''}
                           </svg>
-                          <span class="minimap-pos-tag">${geo.posName}</span>
                         </div>
                       </div>
 
@@ -3053,7 +3052,6 @@ export class FrigateEventsCard extends LitElement {
                             <svg viewBox="0 0 ${geo.viewBoxW} ${geo.viewBoxH}" preserveAspectRatio="none">
                               ${geo.polyPts ? `<polygon points="${geo.polyPts}" class="minimap-poly" vector-effect="non-scaling-stroke" />` : ''}
                             </svg>
-                            <span class="minimap-pos-tag">${geo.posName}</span>
                           </div>
                         </div>
                         <div class="mask-card-info">
@@ -3096,8 +3094,11 @@ export class FrigateEventsCard extends LitElement {
     const content = container.querySelector('.mask-manager-content');
     content?.addEventListener('click', (e) => e.stopPropagation());
 
-    container.querySelector('[data-action="close"]')?.addEventListener('click', () => {
-      this._removeMaskManagerModal();
+    container.querySelectorAll('[data-action="close"]').forEach(el => {
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._removeMaskManagerModal();
+      });
     });
 
     container.querySelectorAll('[data-action="restart-frigate"]').forEach(btn => {
