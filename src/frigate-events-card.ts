@@ -8,7 +8,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, deleteEvent } from './frigate/api';
 
-const CARD_VERSION = '2.3.68';
+const CARD_VERSION = '2.3.69';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -1015,24 +1015,34 @@ export class FrigateEventsCard extends LitElement {
         position: absolute;
         top: 10px;
         right: 10px;
-        background: rgba(0, 0, 0, 0.5);
-        color: white;
-        width: 32px;
-        height: 32px;
+        background: rgba(0, 0, 0, 0.65);
+        color: #ffffff;
+        width: 30px;
+        height: 30px;
         border-radius: 50%;
         display: flex;
         align-items: center;
         justify-content: center;
-        font-size: 18px;
+        padding: 0;
         cursor: pointer;
-        transition: background 0.2s;
-        backdrop-filter: blur(4px);
+        transition: background 0.2s, transform 0.15s;
         border: none;
-        font-family: inherit;
+        outline: none;
+        z-index: 10;
+        box-sizing: border-box;
+      }
+
+      .frigate-events-modal-close svg {
+        width: 16px;
+        height: 16px;
+        fill: currentColor;
+        display: block;
+        pointer-events: none;
       }
 
       .frigate-events-modal-close:hover {
-        background: rgba(0, 0, 0, 0.8);
+        background: rgba(0, 0, 0, 0.9);
+        transform: scale(1.06);
       }
 
       .frigate-events-modal-nav {
@@ -1299,7 +1309,11 @@ export class FrigateEventsCard extends LitElement {
           right: 6px;
           width: 26px;
           height: 26px;
-          font-size: 14px;
+        }
+
+        .frigate-events-modal-close svg {
+          width: 14px;
+          height: 14px;
         }
 
         .frigate-events-modal-nav {
@@ -2198,7 +2212,9 @@ export class FrigateEventsCard extends LitElement {
                </video>`
             : `<img src="${snapshotUrl}" alt="${event.label}" />`
           }          ${nextBtnHtml}
-          <button class="frigate-events-modal-close">x</button>
+          <button class="frigate-events-modal-close" title="Close">
+            <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+          </button>
         </div>
         <div class="frigate-events-modal-info">
           <div class="frigate-events-modal-info-top">
@@ -3000,7 +3016,9 @@ export class FrigateEventsCard extends LitElement {
             <span class="mask-manager-count-badge">${totalCount} active</span>
           </div>
           <div class="mask-manager-header-actions">
-            <button class="frigate-events-modal-close" data-action="close">✕</button>
+            <button class="frigate-events-modal-close" data-action="close" title="Close">
+              <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+            </button>
           </div>
         </div>
 
