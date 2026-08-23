@@ -7,6 +7,14 @@ A simple Lovelace card for displaying recent Frigate detection events in a horiz
 ![Screenshot](https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/screenshot_3.png)
 ![Screenshot](https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/screenshot_4.png)
 
+## What's New in v2.4
+
+- **Context Menu & Direct Event Deletion**: Right-click (desktop) or long-press (mobile/touch) any event thumbnail to quickly view details or permanently delete events, snapshots, and video clips from the Frigate NVR backend directly from your dashboard.
+- **Dynamic Temporary False-Positive Masking**: Turn false detections (parked cars, shadows, spiderwebs, outdoor decorations) into auto-padded polygon masks with a single click. Includes customizable duration presets (1h to 7 days or custom hours) with zero-restart mask extension and zero-downtime removals.
+- **Live Feed Mask Manager Modal**: Right-click the live WebRTC camera feed to open the interactive Mask Manager — view active masks with snapshot minimaps, countdown timers, polygon coordinates, and per-mask controls.
+- **Actionable Mobile Push Notifications**: Apply 8h or 24h temporary masks directly from Home Assistant mobile notifications on your phone lock screen or smartwatch.
+- **Intelligent WebRTC Background Sleep**: Automatically suspends live video decoding when the dashboard tab or window is minimized or hidden in the background, reducing browser and GPU CPU usage to near 0% and auto-resuming instantly upon return.
+
 ## Features
 
 - **Fast & Lightweight**: Minified and optimized for quick loading.
@@ -22,7 +30,7 @@ A simple Lovelace card for displaying recent Frigate detection events in a horiz
 - **Customizable Layout**: Reverse the rendering order or offset the timeline to build the exact dashboard you want.
 - **Daily Reset**: Optional automated clearing for a fresh daily view.
 - **Interactive Details Modal**: Deep-dive popup displaying full event information, including AI-generated descriptions (if available), duration, date, camera, zones, and accuracy. Supports interactive previous/next navigation arrows and keyboard hotkeys (ArrowLeft / ArrowRight / Escape).
-- **Right-Click & Long-Press Context Menu**: Right-click (desktop) or long-press (mobile) any event thumbnail to instantly view details, permanently delete events from Frigate, or apply 24-hour temporary false-positive masks.
+- **Right-Click & Long-Press Context Menu**: Right-click (desktop) or long-press (mobile) any event thumbnail to instantly view details, permanently delete events from Frigate, or apply temporary false-positive masks.
 - **Configurable Modal Metadata**: Fine-grained visibility controls to show/hide specific metadata elements (like date, duration, or camera name) in the details popup.
 
 ## Installation
@@ -186,11 +194,13 @@ video: true
 video_on_hover: true
 ```
 
-### Temporary Masking
+### Context Menu & Event Management
 
-Right-clicking (desktop) or long-pressing (touch devices) any event thumbnail opens a context menu with options to view details, delete the event, or apply a **Temporary Mask**:
+Right-clicking (desktop) or long-pressing (touch devices) any event thumbnail opens an interactive context menu with quick management actions:
 
-* **Temporary Mask (Optional)**: Dynamically available when the companion `frigate_temp_mask` custom component is installed. Automatically calculates a 20% expanded bounding box around false detections (such as a wheelbarrow, package, or parked vehicle), injects a temporary mask into Frigate, and automatically restarts Frigate's backend process so the mask takes effect immediately.
+* **Delete Event**: Permanently deletes the selected event, snapshot, and clip from the Frigate NVR backend directly from your dashboard and immediately removes the thumbnail from your gallery.
+* **View Details**: Opens the full interactive details modal popup with snapshot, video playback, AI description, detection score, and timestamp metrics.
+* **Temporary Masking (Optional)**: Dynamically available when the companion `frigate_temp_mask` custom component is installed. Automatically calculates a 20% expanded bounding box around false detections (such as a wheelbarrow, package, or parked vehicle), injects a temporary mask into Frigate, and automatically restarts Frigate's backend process so the mask takes effect immediately.
 * **Change Duration / Remove Mask**: Right-clicking an already masked event allows changing the mask duration on the fly (1h, 4h, 8h, 12h, 24h, 48h, 7d, or Custom hours) or removing the mask.
 * **Live Video Feed Right-Click (Temporary Mask Manager)**: Right-clicking (or long-pressing on touch devices) the live video feed opens the interactive Mask Manager modal directly, displaying all active masks with object snapshots/minimaps, countdown timers, polygon coordinates, per-mask duration adjustments, and individual removal controls.
 
@@ -367,6 +377,6 @@ Contributions are welcome! Please submit all Pull Requests to the **develop** br
 
 If you encounter any issues, bugs, or have feature requests, please [open an issue on GitHub](https://github.com/saihgupr/frigate-events-card/issues).
 
-Frigate Events Card is open-source and free. If you find it useful, consider giving it a star ⭐ or making a donation to support development!
+Frigate Events Card is open-source and free. If you find it useful, consider giving it a star on GitHub or making a donation to support development!
 
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/saihgupr)

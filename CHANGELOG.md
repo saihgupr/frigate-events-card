@@ -1,6 +1,10 @@
 # Changelog
 
 ## [Unreleased]
+- Added: Right-click (desktop) and long-press (mobile/touch) context menu with **Delete Event** to permanently remove events, snapshots, and recordings from Frigate directly from the dashboard.
+- Fixed: Resolved cross-origin and proxy deletion failures by introducing `frigate_temp_mask.delete_event` service integration with automatic backend proxying.
+- Improved: Live WebRTC CPU optimization — automatically halts stream decoding and WebRTC sessions when the dashboard tab or window is hidden or minimized, dropping GPU/media CPU usage to near 0%.
+- Improved: Immediate local gallery pruning and modal dismissal when an event is deleted.
 
 ## [2.3.0] - 2026-08-11
 - Added: Optional live WebRTC camera feed (`live_view: true` + `live_view_entity: camera.*`) rendered above the event gallery. Uses Home Assistant's native `camera/webrtc_offer` WebSocket protocol for a true continuous peer connection — no periodic refresh, no black-frame flash. Connection is gated by IntersectionObserver (opens when ≥10% of the card is visible, closes with a 10s grace period when the card scrolls out of view), and is fully torn down in `disconnectedCallback` with no leaked peer connections.
