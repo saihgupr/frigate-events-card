@@ -8,7 +8,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, deleteEvent } from './frigate/api';
 
-const CARD_VERSION = '2.3.64';
+const CARD_VERSION = '2.3.68';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -970,14 +970,14 @@ export class FrigateEventsCard extends LitElement {
       .frigate-events-modal-content {
         position: relative;
         width: fit-content;
-        min-width: min(450px, 100%);
-        max-width: min(90vw, 800px);
-        max-height: calc(100vh - max(32px, env(safe-area-inset-top, 16px) + env(safe-area-inset-bottom, 16px)));
+        min-width: 0;
+        max-width: min(92vw, 850px);
+        max-height: calc(100dvh - max(24px, env(safe-area-inset-top, 12px) + env(safe-area-inset-bottom, 12px)));
         margin: auto;
         background: var(--card-background-color, #1c1c1c);
         border-radius: 12px;
         overflow: hidden;
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        box-shadow: 0 8px 30px rgba(0, 0, 0, 0.7);
         display: flex;
         flex-direction: column;
         animation: frigate-modal-slide-up 0.2s forwards;
@@ -994,19 +994,20 @@ export class FrigateEventsCard extends LitElement {
         justify-content: center;
         align-items: center;
         background: #1c1c1c;
-        width: 100%;
+        width: fit-content;
         max-width: 100%;
+        margin: 0 auto;
         overflow: hidden;
       }
 
       .frigate-events-modal-image-container img,
       .frigate-events-modal-image-container video {
-        max-width: 100%;
-        max-height: 55vh;
+        display: block;
         width: auto;
         height: auto;
+        max-width: min(92vw, 850px);
+        max-height: 60dvh;
         object-fit: contain;
-        display: block;
         background-color: #1c1c1c;
       }
 
@@ -1239,35 +1240,44 @@ export class FrigateEventsCard extends LitElement {
       /* ─── Mobile Landscape (max-height <= 550px) ─── */
       @media (max-height: 550px) {
         .frigate-events-modal {
-          align-items: flex-start !important;
-          padding-top: max(22px, env(safe-area-inset-top, 0px) + 16px) !important;
-          padding-bottom: max(16px, env(safe-area-inset-bottom, 0px) + 12px) !important;
-          padding-left: max(20px, env(safe-area-inset-left, 0px) + 16px) !important;
-          padding-right: max(20px, env(safe-area-inset-right, 0px) + 16px) !important;
+          align-items: center !important;
+          justify-content: center !important;
+          padding: max(8px, env(safe-area-inset-top, 8px)) max(16px, env(safe-area-inset-right, 16px)) max(8px, env(safe-area-inset-bottom, 8px)) max(16px, env(safe-area-inset-left, 16px)) !important;
         }
 
         .frigate-events-modal-content {
-          margin: 0 auto !important;
+          margin: auto !important;
           min-width: 0 !important;
-          max-width: min(92vw, 680px) !important;
-          max-height: calc(100vh - max(38px, env(safe-area-inset-top, 0px) + env(safe-area-inset-bottom, 0px) + 30px)) !important;
+          width: fit-content !important;
+          max-width: min(94vw, 850px) !important;
+          max-height: calc(100dvh - max(16px, env(safe-area-inset-top, 8px) + env(safe-area-inset-bottom, 8px))) !important;
           overflow-y: auto;
+          box-shadow: 0 8px 30px rgba(0, 0, 0, 0.7);
+        }
+
+        .frigate-events-modal-image-container {
+          width: fit-content !important;
+          margin: 0 auto !important;
         }
 
         .frigate-events-modal-image-container img,
         .frigate-events-modal-image-container video {
-          max-height: 48vh !important;
+          max-height: 68dvh !important;
+          width: auto !important;
+          max-width: min(94vw, 850px) !important;
           object-fit: contain;
+          display: block;
         }
 
         .frigate-events-modal-info {
-          padding: 8px 12px;
-          gap: 6px;
+          padding: 6px 12px;
+          gap: 4px;
+          width: 100%;
         }
 
         .frigate-events-modal-label,
         .frigate-events-modal-time {
-          font-size: 15px;
+          font-size: 14px;
         }
 
         .frigate-events-modal-camera,
@@ -1279,17 +1289,17 @@ export class FrigateEventsCard extends LitElement {
         }
 
         .frigate-events-modal-description-row {
-          max-height: 50px;
-          padding-top: 6px;
+          max-height: 40px;
+          padding-top: 4px;
           margin-top: 2px;
         }
 
         .frigate-events-modal-close {
           top: 6px;
           right: 6px;
-          width: 28px;
-          height: 28px;
-          font-size: 15px;
+          width: 26px;
+          height: 26px;
+          font-size: 14px;
         }
 
         .frigate-events-modal-nav {
