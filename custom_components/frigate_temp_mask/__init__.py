@@ -646,21 +646,26 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         except Exception as e:
             _LOGGER.error("Failed to delete Frigate event %s: %s", event_id, e)
 
-    if not domain_data.get("services_registered"):
-        hass.services.async_register(DOMAIN, "add_mask", async_handle_add_mask)
-        hass.services.async_register(DOMAIN, "set_duration", async_handle_add_mask)
-        hass.services.async_register(DOMAIN, "remove_mask", async_handle_remove_mask)
-        hass.services.async_register(DOMAIN, "prune_all", async_handle_prune_all)
-        hass.services.async_register(DOMAIN, "restart", async_handle_restart)
-        hass.services.async_register(DOMAIN, "restart_frigate", async_handle_restart)
-        hass.services.async_register(DOMAIN, "sync", async_handle_sync)
-        hass.services.async_register(DOMAIN, "dismiss_pending", async_handle_dismiss_pending)
-        hass.services.async_register(DOMAIN, "delete_event", async_handle_delete_event)
-        domain_data["services_registered"] = True
+    hass.services.async_register(DOMAIN, "add_mask", async_handle_add_mask)
+    hass.services.async_register(DOMAIN, "set_duration", async_handle_add_mask)
+    hass.services.async_register(DOMAIN, "remove_mask", async_handle_remove_mask)
+    hass.services.async_register(DOMAIN, "prune_all", async_handle_prune_all)
+    hass.services.async_register(DOMAIN, "restart", async_handle_restart)
+    hass.services.async_register(DOMAIN, "restart_frigate", async_handle_restart)
+    hass.services.async_register(DOMAIN, "sync", async_handle_sync)
+    hass.services.async_register(DOMAIN, "dismiss_pending", async_handle_dismiss_pending)
+    hass.services.async_register(DOMAIN, "delete_event", async_handle_delete_event)
+    domain_data["services_registered"] = True
 
     if not domain_data.get("view_registered"):
-        hass.http.register_view(FrigateRecordingSnapshotView(hass, _get_frigate_base_url))
-        hass.http.register_view(FrigateEventDeleteView(hass, _get_frigate_base_url))
+        try:
+            hass.http.register_view(FrigateRecordingSnapshotView(hass, _get_frigate_base_url))
+        except Exception:
+            pass
+        try:
+            hass.http.register_view(FrigateEventDeleteView(hass, _get_frigate_base_url))
+        except Exception:
+            pass
         domain_data["view_registered"] = True
 
     # Periodic background synchronization

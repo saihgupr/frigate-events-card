@@ -8,7 +8,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, deleteEvent } from './frigate/api';
 
-const CARD_VERSION = '2.3.57';
+const CARD_VERSION = '2.3.61';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -3371,7 +3371,13 @@ export class FrigateEventsCard extends LitElement {
 
   private async _executeDeleteEvent(event: FrigateEvent): Promise<void> {
     const clientId = this._config?.frigate_client_id || 'frigate';
-    const success = await deleteEvent(clientId, event.id, this._config?.frigate_url, this.hass);
+    const success = await deleteEvent(
+      clientId,
+      event.id,
+      this._config?.frigate_url,
+      this._config?.go2rtc_url,
+      this.hass
+    );
 
     if (success) {
       // Remove from local events array immediately
