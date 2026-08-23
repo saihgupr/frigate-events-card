@@ -8,7 +8,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, deleteEvent } from './frigate/api';
 
-const CARD_VERSION = '2.3.61';
+const CARD_VERSION = '2.3.63';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -168,6 +168,11 @@ export class FrigateEventsCard extends LitElement {
   private _isIntersecting = false;
   private _touchTimeout?: ReturnType<typeof setTimeout>;
   private _liveTouchTimeout?: ReturnType<typeof setTimeout>;
+  private _touchStartX?: number;
+  private _touchStartY?: number;
+  private _liveTouchStartX?: number;
+  private _liveTouchStartY?: number;
+  private _didLongPress = false;
 
   /**
    * Calculate the daily reset timestamp based on the configured time.
@@ -719,6 +724,10 @@ export class FrigateEventsCard extends LitElement {
    * Handle clicking the live view video to toggle fullscreen.
    */
   private _handleLiveViewClick(e: Event): void {
+    if (this._didLongPress) {
+      this._didLongPress = false;
+      return;
+    }
     const container = e.currentTarget as HTMLElement;
     const videoEl = this._liveVideoEl || container.querySelector('video');
 
@@ -910,6 +919,10 @@ export class FrigateEventsCard extends LitElement {
   }
 
   private _handleEventClick(event: FrigateEvent): void {
+    if (this._didLongPress) {
+      this._didLongPress = false;
+      return;
+    }
     this._selectedEvent = event;
     this._showModal();
   }
@@ -2272,6 +2285,10 @@ export class FrigateEventsCard extends LitElement {
   private _handleContextMenu(e: MouseEvent, event: FrigateEvent): void {
     e.preventDefault();
     e.stopPropagation();
+    if (this._touchTimeout) {
+      clearTimeout(this._touchTimeout);
+      this._touchTimeout = undefined;
+    }
     this._openContextMenu(e.clientX, e.clientY, event);
   }
 
@@ -2280,16 +2297,41 @@ export class FrigateEventsCard extends LitElement {
     const touch = e.touches[0];
     const clientX = touch.clientX;
     const clientY = touch.clientY;
+    this._touchStartX = clientX;
+    this._touchStartY = clientY;
+    this._didLongPress = false;
+
+    if (this._touchTimeout) {
+      clearTimeout(this._touchTimeout);
+    }
 
     this._touchTimeout = setTimeout(() => {
+      this._didLongPress = true;
       this._openContextMenu(clientX, clientY, event);
-    }, 500);
+    }, 450);
+  }
+
+  private _handleTouchMove(e: TouchEvent): void {
+    if (!this._touchTimeout || this._touchStartX === undefined || this._touchStartY === undefined) return;
+    const touch = e.touches[0];
+    if (!touch) return;
+    const deltaX = Math.abs(touch.clientX - this._touchStartX);
+    const deltaY = Math.abs(touch.clientY - this._touchStartY);
+    if (deltaX > 10 || deltaY > 10) {
+      clearTimeout(this._touchTimeout);
+      this._touchTimeout = undefined;
+    }
   }
 
   private _handleTouchEnd(): void {
     if (this._touchTimeout) {
       clearTimeout(this._touchTimeout);
       this._touchTimeout = undefined;
+    }
+    if (this._didLongPress) {
+      setTimeout(() => {
+        this._didLongPress = false;
+      }, 350);
     }
   }
 
@@ -2532,20 +2574,50 @@ export class FrigateEventsCard extends LitElement {
   private _handleLiveViewContextMenu(e: MouseEvent): void {
     e.preventDefault();
     e.stopPropagation();
+    if (this._liveTouchTimeout) {
+      clearTimeout(this._liveTouchTimeout);
+      this._liveTouchTimeout = undefined;
+    }
     this._showMaskManagerModal();
   }
 
   private _handleLiveViewTouchStart(e: TouchEvent): void {
     if (e.touches.length !== 1) return;
+    const touch = e.touches[0];
+    this._liveTouchStartX = touch.clientX;
+    this._liveTouchStartY = touch.clientY;
+    this._didLongPress = false;
+
+    if (this._liveTouchTimeout) {
+      clearTimeout(this._liveTouchTimeout);
+    }
     this._liveTouchTimeout = setTimeout(() => {
+      this._didLongPress = true;
       this._showMaskManagerModal();
-    }, 500);
+    }, 450);
+  }
+
+  private _handleLiveViewTouchMove(e: TouchEvent): void {
+    if (!this._liveTouchTimeout || this._liveTouchStartX === undefined || this._liveTouchStartY === undefined) return;
+    const touch = e.touches[0];
+    if (!touch) return;
+    const deltaX = Math.abs(touch.clientX - this._liveTouchStartX);
+    const deltaY = Math.abs(touch.clientY - this._liveTouchStartY);
+    if (deltaX > 10 || deltaY > 10) {
+      clearTimeout(this._liveTouchTimeout);
+      this._liveTouchTimeout = undefined;
+    }
   }
 
   private _handleLiveViewTouchEnd(): void {
     if (this._liveTouchTimeout) {
       clearTimeout(this._liveTouchTimeout);
       this._liveTouchTimeout = undefined;
+    }
+    if (this._didLongPress) {
+      setTimeout(() => {
+        this._didLongPress = false;
+      }, 350);
     }
   }
 
@@ -3910,6 +3982,7 @@ export class FrigateEventsCard extends LitElement {
         @click=${(e: Event) => this._handleLiveViewClick(e)}
         @contextmenu=${(e: MouseEvent) => this._handleLiveViewContextMenu(e)}
         @touchstart=${(e: TouchEvent) => this._handleLiveViewTouchStart(e)}
+        @touchmove=${(e: TouchEvent) => this._handleLiveViewTouchMove(e)}
         @touchend=${() => this._handleLiveViewTouchEnd()}
         @touchcancel=${() => this._handleLiveViewTouchEnd()}
       >
@@ -3948,6 +4021,7 @@ export class FrigateEventsCard extends LitElement {
         @click=${() => this._handleEventClick(event)}
         @contextmenu=${(e: MouseEvent) => this._handleContextMenu(e, event)}
         @touchstart=${(e: TouchEvent) => this._handleTouchStart(e, event)}
+        @touchmove=${(e: TouchEvent) => this._handleTouchMove(e)}
         @touchend=${() => this._handleTouchEnd()}
         @touchcancel=${() => this._handleTouchEnd()}
         @mouseenter=${() => { if (playVideoOnHover) this._hoveredEventId = event.id; }}
@@ -4148,6 +4222,10 @@ export class FrigateEventsCard extends LitElement {
         overflow: hidden;
         background: var(--secondary-background-color);
         transition: transform 0.2s, opacity 0.2s;
+        -webkit-touch-callout: none !important;
+        -webkit-user-select: none !important;
+        user-select: none !important;
+        touch-action: pan-x pan-y;
       }
 
       .event:hover {
@@ -4163,6 +4241,10 @@ export class FrigateEventsCard extends LitElement {
         aspect-ratio: 1 / 1;
         border-radius: 12px;
         background: #1c1c1c;
+        -webkit-touch-callout: none !important;
+        -webkit-user-select: none !important;
+        user-select: none !important;
+        touch-action: pan-x pan-y;
       }
 
       .event img,
@@ -4171,6 +4253,11 @@ export class FrigateEventsCard extends LitElement {
         height: 100%;
         object-fit: cover;
         display: block;
+        -webkit-touch-callout: none !important;
+        -webkit-user-select: none !important;
+        -webkit-user-drag: none !important;
+        user-select: none !important;
+        pointer-events: none !important;
       }
       
       .debug-version {
@@ -4193,6 +4280,21 @@ export class FrigateEventsCard extends LitElement {
         margin-bottom: 8px;
         position: relative;
         cursor: pointer;
+        -webkit-touch-callout: none !important;
+        -webkit-user-select: none !important;
+        user-select: none !important;
+        touch-action: manipulation;
+      }
+
+      .live-view-video {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+        -webkit-touch-callout: none !important;
+        -webkit-user-select: none !important;
+        user-select: none !important;
+        pointer-events: none !important;
       }
 
       .live-view-container:fullscreen,
