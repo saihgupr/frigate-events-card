@@ -8,7 +8,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, deleteEvent } from './frigate/api';
 
-const CARD_VERSION = '2.3.55';
+const CARD_VERSION = '2.3.57';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -165,6 +165,7 @@ export class FrigateEventsCard extends LitElement {
   private _liveVideoEl: HTMLVideoElement | null = null;
   private _remoteStream?: MediaStream;
   private _contextMenuEl?: HTMLElement;
+  private _isIntersecting = false;
   private _touchTimeout?: ReturnType<typeof setTimeout>;
   private _liveTouchTimeout?: ReturnType<typeof setTimeout>;
 
@@ -348,6 +349,16 @@ export class FrigateEventsCard extends LitElement {
           this._unsubscribe = undefined;
         }
         this._subscribeToEvents();
+
+        // Resume live WebRTC stream if card is in viewport
+        if (this._config?.live_view && this._isIntersecting && !this._peerConnection) {
+          this._startWebRTC();
+        }
+      } else if (document.visibilityState === 'hidden') {
+        // Halt WebRTC stream decoding immediately when tab/window is hidden or in background
+        if (this._config?.live_view && this._peerConnection) {
+          this._teardownWebRTC();
+        }
       }
     };
     document.addEventListener('visibilitychange', this._boundVisibilityHandler);
@@ -389,7 +400,8 @@ export class FrigateEventsCard extends LitElement {
     this._intersectionObserver = new IntersectionObserver(
       (entries) => {
         const isVisible = entries.some(e => e.isIntersecting);
-        if (isVisible) {
+        this._isIntersecting = isVisible;
+        if (isVisible && document.visibilityState === 'visible') {
           // Cancel any pending teardown grace timer
           if (this._intersectionGraceTimer) {
             clearTimeout(this._intersectionGraceTimer);
@@ -692,6 +704,9 @@ export class FrigateEventsCard extends LitElement {
 
     // Detach the stream from the video element and stop all tracks
     if (this._liveVideoEl) {
+      try {
+        this._liveVideoEl.pause();
+      } catch (_) {}
       this._liveVideoEl.srcObject = null;
     }
     if (this._remoteStream) {
@@ -3356,14 +3371,16 @@ export class FrigateEventsCard extends LitElement {
 
   private async _executeDeleteEvent(event: FrigateEvent): Promise<void> {
     const clientId = this._config?.frigate_client_id || 'frigate';
-    const success = await deleteEvent(clientId, event.id, this._config?.go2rtc_url);
+    const success = await deleteEvent(clientId, event.id, this._config?.frigate_url, this.hass);
 
-    // Remove from local events array immediately
-    this._events = this._events.filter(e => e.id !== event.id);
-    this.requestUpdate();
+    if (success) {
+      // Remove from local events array immediately
+      this._events = this._events.filter(e => e.id !== event.id);
+      this.requestUpdate();
 
-    if (this._selectedEvent && this._selectedEvent.id === event.id) {
-      this._handleModalClose();
+      if (this._selectedEvent && this._selectedEvent.id === event.id) {
+        this._handleModalClose();
+      }
     }
 
     this.dispatchEvent(new CustomEvent('hass-notification', {

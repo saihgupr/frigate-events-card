@@ -96,3 +96,16 @@ dismiss_pending:
       description: Optional specific mask identifier to dismiss. If omitted, all pending masks are dismissed.
       selector:
         text:
+
+delete_event:
+  name: Delete Frigate Event
+  description: Deletes an event from Frigate by its event ID.
+  fields:
+    event_id:
+      name: Event ID
+      description: Frigate event ID of the event to delete.
+      required: true
+      example: 1786887088.764725-gq35zl
+      selector:
+        text:
+

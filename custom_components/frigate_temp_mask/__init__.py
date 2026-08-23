@@ -97,6 +97,37 @@ class FrigateRecordingSnapshotView(HomeAssistantView):
         return web.Response(status=404)
 
 
+class FrigateEventDeleteView(HomeAssistantView):
+    """View to proxy DELETE event requests to Frigate."""
+
+    url = "/api/frigate_temp_mask/events/{event_id}"
+    name = "api:frigate_temp_mask:event_delete"
+    requires_auth = False
+
+    def __init__(self, hass: HomeAssistant, get_base_url_fn) -> None:
+        self.hass = hass
+        self._get_base_url = get_base_url_fn
+
+    async def delete(self, request: web.Request, event_id: str) -> web.Response:
+        session = async_get_clientsession(self.hass)
+        base_url = self._get_base_url()
+        try:
+            async with session.delete(f"{base_url}/api/events/{event_id}", timeout=10) as resp:
+                if resp.status in (200, 204):
+                    return web.json_response({"success": True, "event_id": event_id})
+                return web.json_response(
+                    {"success": False, "error": f"Frigate returned status {resp.status}"},
+                    status=resp.status,
+                )
+        except Exception as e:
+            _LOGGER.error("Error deleting Frigate event %s: %s", event_id, e)
+            return web.json_response({"success": False, "error": str(e)}, status=500)
+
+    async def post(self, request: web.Request, event_id: str) -> web.Response:
+        """Allow POST as an alternate method for environments blocking DELETE."""
+        return await self.delete(request, event_id)
+
+
 def _parse_iso_to_timestamp(iso_str: str | None) -> float | None:
     """Parse ISO formatted timestamp string to float epoch seconds."""
     if not iso_str:
@@ -599,6 +630,22 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
             _LOGGER.info("Dismissed all pending restart masks")
         _update_state()
 
+    async def async_handle_delete_event(call: ServiceCall):
+        event_id = call.data.get("event_id")
+        if not event_id:
+            _LOGGER.error("No event_id provided for delete_event")
+            return
+        session = async_get_clientsession(hass)
+        base_url = _get_frigate_base_url()
+        try:
+            async with session.delete(f"{base_url}/api/events/{event_id}", timeout=10) as resp:
+                if resp.status in (200, 204):
+                    _LOGGER.info("Deleted Frigate event %s", event_id)
+                else:
+                    _LOGGER.error("Failed to delete Frigate event %s (status: %s)", event_id, resp.status)
+        except Exception as e:
+            _LOGGER.error("Failed to delete Frigate event %s: %s", event_id, e)
+
     if not domain_data.get("services_registered"):
         hass.services.async_register(DOMAIN, "add_mask", async_handle_add_mask)
         hass.services.async_register(DOMAIN, "set_duration", async_handle_add_mask)
@@ -608,10 +655,12 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         hass.services.async_register(DOMAIN, "restart_frigate", async_handle_restart)
         hass.services.async_register(DOMAIN, "sync", async_handle_sync)
         hass.services.async_register(DOMAIN, "dismiss_pending", async_handle_dismiss_pending)
+        hass.services.async_register(DOMAIN, "delete_event", async_handle_delete_event)
         domain_data["services_registered"] = True
 
     if not domain_data.get("view_registered"):
         hass.http.register_view(FrigateRecordingSnapshotView(hass, _get_frigate_base_url))
+        hass.http.register_view(FrigateEventDeleteView(hass, _get_frigate_base_url))
         domain_data["view_registered"] = True
 
     # Periodic background synchronization

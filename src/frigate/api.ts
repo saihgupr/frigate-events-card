@@ -88,22 +88,65 @@ export async function subscribeToEvents(
 export async function deleteEvent(
     clientId: string,
     eventId: string,
-    frigateUrl?: string
+    frigateUrl?: string,
+    hass?: HomeAssistant
 ): Promise<boolean> {
     try {
+        // 1. If explicit direct Frigate URL is configured, try direct API
         if (frigateUrl) {
-            const baseUrl = frigateUrl.replace(/\/$/, '');
-            const res = await fetch(`${baseUrl}/api/events/${encodeURIComponent(eventId)}`, {
+            try {
+                const baseUrl = frigateUrl.replace(/\/$/, '');
+                const res = await fetch(`${baseUrl}/api/events/${encodeURIComponent(eventId)}`, {
+                    method: 'DELETE',
+                });
+                if (res.ok) return true;
+            } catch (e) {
+                console.debug('Direct Frigate API delete failed, trying backend proxies:', e);
+            }
+        }
+
+        // 2. Try frigate_temp_mask proxy view endpoint (DELETE then POST)
+        try {
+            const proxyRes = await fetch(`/api/frigate_temp_mask/events/${encodeURIComponent(eventId)}`, {
                 method: 'DELETE',
             });
-            if (res.ok) return true;
+            if (proxyRes.ok) return true;
+            if (proxyRes.status === 405) {
+                const postRes = await fetch(`/api/frigate_temp_mask/events/${encodeURIComponent(eventId)}`, {
+                    method: 'POST',
+                });
+                if (postRes.ok) return true;
+            }
+        } catch (e) {
+            console.debug('frigate_temp_mask HTTP proxy delete failed:', e);
         }
-        const proxyRes = await fetch(`/api/frigate/${encodeURIComponent(clientId)}/events/${encodeURIComponent(eventId)}`, {
-            method: 'DELETE',
-        });
-        return proxyRes.ok;
+
+        // 3. Try Home Assistant service call via frigate_temp_mask
+        if (hass?.callService) {
+            try {
+                await hass.callService('frigate_temp_mask', 'delete_event', {
+                    event_id: eventId,
+                });
+                return true;
+            } catch (e) {
+                console.debug('frigate_temp_mask.delete_event service call failed:', e);
+            }
+        }
+
+        // 4. Try standard Frigate integration proxy URL
+        try {
+            const haProxyRes = await fetch(`/api/frigate/${encodeURIComponent(clientId)}/events/${encodeURIComponent(eventId)}`, {
+                method: 'DELETE',
+            });
+            if (haProxyRes.ok) return true;
+        } catch (e) {
+            console.debug('Standard Frigate proxy delete failed:', e);
+        }
+
+        return false;
     } catch (e) {
         console.error('Failed to delete Frigate event:', e);
         return false;
     }
 }
+
