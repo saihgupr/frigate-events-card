@@ -8,7 +8,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, deleteEvent } from './frigate/api';
 
-const CARD_VERSION = '2.3.63';
+const CARD_VERSION = '2.3.64';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -953,9 +953,12 @@ export class FrigateEventsCard extends LitElement {
         display: flex;
         align-items: center;
         justify-content: center;
-        padding: 20px;
+        padding: max(16px, env(safe-area-inset-top, 16px)) max(16px, env(safe-area-inset-right, 16px)) max(16px, env(safe-area-inset-bottom, 16px)) max(16px, env(safe-area-inset-left, 16px));
         box-sizing: border-box;
         backdrop-filter: blur(5px);
+        -webkit-backdrop-filter: blur(5px);
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
         animation: frigate-modal-fade-in 0.2s forwards;
       }
 
@@ -967,9 +970,10 @@ export class FrigateEventsCard extends LitElement {
       .frigate-events-modal-content {
         position: relative;
         width: fit-content;
-        min-width: 450px;
-        max-width: 90%;
-        max-height: 90%;
+        min-width: min(450px, 100%);
+        max-width: min(90vw, 800px);
+        max-height: calc(100vh - max(32px, env(safe-area-inset-top, 16px) + env(safe-area-inset-bottom, 16px)));
+        margin: auto;
         background: var(--card-background-color, #1c1c1c);
         border-radius: 12px;
         overflow: hidden;
@@ -988,7 +992,11 @@ export class FrigateEventsCard extends LitElement {
         position: relative;
         display: flex;
         justify-content: center;
+        align-items: center;
         background: #1c1c1c;
+        width: 100%;
+        max-width: 100%;
+        overflow: hidden;
       }
 
       .frigate-events-modal-image-container img,
@@ -997,6 +1005,7 @@ export class FrigateEventsCard extends LitElement {
         max-height: 55vh;
         width: auto;
         height: auto;
+        object-fit: contain;
         display: block;
         background-color: #1c1c1c;
       }
@@ -1182,6 +1191,111 @@ export class FrigateEventsCard extends LitElement {
         color: var(--primary-text-color, #e0e0e0);
         font-style: italic;
         white-space: pre-wrap;
+      }
+
+      /* ─── Mobile Portrait (< 600px width) ─── */
+      @media (max-width: 600px) {
+        .frigate-events-modal {
+          padding: max(10px, env(safe-area-inset-top, 10px)) max(10px, env(safe-area-inset-right, 10px)) max(10px, env(safe-area-inset-bottom, 10px)) max(10px, env(safe-area-inset-left, 10px));
+        }
+
+        .frigate-events-modal-content {
+          min-width: 0 !important;
+          width: 100% !important;
+          max-width: 100% !important;
+          max-height: calc(100vh - max(20px, env(safe-area-inset-top, 10px) + env(safe-area-inset-bottom, 10px)));
+          border-radius: 10px;
+        }
+
+        .frigate-events-modal-image-container img,
+        .frigate-events-modal-image-container video {
+          max-height: 50vh;
+          width: 100%;
+          object-fit: contain;
+        }
+
+        .frigate-events-modal-info {
+          padding: 12px;
+          gap: 8px;
+        }
+
+        .frigate-events-modal-label {
+          font-size: 17px;
+        }
+
+        .frigate-events-modal-time {
+          font-size: 16px;
+        }
+
+        .frigate-events-modal-camera,
+        .frigate-events-modal-zones,
+        .frigate-events-modal-duration,
+        .frigate-events-modal-score,
+        .frigate-events-modal-description {
+          font-size: 12px;
+        }
+      }
+
+      /* ─── Mobile Landscape (max-height <= 550px) ─── */
+      @media (max-height: 550px) {
+        .frigate-events-modal {
+          align-items: flex-start !important;
+          padding-top: max(22px, env(safe-area-inset-top, 0px) + 16px) !important;
+          padding-bottom: max(16px, env(safe-area-inset-bottom, 0px) + 12px) !important;
+          padding-left: max(20px, env(safe-area-inset-left, 0px) + 16px) !important;
+          padding-right: max(20px, env(safe-area-inset-right, 0px) + 16px) !important;
+        }
+
+        .frigate-events-modal-content {
+          margin: 0 auto !important;
+          min-width: 0 !important;
+          max-width: min(92vw, 680px) !important;
+          max-height: calc(100vh - max(38px, env(safe-area-inset-top, 0px) + env(safe-area-inset-bottom, 0px) + 30px)) !important;
+          overflow-y: auto;
+        }
+
+        .frigate-events-modal-image-container img,
+        .frigate-events-modal-image-container video {
+          max-height: 48vh !important;
+          object-fit: contain;
+        }
+
+        .frigate-events-modal-info {
+          padding: 8px 12px;
+          gap: 6px;
+        }
+
+        .frigate-events-modal-label,
+        .frigate-events-modal-time {
+          font-size: 15px;
+        }
+
+        .frigate-events-modal-camera,
+        .frigate-events-modal-zones,
+        .frigate-events-modal-duration,
+        .frigate-events-modal-score,
+        .frigate-events-modal-description {
+          font-size: 11px;
+        }
+
+        .frigate-events-modal-description-row {
+          max-height: 50px;
+          padding-top: 6px;
+          margin-top: 2px;
+        }
+
+        .frigate-events-modal-close {
+          top: 6px;
+          right: 6px;
+          width: 28px;
+          height: 28px;
+          font-size: 15px;
+        }
+
+        .frigate-events-modal-nav {
+          width: 32px;
+          height: 32px;
+        }
       }
 
       .frigate-events-context-menu {
