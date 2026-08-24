@@ -182,16 +182,30 @@ This example shows a real-world configuration for fine-tuning video clip endpoin
 
 ```yaml
 type: custom:frigate-events-card
+video_start_skip_seconds:
+  person: 0
+  car: 1
 video_end_skip_seconds:
-  car: 3
-  person: 6
-  default: 2
+  car: 33
+  person: 32
+  default: 0
 tracking_pan_delay:
-  car: -1500
+  car: -500
   person: -3000
   default: 0
+tracking_smoothing: 1
+labels:
+  - person
+  - car
+  - umbrella
+show_bounding_box: false
 video: true
 video_on_hover: true
+daily_clear_time: '04:00'
+debug: false
+live_view: true
+live_view_entity: camera.wyze_camera
+go2rtc_url: http://192.168.1.211:1984
 ```
 
 ### Context Menu & Event Management
