@@ -228,15 +228,43 @@ Right-clicking (desktop) or long-pressing (touch devices) any event thumbnail op
 
 The card works completely standalone out of the box. If you would like to enable the **Temporary Mask** feature:
 
-1. Copy the `custom_components/frigate_temp_mask` integration into your Home Assistant `/config/custom_components/` directory.
+1. Copy the `custom_components/frigate_temp_mask` integration into your Home Assistant `/config/custom_components/` directory (or use `deploy.sh`).
 2. Add `frigate_temp_mask:` to your `/config/configuration.yaml`.
-3. Reload YAML or restart Home Assistant.
+3. Restart Home Assistant (or reload YAML).
 
-The card will automatically detect the integration and display the **Temporary Mask**, **Change Duration**, and **Remove Mask** options in the right-click menu, as well as the Live Video Feed Mask Manager.
+The card will automatically detect the integration and display the **Temporary Mask**, **Change Duration**, and **Remove Mask** options in the right-click context menu, as well as the Live Video Feed Mask Manager.
 
-#### Actionable Notification Automation Example (iOS & Android)
+#### Available Services
 
-You can attach **Temporary Mask** action buttons directly to your Home Assistant Frigate mobile push notifications. When tapped from your phone lock screen or smartwatch, Home Assistant automatically calculates the expanded polygon mask, injects it into Frigate, and restarts the detector to stop repeated false alarms immediately without needing to open the dashboard.
+The `frigate_temp_mask` integration exposes the following services under Home Assistant **Developer Tools > Actions / Services**:
+
+| Service | Description | Key Parameters |
+|---|---|---|
+| `frigate_temp_mask.add_mask` | Adds a temporary bounding-box mask around a false detection in Frigate. | `event_id` (required), `duration_hours` (default: 24), `camera` (optional, auto-inferred from event), `padding` (default: 0.20), `mask_id` (optional) |
+| `frigate_temp_mask.set_duration` | Updates the expiration duration for an active temporary mask without restarting Frigate. | `mask_id` (required), `duration_hours` (required) |
+| `frigate_temp_mask.remove_mask` | Removes a temporary mask from Frigate config on disk without interrupting recordings. | `mask_id` (required) |
+| `frigate_temp_mask.prune_all` | Removes all temporary masks from Frigate configuration. | *None* |
+| `frigate_temp_mask.restart` | Restarts the Frigate detector backend process to apply pending configuration changes. | *None* |
+| `frigate_temp_mask.sync` | Forces a manual state synchronization with running Frigate process uptime and active config. | *None* |
+| `frigate_temp_mask.delete_event` | Deletes an event, snapshot, and recording from Frigate. | `event_id` (required) |
+
+#### 1-Click Actionable Notification Blueprint (iOS & Android)
+
+You can attach **Temporary Mask** action buttons directly to your Home Assistant Frigate mobile push notifications. When tapped from your phone lock screen or smartwatch, Home Assistant automatically calculates the expanded polygon mask, injects it into Frigate, and restarts the detector to stop repeated false alarms immediately without opening the dashboard.
+
+> [!TIP]
+> **Pre-Packaged Blueprint Included**:
+> A ready-to-use Blueprint is included at [`blueprints/automation/frigate_temp_mask_notification.yaml`](file:///Users/chrislapointe/Projects/CurrentProjects/frigate-events-card/blueprints/automation/frigate_temp_mask_notification.yaml).
+> 
+> **How to use the Blueprint:**
+> 1. Copy `blueprints/automation/frigate_temp_mask_notification.yaml` to `/config/blueprints/automation/frigate_temp_mask_notification.yaml` in Home Assistant.
+> 2. In Home Assistant, go to **Settings > Automations & Scenes > Blueprints**.
+> 3. Find **Frigate Mobile Notifications with Temporary False-Positive Mask Actions** and click **Create Automation**.
+> 4. Select your notification device (and optional camera filter) and save!
+
+#### Manual Automation Example (iOS & Android)
+
+If you prefer defining your automations manually in YAML:
 
 **1. Sending the Notification with Mask Actions:**
 ```yaml
@@ -279,7 +307,7 @@ trigger:
 action:
   - service: frigate_temp_mask.add_mask
     data:
-      event_id: "{{ trigger.event.data.tag }}"
+      event_id: "{{ trigger.event.data.tag | default(trigger.event.data.action_data, true) }}"
       duration_hours: >
         {% if trigger.event.data.action == 'TEMP_MASK_8H' %}8{% else %}24{% endif %}
 ```

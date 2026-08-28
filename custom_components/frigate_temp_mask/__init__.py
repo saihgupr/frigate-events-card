@@ -270,9 +270,13 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                 await async_handle_remove_mask(ServiceCall(DOMAIN, "remove_mask", {"mask_id": mask_id}))
 
     async def async_handle_add_mask(call: ServiceCall):
-        camera = call.data.get("camera", "wyze_camera")
-        event_id = call.data.get("event_id", "")
-        mask_id = call.data.get("mask_id") or (event_id.split("-")[0] if "-" in event_id else event_id or "manual")
+        camera = (call.data.get("camera") or "").strip()
+        raw_event_id = call.data.get("event_id")
+        event_id = str(raw_event_id).strip().strip("\"'") if raw_event_id is not None else ""
+        raw_mask_id = call.data.get("mask_id")
+        mask_id = str(raw_mask_id).strip().strip("\"'") if raw_mask_id else ""
+        if not mask_id:
+            mask_id = event_id.split("-")[0] if "-" in event_id else event_id or "manual"
         box_str = call.data.get("box", "")
         try:
             duration_hours = float(call.data.get("duration_hours", 24))
@@ -283,18 +287,20 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         except (ValueError, TypeError):
             padding = DEFAULT_PADDING
         padding = max(0.0, padding)
-        label_val = call.data.get("label", "")
+        label_val = (call.data.get("label") or "").strip()
 
         session = async_get_clientsession(hass)
         base_url = _get_frigate_base_url()
 
         polygon_arg = call.data.get("polygon", "")
         box_coords = None
-        if box_str and box_str.strip() not in ["", "none", "unknown"]:
+        if box_str and str(box_str).strip().lower() not in ["", "none", "unknown"]:
             try:
-                box_coords = _coerce_frigate_box([v.strip() for v in box_str.split(",")])
-            except Exception:
-                pass
+                box_coords = _coerce_frigate_box([v.strip() for v in str(box_str).split(",")])
+                if not box_coords:
+                    _LOGGER.warning("Could not parse bounding box from string: '%s'", box_str)
+            except Exception as e:
+                _LOGGER.warning("Error parsing bounding box '%s': %s", box_str, e)
 
         event_data = None
         if not box_coords and not polygon_arg:
@@ -304,12 +310,16 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                         if resp.status == 200:
                             event_data = await resp.json()
                             box_coords = _get_event_box(event_data)
+                            if not box_coords:
+                                _LOGGER.error("Frigate event %s found, but no valid bounding box was present in event data: %s", event_id, event_data)
                             if not camera:
-                                camera = event_data.get("camera", "wyze_camera")
+                                camera = event_data.get("camera", "")
                             if not label_val:
                                 label_val = event_data.get("label", "")
+                        else:
+                            _LOGGER.error("Frigate event API returned status %s for event_id '%s' at %s/api/events/%s", resp.status, event_id, base_url, event_id)
                 except Exception as e:
-                    _LOGGER.error("Error fetching Frigate event %s: %s", event_id, e)
+                    _LOGGER.error("Error fetching Frigate event %s from %s: %s", event_id, base_url, e)
             else:
                 # Fallback: find the most recent event for camera if event_id was not passed
                 try:
@@ -322,14 +332,18 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                                 event_id = event_data.get("id", "")
                                 box_coords = _get_event_box(event_data)
                                 if not camera:
-                                    camera = event_data.get("camera", "wyze_camera")
+                                    camera = event_data.get("camera", "")
                                 if not label_val:
                                     label_val = event_data.get("label", "")
                                 if not mask_id or mask_id == "manual":
                                     mask_id = event_id.split("-")[0] if "-" in event_id else event_id or "manual"
-                                _LOGGER.info("Using latest Frigate event fallback %s for camera %s", event_id, camera)
+                                _LOGGER.info("Using latest Frigate event fallback %s for camera %s", event_id, camera or "unknown")
+                            else:
+                                _LOGGER.warning("No recent Frigate events found for event fallback (camera=%s)", camera or "all")
+                        else:
+                            _LOGGER.error("Frigate events query returned status %s for fallback search", resp.status)
                 except Exception as e:
-                    _LOGGER.error("Error fetching latest Frigate events: %s", e)
+                    _LOGGER.error("Error fetching latest Frigate events fallback: %s", e)
 
         poly_str = polygon_arg
         if not box_coords and not poly_str:
@@ -337,16 +351,25 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
             if mask_id in domain_data["active_masks"]:
                 existing = domain_data["active_masks"][mask_id]
                 poly_str = existing.get("polygon", "")
-                if not camera or camera == "wyze_camera":
-                    camera = existing.get("camera", camera)
+                if not camera:
+                    camera = existing.get("camera", "")
                 if not label_val:
                     label_val = existing.get("label", "")
                 if not box_coords:
                     box_coords = existing.get("box")
 
         if not box_coords and not poly_str:
-            _LOGGER.error("No valid bounding box, polygon, or event ID found for mask addition.")
+            _LOGGER.error(
+                "No valid bounding box, polygon, or event ID could be resolved to add a temporary mask (event_id='%s', camera='%s', mask_id='%s')",
+                event_id,
+                camera,
+                mask_id,
+            )
             return
+
+        if not camera:
+            camera = "wyze_camera"
+            _LOGGER.warning("No camera specified or inferred from event; falling back to default camera '%s'", camera)
 
         width, height = 1920, 1080
         if not poly_str:
@@ -359,7 +382,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                         width = detect_cfg.get("width", 1920)
                         height = detect_cfg.get("height", 1080)
             except Exception as e:
-                _LOGGER.warning("Using fallback resolution 1920x1080: %s", e)
+                _LOGGER.warning("Using fallback resolution 1920x1080 for camera %s: %s", camera, e)
 
             poly_str = _box_to_polygon(box_coords, width, height, padding)
             if not poly_str:

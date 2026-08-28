@@ -4,7 +4,7 @@ add_mask:
   fields:
     camera:
       name: Camera
-      description: Name of the camera in Frigate.
+      description: Name of the camera in Frigate. If omitted, inferred automatically from event_id.
       example: wyze_camera
       selector:
         text:

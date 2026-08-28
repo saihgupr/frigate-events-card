@@ -1,0 +1,69 @@
+blueprint:
+  name: Frigate Mobile Notifications with Temporary False-Positive Mask Actions
+  description: >
+    Sends actionable notifications with a snapshot thumbnail and 1-tap "Mask 24h" / "Mask 8h" action buttons to automatically create a temporary mask in Frigate and eliminate false alarms.
+  domain: automation
+  input:
+    notify_device:
+      name: Notification Device
+      description: Mobile app device to send the actionable push notification.
+      selector:
+        device:
+          integration: mobile_app
+    camera_name:
+      name: Frigate Camera (Optional)
+      description: Restrict notifications to a specific Frigate camera (e.g. driveway). Leave empty for all cameras.
+      default: ""
+      selector:
+        text:
+
+trigger:
+  - id: frigate_event
+    platform: mqtt
+    topic: frigate/events
+    payload: new
+    value_template: "{{ value_json.type }}"
+  - id: mask_action
+    platform: event
+    event_type: mobile_app_notification_action
+
+condition: []
+
+action:
+  - choose:
+      - conditions:
+          - condition: trigger
+            id: frigate_event
+          - condition: template
+            value_template: >
+              {{ camera_name == '' or trigger.payload_json['after']['camera'] == camera_name }}
+        sequence:
+          - domain: mobile_app
+            type: notify
+            device_id: !input notify_device
+            title: "{{ trigger.payload_json['after']['label'] | title }} detected"
+            message: "Motion on {{ trigger.payload_json['after']['camera'] | replace('_', ' ') | title }}"
+            data:
+              image: "/api/frigate/notifications/{{ trigger.payload_json['after']['id'] }}/thumbnail.jpg"
+              tag: "{{ trigger.payload_json['after']['id'] }}"
+              actions:
+                - action: "TEMP_MASK_24H"
+                  title: "Mask 24h"
+                - action: "TEMP_MASK_8H"
+                  title: "Mask 8h"
+                - action: "URI"
+                  title: "View Live"
+                  uri: "/lovelace/cameras"
+
+      - conditions:
+          - condition: trigger
+            id: mask_action
+          - condition: template
+            value_template: >
+              {{ trigger.event.data.action in ['TEMP_MASK_24H', 'TEMP_MASK_8H'] }}
+        sequence:
+          - service: frigate_temp_mask.add_mask
+            data:
+              event_id: "{{ trigger.event.data.tag | default(trigger.event.data.action_data, true) }}"
+              duration_hours: >
+                {% if trigger.event.data.action == 'TEMP_MASK_8H' %}8{% else %}24{% endif %}
