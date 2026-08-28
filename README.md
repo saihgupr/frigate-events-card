@@ -176,7 +176,8 @@ Optionally override the video aspect ratio (defaults to `16 / 9`):
 live_view_aspect_ratio: "4 / 3"
 ```
 
-### Example: Advanced Tracking Configuration
+<details>
+<summary><strong>Example: Advanced Video & Tracking Configuration</strong> (Click to expand)</summary>
 
 This example shows a real-world configuration for fine-tuning video clip endpoints and tracking synchronization based on detection labels.
 
@@ -207,6 +208,7 @@ live_view: true
 live_view_entity: camera.wyze_camera
 go2rtc_url: http://192.168.1.211:1984
 ```
+</details>
 
 ### Context Menu & Event Management
 
@@ -234,7 +236,8 @@ The card works completely standalone out of the box. If you would like to enable
 
 The card will automatically detect the integration and display the **Temporary Mask**, **Change Duration**, and **Remove Mask** options in the right-click context menu, as well as the Live Video Feed Mask Manager.
 
-#### Available Services
+<details>
+<summary><strong>Integration Services Reference</strong> (Click to expand)</summary>
 
 The `frigate_temp_mask` integration exposes the following services under Home Assistant **Developer Tools > Actions / Services**:
 
@@ -248,21 +251,26 @@ The `frigate_temp_mask` integration exposes the following services under Home As
 | `frigate_temp_mask.sync` | Forces a manual state synchronization with running Frigate process uptime and active config. | *None* |
 | `frigate_temp_mask.delete_event` | Deletes an event, snapshot, and recording from Frigate. | `event_id` (required) |
 
+</details>
+
 #### 1-Click Actionable Notification Blueprint (iOS & Android)
 
 You can attach **Temporary Mask** action buttons directly to your Home Assistant Frigate mobile push notifications. When tapped from your phone lock screen or smartwatch, Home Assistant automatically calculates the expanded polygon mask, injects it into Frigate, and restarts the detector to stop repeated false alarms immediately without opening the dashboard.
 
-> [!TIP]
-> **Pre-Packaged Blueprint Included**:
-> A ready-to-use Blueprint is included at [`blueprints/automation/frigate_temp_mask_notification.yaml`](file:///Users/chrislapointe/Projects/CurrentProjects/frigate-events-card/blueprints/automation/frigate_temp_mask_notification.yaml).
-> 
-> **How to use the Blueprint:**
-> 1. Copy `blueprints/automation/frigate_temp_mask_notification.yaml` to `/config/blueprints/automation/frigate_temp_mask_notification.yaml` in Home Assistant.
-> 2. In Home Assistant, go to **Settings > Automations & Scenes > Blueprints**.
-> 3. Find **Frigate Mobile Notifications with Temporary False-Positive Mask Actions** and click **Create Automation**.
-> 4. Select your notification device (and optional camera filter) and save!
+[![Open your Home Assistant instance and show the blueprint import dialog with a specific blueprint pre-filled.](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fsaihgupr%2Ffrigate-events-card%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Ffrigate_temp_mask_notification.yaml)
 
-#### Manual Automation Example (iOS & Android)
+> [!TIP]
+> **Ways to Import the Blueprint:**
+> 
+> * **Option A (1-Click Badge above):** Click the **Open Home Assistant** badge above to automatically import the blueprint into your Home Assistant instance.
+> * **Option B (Import by URL):** In Home Assistant, navigate to **Settings > Automations & Scenes > Blueprints > Import Blueprint** and paste:
+>   ```text
+>   https://github.com/saihgupr/frigate-events-card/blob/main/blueprints/automation/frigate_temp_mask_notification.yaml
+>   ```
+> * **Option C (Manual File Copy):** Copy [`blueprints/automation/frigate_temp_mask_notification.yaml`](file:///Users/chrislapointe/Projects/CurrentProjects/frigate-events-card/blueprints/automation/frigate_temp_mask_notification.yaml) to your Home Assistant `/config/blueprints/automation/` directory.
+
+<details>
+<summary><strong>Manual YAML Automation Example (iOS & Android)</strong> (Click to expand)</summary>
 
 If you prefer defining your automations manually in YAML:
 
@@ -284,7 +292,7 @@ action:
         tag: "{{ trigger.payload_json['after']['id'] }}"
         actions:
           - action: "TEMP_MASK_24H"
-            title: "Mask 24h"
+            title: "Temporary Mask"
           - action: "TEMP_MASK_8H"
             title: "Mask 8h"
           - action: "URI"
@@ -311,6 +319,8 @@ action:
       duration_hours: >
         {% if trigger.event.data.action == 'TEMP_MASK_8H' %}8{% else %}24{% endif %}
 ```
+
+</details>
 
 
 ## Configuration Options

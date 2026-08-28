@@ -1,7 +1,7 @@
 blueprint:
   name: Frigate Mobile Notifications with Temporary False-Positive Mask Actions
   description: >
-    Sends actionable notifications with a snapshot thumbnail and 1-tap "Mask 24h" / "Mask 8h" action buttons to automatically create a temporary mask in Frigate and eliminate false alarms.
+    Sends actionable notifications with a snapshot thumbnail and 1-tap "Temporary Mask" / "Mask 8h" action buttons to automatically create a temporary mask in Frigate and eliminate false alarms.
   domain: automation
   input:
     notify_device:
@@ -48,7 +48,7 @@ action:
               tag: "{{ trigger.payload_json['after']['id'] }}"
               actions:
                 - action: "TEMP_MASK_24H"
-                  title: "Mask 24h"
+                  title: "Temporary Mask"
                 - action: "TEMP_MASK_8H"
                   title: "Mask 8h"
                 - action: "URI"
