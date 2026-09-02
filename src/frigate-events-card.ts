@@ -8,7 +8,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, deleteEvent } from './frigate/api';
 
-const CARD_VERSION = '2.3.73';
+const CARD_VERSION = '2.3.74';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -3438,11 +3438,7 @@ export class FrigateEventsCard extends LitElement {
         composed: true,
       }));
       this.requestUpdate();
-      if (this._maskManagerContainer) {
-        setTimeout(() => {
-          if (this._maskManagerContainer) this._renderMaskManagerContent(this._maskManagerContainer);
-        }, 1500);
-      }
+      this._removeMaskManagerModal();
     } catch (err) {
       console.error('Failed to restart Frigate:', err);
     }
