@@ -216,7 +216,7 @@ Right-clicking (desktop) or long-pressing (touch devices) any event thumbnail op
 
 * **Delete Event**: Permanently deletes the selected event, snapshot, and clip from the Frigate NVR backend directly from your dashboard and immediately removes the thumbnail from your gallery.
 * **View Details**: Opens the full interactive details modal popup with snapshot, video playback, AI description, detection score, and timestamp metrics.
-* **Temporary Masking (Optional)**: Dynamically available when the companion `frigate_temp_mask` custom component is installed. Automatically calculates a 20% expanded bounding box around false detections (such as a wheelbarrow, package, or parked vehicle), injects a temporary mask into Frigate, and automatically restarts Frigate's backend process so the mask takes effect immediately.
+* **Temporary Masking (Optional)**: Dynamically available when the companion `frigate_temp_mask` custom component is installed. Automatically calculates a 10% expanded bounding box around false detections (such as a wheelbarrow, package, or parked vehicle), injects a temporary mask into Frigate, and automatically restarts Frigate's backend process so the mask takes effect immediately.
 * **Change Duration / Remove Mask**: Right-clicking an already masked event allows changing the mask duration on the fly (1h, 4h, 8h, 12h, 24h, 48h, 7d, or Custom hours) or removing the mask.
 * **Live Video Feed Right-Click (Temporary Mask Manager)**: Right-clicking (or long-pressing on touch devices) the live video feed opens the interactive Mask Manager modal directly, displaying all active masks with object snapshots/minimaps, countdown timers, polygon coordinates, per-mask duration adjustments, and individual removal controls.
 
