@@ -35,8 +35,8 @@ add_mask:
           unit_of_measurement: hours
     padding:
       name: Padding
-      description: Percentage padding around detection (default 0.20 for 20%).
-      default: 0.20
+      description: Percentage padding around detection (default 0.10 for 10%).
+      default: 0.10
       selector:
         number:
           min: 0.05

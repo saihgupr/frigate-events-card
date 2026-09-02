@@ -19,7 +19,7 @@ DOMAIN = "frigate_temp_mask"
 _LOGGER = logging.getLogger(__name__)
 
 DEFAULT_FRIGATE_URL = "http://192.168.1.211:5000"
-DEFAULT_PADDING = 0.20
+DEFAULT_PADDING = 0.10
 SYNC_INTERVAL_SECONDS = 30
 
 
@@ -183,7 +183,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         h = max(1.0, y2_px - y1_px)
         pad_x = w * padding
         pad_y_top = h * padding
-        pad_y_bottom = h * (padding + 0.05)  # Extra ground margin for shadows
+        pad_y_bottom = h * padding
 
         x_min = max(0, int(round(min(x1_px, x2_px) - pad_x)))
         y_min = max(0, int(round(min(y1_px, y2_px) - pad_y_top)))

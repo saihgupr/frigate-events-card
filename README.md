@@ -243,7 +243,7 @@ The `frigate_temp_mask` integration exposes the following services under Home As
 
 | Service | Description | Key Parameters |
 |---|---|---|
-| `frigate_temp_mask.add_mask` | Adds a temporary bounding-box mask around a false detection in Frigate. | `event_id` (required), `duration_hours` (default: 24), `camera` (optional, auto-inferred from event), `padding` (default: 0.20), `mask_id` (optional) |
+| `frigate_temp_mask.add_mask` | Adds a temporary bounding-box mask around a false detection in Frigate. | `event_id` (required), `duration_hours` (default: 24), `camera` (optional, auto-inferred from event), `padding` (default: 0.10), `mask_id` (optional) |
 | `frigate_temp_mask.set_duration` | Updates the expiration duration for an active temporary mask without restarting Frigate. | `mask_id` (required), `duration_hours` (required) |
 | `frigate_temp_mask.remove_mask` | Removes a temporary mask from Frigate config on disk without interrupting recordings. | `mask_id` (required) |
 | `frigate_temp_mask.prune_all` | Removes all temporary masks from Frigate configuration. | *None* |
