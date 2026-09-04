@@ -788,6 +788,38 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         base_url = _get_frigate_base_url()
         tag = f"TEMP_MASK_{mask_id}"
 
+        def _clean_config_masks(config_text: str, tag_to_remove: str = "") -> str:
+            lines = config_text.splitlines()
+            filtered = []
+            for l in lines:
+                if tag_to_remove:
+                    if tag_to_remove in l:
+                        continue
+                else:
+                    if "TEMP_MASK_" in l:
+                        continue
+                filtered.append(l)
+
+            # Clean up empty/orphaned "mask:" lines with no list items under them
+            final_lines = []
+            for i, l in enumerate(filtered):
+                stripped = l.strip()
+                if stripped == "mask:":
+                    indent = len(l) - len(l.lstrip(" "))
+                    has_child = False
+                    for next_l in filtered[i + 1:]:
+                        if not next_l.strip() or next_l.strip().startswith("#"):
+                            continue
+                        next_indent = len(next_l) - len(next_l.lstrip(" "))
+                        if next_indent > indent and next_l.strip().startswith("-"):
+                            has_child = True
+                        break
+                    if not has_child:
+                        continue
+                final_lines.append(l)
+
+            return "\n".join(final_lines) + "\n"
+
         try:
             async with session.get(f"{base_url}/api/config/raw", timeout=10) as resp:
                 if resp.status == 200:
@@ -799,9 +831,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
             if tag not in raw_config:
                 return
 
-            lines = raw_config.splitlines()
-            clean_lines = [l for l in lines if tag not in l]
-            updated_config = "\n".join(clean_lines) + "\n"
+            updated_config = _clean_config_masks(raw_config, tag)
 
             # Save WITHOUT restart to avoid interrupting live video/detections
             async with session.post(
@@ -843,9 +873,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
             if "TEMP_MASK_" not in raw_config:
                 return
 
-            lines = raw_config.splitlines()
-            clean_lines = [l for l in lines if "TEMP_MASK_" not in l]
-            updated_config = "\n".join(clean_lines) + "\n"
+            updated_config = _clean_config_masks(raw_config)
 
             async with session.post(
                 f"{base_url}/api/config/save",
