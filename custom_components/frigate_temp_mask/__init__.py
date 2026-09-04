@@ -4,7 +4,10 @@ from __future__ import annotations
 import logging
 import asyncio
 import re
-import yaml
+try:
+    import yaml
+except ImportError:
+    yaml = None
 from datetime import datetime, timedelta, timezone
 
 from aiohttp import web
@@ -139,6 +142,114 @@ def _parse_iso_to_timestamp(iso_str: str | None) -> float | None:
         return None
 
 
+def _polygon_to_box(poly_str: str) -> list[float] | None:
+    """Derive bounding box [x, y, w, h] from polygon coordinate string."""
+    if not poly_str:
+        return None
+    try:
+        parts = [float(p.strip()) for p in str(poly_str).split(",") if p.strip()]
+        if len(parts) >= 4 and len(parts) % 2 == 0:
+            xs = [parts[i] for i in range(0, len(parts), 2)]
+            ys = [parts[i + 1] for i in range(0, len(parts), 2)]
+            min_x, max_x = min(xs), max(xs)
+            min_y, max_y = min(ys), max(ys)
+            w = max_x - min_x
+            h = max_y - min_y
+            return [min_x, min_y, w, h]
+    except Exception:
+        pass
+    return None
+
+
+def _parse_mask_timestamp(mask_id: str) -> float | None:
+    """Extract unix timestamp from mask_id if available."""
+    parts = str(mask_id).split("-")[0]
+    try:
+        ts = float(parts)
+        if 1577836800 <= ts <= 4102444800:
+            return ts
+    except (ValueError, TypeError):
+        pass
+    m = re.search(r"(\d{10}(?:\.\d+)?)", str(mask_id))
+    if m:
+        try:
+            ts = float(m.group(1))
+            if 1577836800 <= ts <= 4102444800:
+                return ts
+        except (ValueError, TypeError):
+            pass
+    return None
+
+
+def _parse_temp_masks_from_config(config_text: str) -> list[dict[str, str]]:
+    """Scan Frigate raw YAML configuration for # TEMP_MASK_<id> entries."""
+    masks: list[dict[str, str]] = []
+    lines = config_text.splitlines()
+    stack: list[dict[str, any]] = []
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        indent = len(line) - len(line.lstrip(" "))
+
+        while stack and stack[-1]["indent"] >= indent:
+            stack.pop()
+
+        if stripped.startswith("-") and "TEMP_MASK_" in stripped:
+            m = re.search(r"-\s*([0-9.,\s]+?)\s*#\s*TEMP_MASK_(\S+)", stripped)
+            if m:
+                polygon = m.group(1).strip()
+                mask_id = m.group(2).strip()
+
+                camera = ""
+                label = ""
+
+                for item in stack:
+                    ctx = item.get("context")
+                    if ctx == "camera":
+                        camera = item["key"]
+                    elif ctx == "filter_label":
+                        label = item["key"]
+
+                masks.append({
+                    "mask_id": mask_id,
+                    "polygon": polygon,
+                    "camera": camera,
+                    "label": label,
+                })
+            continue
+
+        colon_idx = stripped.find(":")
+        if colon_idx != -1:
+            key = stripped[:colon_idx].strip()
+            parent_context = stack[-1]["context"] if stack else "root"
+            context = "other"
+
+            if parent_context == "root" and key == "cameras":
+                context = "cameras"
+            elif parent_context == "cameras":
+                context = "camera"
+            elif key == "filters":
+                context = "filters"
+            elif parent_context == "filters":
+                context = "filter_label"
+            elif key == "objects":
+                context = "objects"
+            elif key == "mask":
+                context = "mask"
+
+            stack.append({
+                "indent": indent,
+                "key": key,
+                "context": context,
+            })
+
+    return masks
+
+
+
 async def _async_setup_core(hass: HomeAssistant) -> bool:
     """Register services and initialize core data structures."""
     hass.data.setdefault(DOMAIN, {})
@@ -260,6 +371,10 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
             now_ts = datetime.now(timezone.utc).timestamp()
             expired_ids: list[str] = []
             for mask_id, mask_data in list(active.items()):
+                # Do NOT auto-prune adopted orphan masks whose creation was in the past;
+                # they remain visible in the UI with 'Expired' badge until user removes or extends them!
+                if mask_data.get("is_orphan"):
+                    continue
                 exp_str = mask_data.get("expires_at")
                 exp_ts = _parse_iso_to_timestamp(exp_str)
                 if exp_ts is not None and exp_ts <= now_ts:
@@ -268,6 +383,115 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
             for mask_id in expired_ids:
                 _LOGGER.info("Active mask %s expired during sync check, pruning...", mask_id)
                 await async_handle_remove_mask(ServiceCall(DOMAIN, "remove_mask", {"mask_id": mask_id}))
+
+        # 3. Reconcile active configuration from Frigate raw config
+        try:
+            async with session.get(f"{base_url}/api/config/raw", timeout=10) as cfg_resp:
+                if cfg_resp.status == 200:
+                    raw_config_text = await cfg_resp.text()
+                    discovered_masks = _parse_temp_masks_from_config(raw_config_text)
+                    discovered_by_id = {m["mask_id"]: m for m in discovered_masks}
+                    now_dt = datetime.now(timezone.utc)
+                    now_ts = now_dt.timestamp()
+
+                    # 3a. Remove tracked masks that are no longer present in Frigate config
+                    for tracked_id in list(active.keys()):
+                        if tracked_id not in discovered_by_id:
+                            _LOGGER.info(
+                                "Mask %s no longer present in Frigate raw config, removing from active masks.",
+                                tracked_id,
+                            )
+                            if tracked_id in domain_data["timers"]:
+                                domain_data["timers"][tracked_id]()
+                                del domain_data["timers"][tracked_id]
+                            active.pop(tracked_id, None)
+
+                    # 3b. Process discovered masks from config
+                    for disc_id, disc_data in discovered_by_id.items():
+                        poly_str = disc_data.get("polygon", "")
+                        label_val = disc_data.get("label", "")
+                        cam_name = disc_data.get("camera", "")
+                        creation_ts = _parse_mask_timestamp(disc_id)
+
+                        if disc_id in active:
+                            # Already tracked in memory: update camera/label if missing
+                            existing = active[disc_id]
+                            if not existing.get("camera") and cam_name:
+                                existing["camera"] = cam_name
+                            if not existing.get("label") and label_val:
+                                existing["label"] = label_val
+                            if not existing.get("polygon") and poly_str:
+                                existing["polygon"] = poly_str
+                            continue
+
+                        # Discovered mask not yet tracked in active_masks
+                        # Adopt ANY temporary mask found in Frigate config into HA so the user sees it
+                        # and can manage/remove/extend it from the card popup.
+                        is_orphan = False
+                        if creation_ts is not None:
+                            created_dt = datetime.fromtimestamp(creation_ts, timezone.utc)
+                            expires_dt = created_dt + timedelta(hours=24)
+                            remaining_seconds = expires_dt.timestamp() - now_ts
+                            duration_hrs = 24.0
+                            if remaining_seconds <= 0:
+                                # Mask creation is older than 24h: adopt as orphan with expired timestamp
+                                # so it displays as 'Expired' in the UI with full remove/extend controls.
+                                is_orphan = True
+                                remaining_seconds = 0
+                        else:
+                            duration_hrs = 24.0
+                            expires_dt = now_dt + timedelta(hours=duration_hrs)
+                            remaining_seconds = duration_hrs * 3600.0
+
+                        # Adopt orphan mask
+                        box_coords = _polygon_to_box(poly_str)
+                        adopted_mask = {
+                            "mask_id": disc_id,
+                            "camera": cam_name or "wyze_camera",
+                            "polygon": poly_str,
+                            "duration_hours": duration_hrs,
+                            "expires_at": expires_dt.isoformat().replace("+00:00", "Z"),
+                            "event_id": disc_id,
+                            "label": label_val or "car",
+                            "box": box_coords,
+                            "width": 1920,
+                            "height": 1080,
+                            "is_orphan": is_orphan,
+                        }
+                        active[disc_id] = adopted_mask
+                        domain_data["pending_restart_masks"].pop(disc_id, None)
+
+                        # Only schedule timer if not already an expired orphan
+                        if not is_orphan and remaining_seconds > 0:
+                            def _make_expire_cb(m_id, dur_h):
+                                async def _expire_callback(_now):
+                                    _LOGGER.info(
+                                        "Adopted temporary mask %s expired after %s hours, pruning...",
+                                        m_id,
+                                        dur_h,
+                                    )
+                                    await async_handle_remove_mask(ServiceCall(DOMAIN, "remove_mask", {"mask_id": m_id}))
+                                return _expire_callback
+
+                            if disc_id in domain_data["timers"]:
+                                domain_data["timers"][disc_id]()
+                            domain_data["timers"][disc_id] = async_call_later(
+                                hass,
+                                max(1, int(remaining_seconds)),
+                                _make_expire_cb(disc_id, duration_hrs),
+                            )
+
+                        _LOGGER.info(
+                            "Adopted orphan temporary mask %s (camera: '%s', label: '%s', expired: %s)",
+                            disc_id,
+                            cam_name or "wyze_camera",
+                            label_val or "car",
+                            is_orphan,
+                        )
+
+                    _update_state()
+        except Exception as e:
+            _LOGGER.warning("Error reconciling Frigate temporary masks from config: %s", e)
 
     async def async_handle_add_mask(call: ServiceCall):
         camera = (call.data.get("camera") or "").strip()
@@ -544,7 +768,8 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         _LOGGER.info("Added temporary mask %s for %s (%s hours)", mask_id, camera, duration_hours)
 
     async def async_handle_remove_mask(call: ServiceCall):
-        mask_id = call.data.get("mask_id")
+        raw_mask_id = call.data.get("mask_id")
+        mask_id = str(raw_mask_id).strip().strip("\"'") if raw_mask_id is not None else ""
         if not mask_id:
             return
 
@@ -568,6 +793,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                 if resp.status == 200:
                     raw_config = await resp.text()
                 else:
+                    _LOGGER.error("Failed to fetch Frigate raw config during remove_mask (status: %s)", resp.status)
                     return
 
             if tag not in raw_config:
@@ -584,7 +810,10 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                 headers={"Content-Type": "text/plain"},
                 timeout=15
             ) as save_resp:
-                _LOGGER.info("Removed temporary mask %s (saved to config without restart)", mask_id)
+                if save_resp.status == 200:
+                    _LOGGER.info("Removed temporary mask %s (saved to config without restart)", mask_id)
+                else:
+                    _LOGGER.error("Failed to save Frigate config during remove_mask (status: %s)", save_resp.status)
         except Exception as e:
             _LOGGER.error("Failed to remove mask %s: %s", mask_id, e)
 
