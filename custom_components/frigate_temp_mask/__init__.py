@@ -24,6 +24,7 @@ _LOGGER = logging.getLogger(__name__)
 DEFAULT_FRIGATE_URL = "http://192.168.1.211:5000"
 DEFAULT_PADDING = 0.10
 SYNC_INTERVAL_SECONDS = 30
+CONFIG_AUDIT_INTERVAL_SECONDS = 600  # 10 minutes background audit safety net
 
 
 def _coerce_frigate_box(value: object) -> list[float] | None:
@@ -259,6 +260,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
     domain_data.setdefault("pending_restart_masks", {})
     domain_data.setdefault("services_registered", False)
     domain_data.setdefault("unsub_sync", None)
+    domain_data.setdefault("last_config_audit_ts", 0.0)
 
     def _get_frigate_base_url() -> str:
         # Check if Frigate integration data is available
@@ -321,54 +323,56 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
             }
         )
 
-    async def _async_sync_frigate_state() -> None:
+    async def _async_sync_frigate_state(force_config_audit: bool = False) -> None:
         """Synchronize mask state with running Frigate process uptime and active config."""
         session = async_get_clientsession(hass)
         base_url = _get_frigate_base_url()
-
-        frigate_boot_ts: float | None = None
-        try:
-            async with session.get(f"{base_url}/api/stats", timeout=5) as resp:
-                if resp.status == 200:
-                    stats = await resp.json()
-                    service_info = stats.get("service", {})
-                    uptime = service_info.get("uptime")
-                    last_updated = service_info.get("last_updated")
-                    if uptime is not None:
-                        ref_time = float(last_updated) if last_updated else datetime.now(timezone.utc).timestamp()
-                        frigate_boot_ts = ref_time - float(uptime)
-        except Exception as e:
-            _LOGGER.debug("Could not fetch Frigate stats for restart sync: %s", e)
+        now_dt = datetime.now(timezone.utc)
+        now_ts = now_dt.timestamp()
 
         # 1. Prune pending restart masks if Frigate booted after the mask was removed
         pending = domain_data.get("pending_restart_masks", {})
-        if pending and frigate_boot_ts is not None:
-            to_prune: list[str] = []
-            for mask_id, mask_data in list(pending.items()):
-                removed_at_str = mask_data.get("removed_at")
-                removed_ts = _parse_iso_to_timestamp(removed_at_str)
-                if removed_ts is not None:
-                    # If Frigate booted after (or within 10s of) removal, Frigate loaded without the mask
-                    if removed_ts <= frigate_boot_ts + 10:
-                        to_prune.append(mask_id)
-                else:
-                    # No timestamp, but Frigate has booted
-                    to_prune.append(mask_id)
+        if pending:
+            frigate_boot_ts: float | None = None
+            try:
+                async with session.get(f"{base_url}/api/stats", timeout=5) as resp:
+                    if resp.status == 200:
+                        stats = await resp.json()
+                        service_info = stats.get("service", {})
+                        uptime = service_info.get("uptime")
+                        last_updated = service_info.get("last_updated")
+                        if uptime is not None:
+                            ref_time = float(last_updated) if last_updated else now_ts
+                            frigate_boot_ts = ref_time - float(uptime)
+            except Exception as e:
+                _LOGGER.debug("Could not fetch Frigate stats for restart sync: %s", e)
 
-            if to_prune:
-                for mask_id in to_prune:
-                    _LOGGER.info(
-                        "Frigate restarted after mask %s removal (Frigate boot time: %s). Auto-cleared pending restart state.",
-                        mask_id,
-                        datetime.fromtimestamp(frigate_boot_ts, timezone.utc).isoformat()
-                    )
-                    pending.pop(mask_id, None)
-                _update_state()
+            if frigate_boot_ts is not None:
+                to_prune: list[str] = []
+                for mask_id, mask_data in list(pending.items()):
+                    removed_at_str = mask_data.get("removed_at")
+                    removed_ts = _parse_iso_to_timestamp(removed_at_str)
+                    if removed_ts is not None:
+                        # If Frigate booted after (or within 10s of) removal, Frigate loaded without the mask
+                        if removed_ts <= frigate_boot_ts + 10:
+                            to_prune.append(mask_id)
+                    else:
+                        # No timestamp, but Frigate has booted
+                        to_prune.append(mask_id)
+
+                if to_prune:
+                    for mask_id in to_prune:
+                        _LOGGER.info(
+                            "Frigate restarted after mask %s removal (Frigate boot time: %s). Auto-cleared pending restart state.",
+                            mask_id,
+                            datetime.fromtimestamp(frigate_boot_ts, timezone.utc).isoformat()
+                        )
+                        pending.pop(mask_id, None)
+                    _update_state()
 
         # 2. Check for any active masks whose duration expired while offline or timers stalled
         active = domain_data.get("active_masks", {})
         if active:
-            now_ts = datetime.now(timezone.utc).timestamp()
             expired_ids: list[str] = []
             for mask_id, mask_data in list(active.items()):
                 # Do NOT auto-prune adopted orphan masks whose creation was in the past;
@@ -385,6 +389,15 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                 await async_handle_remove_mask(ServiceCall(DOMAIN, "remove_mask", {"mask_id": mask_id}))
 
         # 3. Reconcile active configuration from Frigate raw config
+        # Audited on-demand, on startup, and every 10 minutes in background
+        should_audit = (
+            force_config_audit
+            or (now_ts - domain_data.get("last_config_audit_ts", 0.0) >= CONFIG_AUDIT_INTERVAL_SECONDS)
+        )
+        if not should_audit:
+            return
+
+        domain_data["last_config_audit_ts"] = now_ts
         try:
             async with session.get(f"{base_url}/api/config/raw", timeout=10) as cfg_resp:
                 if cfg_resp.status == 200:
@@ -898,7 +911,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
 
     async def async_handle_sync(call: ServiceCall):
         _LOGGER.debug("Manual sync of temporary masks triggered")
-        await _async_sync_frigate_state()
+        await _async_sync_frigate_state(force_config_audit=True)
 
     async def async_handle_dismiss_pending(call: ServiceCall):
         mask_id = call.data.get("mask_id")
@@ -958,7 +971,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
 
     # Initial state update & background sync with running Frigate process
     _update_state()
-    hass.async_create_task(_async_sync_frigate_state())
+    hass.async_create_task(_async_sync_frigate_state(force_config_audit=True))
 
     return True
 
