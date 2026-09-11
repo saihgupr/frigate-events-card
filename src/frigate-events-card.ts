@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.4.9';
+const CARD_VERSION = '2.4.10';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -4163,16 +4163,24 @@ export class FrigateEventsCard extends LitElement {
     const duration = this._timelineWindowDurationSec || ((this._config?.timeline_default_window_hours || 1) * 3600);
     this._timelineWindowDurationSec = duration;
 
-    const seekOffset = this._config?.timeline_event_seek_offset || 0;
+    const rawOffset = this._config?.timeline_event_seek_offset;
+    const seekOffset = (rawOffset !== undefined && rawOffset !== null && !isNaN(Number(rawOffset)))
+      ? Number(rawOffset)
+      : 0;
     const baseTargetTs = initialTimestamp && initialTimestamp > 0 ? initialTimestamp : (Date.now() / 1000);
-    const targetTs = initialTimestamp && initialTimestamp > 0 ? (baseTargetTs + seekOffset) : baseTargetTs;
+    const targetSeekTs = initialTimestamp && initialTimestamp > 0 ? (baseTargetTs + seekOffset) : baseTargetTs;
 
-    // Center target timestamp in window or place it near the middle/end
+    // Center the event's actual timestamp in window or place it near the end
+    const now = Math.floor(Date.now() / 1000);
     if (initialTimestamp && initialTimestamp > 0) {
-      this._timelineStartTs = Math.max(0, Math.floor(targetTs - duration / 2));
+      let start = Math.floor(baseTargetTs - duration / 2);
+      if (start + duration > now) {
+        start = Math.max(0, now - duration);
+      }
+      this._timelineStartTs = Math.max(0, start);
       this._timelineEndTs = Math.floor(this._timelineStartTs + duration);
     } else {
-      this._timelineEndTs = Math.floor(targetTs);
+      this._timelineEndTs = Math.floor(baseTargetTs);
       this._timelineStartTs = Math.max(0, Math.floor(this._timelineEndTs - duration));
     }
 
@@ -4180,7 +4188,7 @@ export class FrigateEventsCard extends LitElement {
       this._renderTimelineContent(this._timelineContainer);
       await this._fetchTimelineEvents();
       this._updateTimelineScrubberEvents();
-      this._loadTimelineVideo(targetTs);
+      this._loadTimelineVideo(targetSeekTs);
       return;
     }
 
@@ -4209,7 +4217,7 @@ export class FrigateEventsCard extends LitElement {
     // Initial fetch of events & video load
     await this._fetchTimelineEvents();
     this._updateTimelineScrubberEvents();
-    this._loadTimelineVideo(targetTs);
+    this._loadTimelineVideo(targetSeekTs);
   }
 
   private _removeTimelineModal(): void {
@@ -4291,18 +4299,37 @@ export class FrigateEventsCard extends LitElement {
     const hlsUrl = getVodHlsURL(clientId, this._timelineCamera, this._timelineStartTs, this._timelineEndTs, frigateUrl);
     const mp4Url = getVodClipURL(clientId, this._timelineCamera, this._timelineStartTs, this._timelineEndTs, frigateUrl);
 
+    const initialOffset = (seekTargetTs && seekTargetTs >= this._timelineStartTs && seekTargetTs <= this._timelineEndTs)
+      ? Math.max(0, seekTargetTs - this._timelineStartTs)
+      : -1;
+
+    // Immediately reflect initial playhead position on track while buffering
+    if (initialOffset >= 0) {
+      const windowDuration = this._timelineEndTs - this._timelineStartTs;
+      if (windowDuration > 0) {
+        const pct = Math.max(0, Math.min(100, (initialOffset / windowDuration) * 100));
+        const playhead = this._timelineContainer.querySelector('.timeline-playhead') as HTMLElement | null;
+        if (playhead) {
+          playhead.style.left = `${pct}%`;
+        }
+        const currentBadge = this._timelineContainer.querySelector('[data-timeline-current-time]') as HTMLElement | null;
+        if (currentBadge) {
+          const curDate = new Date((this._timelineStartTs + initialOffset) * 1000);
+          currentBadge.textContent = curDate.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+        }
+      }
+    }
+
     let hasInitialSeeked = false;
     let initialPlayStarted = false;
     const hideLoading = () => {
       if (loadingEl) loadingEl.style.display = 'none';
-      if (!hasInitialSeeked && seekTargetTs && seekTargetTs >= this._timelineStartTs && seekTargetTs <= this._timelineEndTs) {
-        let offset = Math.max(0, seekTargetTs - this._timelineStartTs);
+      if (!hasInitialSeeked && initialOffset >= 0) {
+        let offset = initialOffset;
         if (Number.isFinite(video.duration) && video.duration > 0) {
           offset = Math.min(offset, Math.max(0, video.duration - 0.5));
         }
-        if (Math.abs(video.currentTime - offset) > 0.5) {
-          video.currentTime = offset;
-        }
+        video.currentTime = offset;
         hasInitialSeeked = true;
       }
       if (!initialPlayStarted) {
@@ -4354,6 +4381,7 @@ export class FrigateEventsCard extends LitElement {
     if (Hls.isSupported()) {
       const token = (this.hass as any)?.auth?.data?.access_token;
       const hls = new Hls({
+        startPosition: initialOffset >= 0 ? initialOffset : -1,
         enableWorker: true,
         lowLatencyMode: false,
         xhrSetup: (xhr: XMLHttpRequest, url: string) => {
@@ -4466,7 +4494,10 @@ export class FrigateEventsCard extends LitElement {
     }).join('');
 
     // Attach marker click handlers
-    const seekOffset = this._config?.timeline_event_seek_offset || 0;
+    const rawOffset = this._config?.timeline_event_seek_offset;
+    const seekOffset = (rawOffset !== undefined && rawOffset !== null && !isNaN(Number(rawOffset)))
+      ? Number(rawOffset)
+      : 0;
     eventsLayer.querySelectorAll('.timeline-event-marker').forEach(marker => {
       marker.addEventListener('click', (e) => {
         e.stopPropagation();
