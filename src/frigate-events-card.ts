@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.4.5';
+const CARD_VERSION = '2.4.6';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -2345,7 +2345,7 @@ export class FrigateEventsCard extends LitElement {
       .timeline-events-layer {
         position: absolute;
         inset: 0;
-        pointer-events: auto;
+        pointer-events: none;
       }
 
       .timeline-event-marker {
@@ -2355,6 +2355,7 @@ export class FrigateEventsCard extends LitElement {
         background: rgba(59, 130, 246, 0.7);
         border-radius: 3px;
         cursor: pointer;
+        pointer-events: auto;
         transition: transform 0.15s, background 0.15s;
         z-index: 2;
       }
@@ -4447,6 +4448,7 @@ export class FrigateEventsCard extends LitElement {
           const offset = Math.max(0, start - this._timelineStartTs);
           this._timelineVideoEl.currentTime = offset;
           this._timelineVideoEl.play().catch(() => {});
+          this._updateTimelinePlayheadUI();
         }
       });
     });
@@ -4700,18 +4702,35 @@ export class FrigateEventsCard extends LitElement {
     if (track) {
       const handleSeek = (clientX: number) => {
         const rect = track.getBoundingClientRect();
-        if (rect.width <= 0 || !this._timelineVideoEl) return;
+        if (rect.width <= 0) return;
         const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
         const duration = this._timelineEndTs - this._timelineStartTs;
-        this._timelineVideoEl.currentTime = ratio * duration;
-        this._updateTimelinePlayheadUI();
+        if (duration <= 0) return;
+
+        const targetOffset = ratio * duration;
+        if (this._timelineVideoEl) {
+          this._timelineVideoEl.currentTime = targetOffset;
+        }
+
+        // Immediately reflect position visually on track even before video timeupdate fires
+        const playhead = container.querySelector('.timeline-playhead') as HTMLElement | null;
+        if (playhead) {
+          playhead.style.left = `${ratio * 100}%`;
+        }
+        const currentBadge = container.querySelector('[data-timeline-current-time]') as HTMLElement | null;
+        if (currentBadge) {
+          const curDate = new Date((this._timelineStartTs + targetOffset) * 1000);
+          currentBadge.textContent = curDate.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+        }
       };
 
       track.addEventListener('pointerdown', (e: PointerEvent) => {
         e.preventDefault();
         e.stopPropagation();
         this._timelineIsDragging = true;
-        track.setPointerCapture(e.pointerId);
+        try {
+          track.setPointerCapture(e.pointerId);
+        } catch (_) {}
         handleSeek(e.clientX);
 
         const onMove = (ev: PointerEvent) => {
@@ -4728,11 +4747,18 @@ export class FrigateEventsCard extends LitElement {
           track.removeEventListener('pointermove', onMove);
           track.removeEventListener('pointerup', onUp);
           track.removeEventListener('pointercancel', onUp);
+          // Sync final playhead UI after drag release
+          this._updateTimelinePlayheadUI();
         };
 
         track.addEventListener('pointermove', onMove);
         track.addEventListener('pointerup', onUp);
         track.addEventListener('pointercancel', onUp);
+      });
+
+      track.addEventListener('click', (e: MouseEvent) => {
+        e.stopPropagation();
+        handleSeek(e.clientX);
       });
     }
   }
