@@ -220,9 +220,11 @@ Right-clicking (desktop) or long-pressing (touch devices) any event thumbnail op
 * **Change Duration / Remove Mask**: Right-clicking an already masked event allows changing the mask duration on the fly (1h, 4h, 8h, 12h, 24h, 48h, 7d, or Custom hours) or removing the mask.
 * **Live Video Feed Right-Click (Temporary Mask Manager)**: Right-clicking (or long-pressing on touch devices) the live video feed opens the interactive Mask Manager modal directly, displaying all active masks with object snapshots/minimaps, countdown timers, polygon coordinates, per-mask duration adjustments, and individual removal controls.
 
-![Temporary Mask Context Menu](images/snapshots/temp_mask_1.png)
-![Temporary Mask Duration Presets](images/snapshots/temp_mask_2.png)
-![Temporary Mask Manager](images/snapshots/temp_mask_3.jpeg)
+<p align="center">
+  <img src="images/snapshots/temp_mask_1.png" width="32%" alt="Temporary Mask Context Menu" />
+  <img src="images/snapshots/temp_mask_2.png" width="32%" alt="Temporary Mask Duration Presets" />
+  <img src="images/snapshots/temp_mask_3.jpeg" width="32%" alt="Temporary Mask Manager" />
+</p>
 
 > [!NOTE]
 > **Restart Behavior & Pending Restart Awareness**:
