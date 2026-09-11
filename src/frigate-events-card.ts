@@ -7,8 +7,9 @@ import { ref } from 'lit/directives/ref.js';
 import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/types';
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
+import Hls from 'hls.js';
 
-const CARD_VERSION = '2.4.1';
+const CARD_VERSION = '2.4.5';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -183,6 +184,7 @@ export class FrigateEventsCard extends LitElement {
   // Timeline modal state
   private _timelineContainer?: HTMLDivElement;
   private _timelineVideoEl: HTMLVideoElement | null = null;
+  private _timelineHls: Hls | null = null;
   private _timelineCamera?: string;
   private _timelineStartTs = 0;
   private _timelineEndTs = 0;
@@ -4207,6 +4209,10 @@ export class FrigateEventsCard extends LitElement {
       cancelAnimationFrame(this._timelineTimeUpdateRaf);
       this._timelineTimeUpdateRaf = undefined;
     }
+    if (this._timelineHls) {
+      this._timelineHls.destroy();
+      this._timelineHls = null;
+    }
     if (this._timelineVideoEl) {
       try {
         this._timelineVideoEl.pause();
@@ -4257,42 +4263,106 @@ export class FrigateEventsCard extends LitElement {
     const video = this._timelineContainer.querySelector('video.timeline-video') as HTMLVideoElement | null;
     if (!video || !this._timelineCamera) return;
 
+    // Destroy any existing HLS instance
+    if (this._timelineHls) {
+      this._timelineHls.destroy();
+      this._timelineHls = null;
+    }
+
     this._timelineVideoEl = video;
     video.playbackRate = this._timelinePlaybackRate;
 
     const loadingEl = this._timelineContainer.querySelector('.timeline-player-loading') as HTMLElement | null;
-    if (loadingEl) loadingEl.style.display = 'flex';
+    if (loadingEl) {
+      loadingEl.style.display = 'flex';
+      loadingEl.innerHTML = `<div class="timeline-spinner"></div><span>Buffering continuous footage...</span>`;
+    }
 
     const clientId = this._config?.frigate_client_id || 'frigate';
     const frigateUrl = this._config?.frigate_url;
-    const mp4Url = getVodClipURL(clientId, this._timelineCamera, this._timelineStartTs, this._timelineEndTs, frigateUrl);
     const hlsUrl = getVodHlsURL(clientId, this._timelineCamera, this._timelineStartTs, this._timelineEndTs, frigateUrl);
+    const mp4Url = getVodClipURL(clientId, this._timelineCamera, this._timelineStartTs, this._timelineEndTs, frigateUrl);
 
-    // Prefer MP4 dynamic clip, Safari/HLS fallback
-    const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
-    video.src = isSafari ? hlsUrl : mp4Url;
-
-    const onLoaded = () => {
+    const hideLoading = () => {
       if (loadingEl) loadingEl.style.display = 'none';
       if (seekTargetTs && seekTargetTs >= this._timelineStartTs && seekTargetTs <= this._timelineEndTs) {
         const offset = Math.max(0, seekTargetTs - this._timelineStartTs);
-        video.currentTime = offset;
+        if (Math.abs(video.currentTime - offset) > 1) {
+          video.currentTime = offset;
+        }
       }
       video.play().catch(() => {});
     };
 
-    video.onloadeddata = onLoaded;
-    video.onerror = () => {
-      // If MP4 fails, try HLS
-      if (video.src !== hlsUrl) {
-        video.src = hlsUrl;
-        video.load();
-      } else if (loadingEl) {
-        loadingEl.textContent = 'Footage unavailable for this time window.';
-      }
+    video.onloadeddata = hideLoading;
+    video.onloadedmetadata = hideLoading;
+    video.oncanplay = hideLoading;
+    video.onplaying = hideLoading;
+
+    console.log('Frigate Events Card: VOD requested:', { hlsUrl, mp4Url, start: this._timelineStartTs, end: this._timelineEndTs });
+
+    const fallbackToMp4 = () => {
+      console.warn('Frigate Events Card: HLS failed or unsupported, trying MP4 clip:', mp4Url);
+      video.onerror = (e) => {
+        console.error('Frigate Events Card: MP4 playback failed:', e, mp4Url);
+        if (loadingEl) {
+          loadingEl.innerHTML = `
+            <div style="display:flex; flex-direction:column; align-items:center; gap:8px; text-align:center; padding:16px;">
+              <span>No continuous footage stream available for this time window.</span>
+              <span style="font-size:11px; opacity:0.6;">Tested URLs: <a href="${hlsUrl}" target="_blank" style="color:var(--primary-color, #03a9f4);">HLS</a> | <a href="${mp4Url}" target="_blank" style="color:var(--primary-color, #03a9f4);">MP4</a></span>
+            </div>
+          `;
+        }
+      };
+      video.src = mp4Url;
+      video.load();
     };
 
-    video.load();
+    // If Hls.js is supported (Chrome, Edge, Firefox, modern browsers)
+    if (Hls.isSupported()) {
+      const token = (this.hass as any)?.auth?.data?.access_token;
+      const hls = new Hls({
+        enableWorker: true,
+        lowLatencyMode: false,
+        xhrSetup: (xhr: XMLHttpRequest, url: string) => {
+          // If accessing via Home Assistant proxy, attach Bearer auth token if not using signed query param
+          if (token && !url.includes('authSig=')) {
+            xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+          }
+        },
+      });
+      this._timelineHls = hls;
+      hls.loadSource(hlsUrl);
+      hls.attachMedia(video);
+
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        hideLoading();
+        if (seekTargetTs && seekTargetTs >= this._timelineStartTs && seekTargetTs <= this._timelineEndTs) {
+          const offset = Math.max(0, seekTargetTs - this._timelineStartTs);
+          video.currentTime = offset;
+        }
+        video.play().catch(() => {});
+      });
+
+      hls.on(Hls.Events.ERROR, (_event, data) => {
+        console.warn('Frigate Events Card: Hls.js error event:', data.type, data.details, data.fatal);
+        if (data.fatal) {
+          hls.destroy();
+          this._timelineHls = null;
+          fallbackToMp4();
+        }
+      });
+    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      // Native HLS (Safari on macOS/iOS)
+      video.onerror = () => {
+        fallbackToMp4();
+      };
+      video.src = hlsUrl;
+      video.load();
+    } else {
+      fallbackToMp4();
+    }
+
     this._startTimelineTimeUpdates();
   }
 
@@ -4542,33 +4612,29 @@ export class FrigateEventsCard extends LitElement {
       btn.addEventListener('click', async (e) => {
         e.stopPropagation();
         const jump = (btn as HTMLElement).getAttribute('data-jump');
-        const now = Date.now() / 1000;
-        let newEnd = now;
+        const now = Math.floor(Date.now() / 1000);
 
         if (jump === 'now') {
-          newEnd = now;
-        } else if (jump === '-15m') {
-          newEnd = now - 900;
-        } else if (jump === '-1h') {
-          newEnd = now - 3600;
-        } else if (jump === '-3h') {
-          newEnd = now - 10800;
-        } else if (jump === '-12h') {
-          newEnd = now - 43200;
+          // Snap window to end at now
+          this._timelineEndTs = now;
+          this._timelineStartTs = Math.max(0, this._timelineEndTs - this._timelineWindowDurationSec);
         } else if (jump === 'day-start') {
           const startOfDay = new Date();
           startOfDay.setHours(0, 0, 0, 0);
           this._timelineStartTs = Math.floor(startOfDay.getTime() / 1000);
           this._timelineEndTs = Math.floor(this._timelineStartTs + this._timelineWindowDurationSec);
-          this._renderTimelineContent(container);
-          await this._fetchTimelineEvents();
-          this._updateTimelineScrubberEvents();
-          this._loadTimelineVideo(this._timelineStartTs);
-          return;
+        } else {
+          // Relative shifts backward from current window start time
+          let deltaSec = 3600;
+          if (jump === '-15m') deltaSec = 900;
+          else if (jump === '-1h') deltaSec = 3600;
+          else if (jump === '-3h') deltaSec = 10800;
+          else if (jump === '-12h') deltaSec = 43200;
+
+          this._timelineStartTs = Math.max(0, this._timelineStartTs - deltaSec);
+          this._timelineEndTs = Math.floor(this._timelineStartTs + this._timelineWindowDurationSec);
         }
 
-        this._timelineEndTs = Math.floor(newEnd);
-        this._timelineStartTs = Math.max(0, Math.floor(newEnd - this._timelineWindowDurationSec));
         this._renderTimelineContent(container);
         await this._fetchTimelineEvents();
         this._updateTimelineScrubberEvents();

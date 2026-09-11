@@ -66,12 +66,12 @@ export function getVodClipURL(clientId: string, camera: string, startTs: number,
     const start = Math.floor(startTs);
     const end = Math.floor(endTs);
     const encCam = encodeURIComponent(camera);
-    if (frigateUrl) {
-        const base = frigateUrl.replace(/\/$/, '');
-        return `${base}/api/${encCam}/start/${start}/end/${end}/clip.mp4`;
+    const directBase = frigateUrl ? frigateUrl.replace(/\/$/, '') : '';
+    if (directBase) {
+        return `${directBase}/api/${encCam}/start/${start}/end/${end}/clip.mp4`;
     }
-    // Standard HA Frigate integration proxy route or direct /api route
-    return `/api/frigate/${encodeURIComponent(clientId)}/vod/${encCam}/start/${start}/end/${end}/clip.mp4`;
+    // Standard HA Frigate integration proxy route:
+    return `/api/frigate/${encodeURIComponent(clientId)}/recording/${encCam}/start/${start}/end/${end}`;
 }
 
 /**
@@ -81,9 +81,9 @@ export function getVodHlsURL(clientId: string, camera: string, startTs: number, 
     const start = Math.floor(startTs);
     const end = Math.floor(endTs);
     const encCam = encodeURIComponent(camera);
-    if (frigateUrl) {
-        const base = frigateUrl.replace(/\/$/, '');
-        return `${base}/vod/${encCam}/start/${start}/end/${end}/index.m3u8`;
+    const directBase = frigateUrl ? frigateUrl.replace(/\/$/, '') : '';
+    if (directBase) {
+        return `${directBase}/vod/${encCam}/start/${start}/end/${end}/index.m3u8`;
     }
     return `/api/frigate/${encodeURIComponent(clientId)}/vod/${encCam}/start/${start}/end/${end}/index.m3u8`;
 }
