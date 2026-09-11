@@ -1,7 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [2.4.0] - 2026-09-12
 - Added: Right-click (desktop) and long-press (mobile/touch) context menu with **Delete Event** to permanently remove events, snapshots, and recordings from Frigate directly from the dashboard.
+- Added: Dynamic Temporary False-Positive Masking — turn false alerts (parked vehicles, spiderwebs, shadows) into auto-padded polygon masks with a single click and customizable duration presets (1h to 7d or custom hours).
+- Added: Live WebRTC Feed Mask Manager modal with active mask countdown timers, snapshot minimaps, polygon coordinates, and per-mask controls.
+- Added: Companion Home Assistant integration (`custom_components/frigate_temp_mask`) with zero-downtime removals, mask extensions, and actionable notification blueprint.
 - Fixed: Resolved cross-origin and proxy deletion failures by introducing `frigate_temp_mask.delete_event` service integration with automatic backend proxying.
 - Improved: Live WebRTC CPU optimization — automatically halts stream decoding and WebRTC sessions when the dashboard tab or window is hidden or minimized, dropping GPU/media CPU usage to near 0%.
 - Improved: Immediate local gallery pruning and modal dismissal when an event is deleted.
