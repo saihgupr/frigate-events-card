@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.4.6';
+const CARD_VERSION = '2.4.7';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -4284,13 +4284,18 @@ export class FrigateEventsCard extends LitElement {
     const hlsUrl = getVodHlsURL(clientId, this._timelineCamera, this._timelineStartTs, this._timelineEndTs, frigateUrl);
     const mp4Url = getVodClipURL(clientId, this._timelineCamera, this._timelineStartTs, this._timelineEndTs, frigateUrl);
 
+    let hasInitialSeeked = false;
     const hideLoading = () => {
       if (loadingEl) loadingEl.style.display = 'none';
-      if (seekTargetTs && seekTargetTs >= this._timelineStartTs && seekTargetTs <= this._timelineEndTs) {
-        const offset = Math.max(0, seekTargetTs - this._timelineStartTs);
-        if (Math.abs(video.currentTime - offset) > 1) {
+      if (!hasInitialSeeked && seekTargetTs && seekTargetTs >= this._timelineStartTs && seekTargetTs <= this._timelineEndTs) {
+        let offset = Math.max(0, seekTargetTs - this._timelineStartTs);
+        if (Number.isFinite(video.duration) && video.duration > 0) {
+          offset = Math.min(offset, Math.max(0, video.duration - 0.5));
+        }
+        if (Math.abs(video.currentTime - offset) > 0.5) {
           video.currentTime = offset;
         }
+        hasInitialSeeked = true;
       }
       video.play().catch(() => {});
     };
@@ -4299,6 +4304,15 @@ export class FrigateEventsCard extends LitElement {
     video.onloadedmetadata = hideLoading;
     video.oncanplay = hideLoading;
     video.onplaying = hideLoading;
+
+    // Prevent video ended event from snapping currentTime back to 0:00
+    video.onended = () => {
+      video.pause();
+      if (Number.isFinite(video.duration) && video.duration > 0) {
+        video.currentTime = Math.max(0, video.duration - 0.1);
+      }
+      this._updateTimelinePlayheadUI();
+    };
 
     console.log('Frigate Events Card: VOD requested:', { hlsUrl, mp4Url, start: this._timelineStartTs, end: this._timelineEndTs });
 
@@ -4338,11 +4352,6 @@ export class FrigateEventsCard extends LitElement {
 
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         hideLoading();
-        if (seekTargetTs && seekTargetTs >= this._timelineStartTs && seekTargetTs <= this._timelineEndTs) {
-          const offset = Math.max(0, seekTargetTs - this._timelineStartTs);
-          video.currentTime = offset;
-        }
-        video.play().catch(() => {});
       });
 
       hls.on(Hls.Events.ERROR, (_event, data) => {
@@ -4514,7 +4523,7 @@ export class FrigateEventsCard extends LitElement {
                 <button class="timeline-window-pill ${windowMinutes === 30 ? 'active' : ''}" data-window="30">30m</button>
                 <button class="timeline-window-pill ${windowMinutes === 60 ? 'active' : ''}" data-window="60">1h</button>
                 <button class="timeline-window-pill ${windowMinutes === 120 ? 'active' : ''}" data-window="120">2h</button>
-                <button class="timeline-window-pill ${windowMinutes === 240 ? 'active' : ''}" data-window="240">4h</button>
+                <button class="timeline-window-pill ${windowMinutes === 180 ? 'active' : ''}" data-window="180">3h</button>
               </div>
             </div>
           </div>
@@ -4640,7 +4649,7 @@ export class FrigateEventsCard extends LitElement {
         this._renderTimelineContent(container);
         await this._fetchTimelineEvents();
         this._updateTimelineScrubberEvents();
-        this._loadTimelineVideo(this._timelineStartTs);
+        this._loadTimelineVideo(jump === 'now' ? now : this._timelineStartTs);
       });
     });
 
@@ -4649,12 +4658,22 @@ export class FrigateEventsCard extends LitElement {
       pill.addEventListener('click', async (e) => {
         e.stopPropagation();
         const mins = parseInt((pill as HTMLElement).getAttribute('data-window') || '60', 10);
+        const currentTs = this._timelineStartTs + (this._timelineVideoEl?.currentTime || 0);
         this._timelineWindowDurationSec = mins * 60;
+
+        // Keep currentTs centered in new window duration, constrained by now
+        const now = Math.floor(Date.now() / 1000);
+        let newStart = Math.floor(currentTs - this._timelineWindowDurationSec / 2);
+        if (newStart + this._timelineWindowDurationSec > now) {
+          newStart = Math.max(0, now - this._timelineWindowDurationSec);
+        }
+        this._timelineStartTs = Math.max(0, newStart);
         this._timelineEndTs = Math.floor(this._timelineStartTs + this._timelineWindowDurationSec);
+
         this._renderTimelineContent(container);
         await this._fetchTimelineEvents();
         this._updateTimelineScrubberEvents();
-        this._loadTimelineVideo(this._timelineStartTs);
+        this._loadTimelineVideo(currentTs);
       });
     });
 
@@ -4678,7 +4697,10 @@ export class FrigateEventsCard extends LitElement {
         if (!this._timelineVideoEl) return;
         const delta = parseFloat((btn as HTMLElement).getAttribute('data-skip') || '0');
         const duration = this._timelineEndTs - this._timelineStartTs;
-        this._timelineVideoEl.currentTime = Math.max(0, Math.min(duration, this._timelineVideoEl.currentTime + delta));
+        const maxSeek = (Number.isFinite(this._timelineVideoEl.duration) && this._timelineVideoEl.duration > 0)
+          ? Math.max(0, this._timelineVideoEl.duration - 0.5)
+          : duration;
+        this._timelineVideoEl.currentTime = Math.max(0, Math.min(maxSeek, this._timelineVideoEl.currentTime + delta));
         this._updateTimelinePlayheadUI();
       });
     });
@@ -4707,8 +4729,12 @@ export class FrigateEventsCard extends LitElement {
         const duration = this._timelineEndTs - this._timelineStartTs;
         if (duration <= 0) return;
 
-        const targetOffset = ratio * duration;
+        let targetOffset = ratio * duration;
         if (this._timelineVideoEl) {
+          const maxSeek = (Number.isFinite(this._timelineVideoEl.duration) && this._timelineVideoEl.duration > 0)
+            ? Math.max(0, this._timelineVideoEl.duration - 0.5)
+            : duration;
+          targetOffset = Math.min(targetOffset, maxSeek);
           this._timelineVideoEl.currentTime = targetOffset;
         }
 
