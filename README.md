@@ -124,6 +124,7 @@ offset: 1
 # Optional: Continuous footage timeline (Frigate 0.13 VOD)
 show_timeline: true
 timeline_default_window_hours: 1
+timeline_event_seek_offset: 0
 
 # Optional: Reset display daily at a specific time (24hr format)
 daily_clear_time: "04:00"
@@ -381,6 +382,7 @@ The most common settings to get you started:
 | `reverse` | boolean | `false` | Reverses the rendering order of the timeline (events populate right-to-left instead of left-to-right). |
 | `offset` | number | `0` | Number of recent events to skip/hide from the start of the list. Useful for excluding the newest event if it's already shown in another card. |
 | `daily_clear_time` | string | none | Optional. Time to reset the display daily (24hr format, e.g., "04:00"). If set, events before this time are hidden and shown as grey placeholders. |
+| `timeline_event_seek_offset` | number | `0` | Seconds added/subtracted when seeking to an event in the continuous timeline (e.g. `5` to jump 5s after detection starts, or `-5` for earlier pre-roll). |
 
 ### Advanced Detail Modal & Debug Settings
 | Option | Type | Default | Description |

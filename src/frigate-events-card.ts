@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.4.8';
+const CARD_VERSION = '2.4.9';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -89,6 +89,7 @@ interface FrigateEventsCardConfig extends LovelaceCardConfig {
   // Continuous footage timeline options
   show_timeline?: boolean;          // default: true
   timeline_default_window_hours?: number; // default: 1
+  timeline_event_seek_offset?: number;    // default: 0 (seconds added to event start_time when seeking, e.g. 5)
 }
 
 const DEFAULT_CONFIG: Partial<FrigateEventsCardConfig> = {
@@ -108,6 +109,7 @@ const DEFAULT_CONFIG: Partial<FrigateEventsCardConfig> = {
   temp_mask_duration: '24:00:00',
   show_timeline: true,
   timeline_default_window_hours: 1,
+  timeline_event_seek_offset: 0,
   title: 'Frigate Events',
   video: true,
   video_on_hover: true,
@@ -4161,7 +4163,10 @@ export class FrigateEventsCard extends LitElement {
     const duration = this._timelineWindowDurationSec || ((this._config?.timeline_default_window_hours || 1) * 3600);
     this._timelineWindowDurationSec = duration;
 
-    const targetTs = initialTimestamp && initialTimestamp > 0 ? initialTimestamp : (Date.now() / 1000);
+    const seekOffset = this._config?.timeline_event_seek_offset || 0;
+    const baseTargetTs = initialTimestamp && initialTimestamp > 0 ? initialTimestamp : (Date.now() / 1000);
+    const targetTs = initialTimestamp && initialTimestamp > 0 ? (baseTargetTs + seekOffset) : baseTargetTs;
+
     // Center target timestamp in window or place it near the middle/end
     if (initialTimestamp && initialTimestamp > 0) {
       this._timelineStartTs = Math.max(0, Math.floor(targetTs - duration / 2));
@@ -4461,12 +4466,18 @@ export class FrigateEventsCard extends LitElement {
     }).join('');
 
     // Attach marker click handlers
+    const seekOffset = this._config?.timeline_event_seek_offset || 0;
     eventsLayer.querySelectorAll('.timeline-event-marker').forEach(marker => {
       marker.addEventListener('click', (e) => {
         e.stopPropagation();
         const start = parseFloat((marker as HTMLElement).getAttribute('data-event-start') || '0');
         if (start > 0 && this._timelineVideoEl) {
-          const offset = Math.max(0, start - this._timelineStartTs);
+          const targetTs = start + seekOffset;
+          const duration = this._timelineEndTs - this._timelineStartTs;
+          const maxSeek = (Number.isFinite(this._timelineVideoEl.duration) && this._timelineVideoEl.duration > 0)
+            ? Math.max(0, this._timelineVideoEl.duration - 0.5)
+            : duration;
+          const offset = Math.max(0, Math.min(maxSeek, targetTs - this._timelineStartTs));
           this._timelineVideoEl.currentTime = offset;
           this._timelineVideoEl.play().catch(() => {});
           this._updateTimelinePlayheadUI();
