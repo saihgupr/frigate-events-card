@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.4.10';
+const CARD_VERSION = '2.4.12';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -89,7 +89,7 @@ interface FrigateEventsCardConfig extends LovelaceCardConfig {
   // Continuous footage timeline options
   show_timeline?: boolean;          // default: true
   timeline_default_window_hours?: number; // default: 1
-  timeline_event_seek_offset?: number;    // default: 0 (seconds added to event start_time when seeking, e.g. 5)
+  timeline_event_seek_offset?: number | Record<string, number>;    // default: 0 (seconds added/subtracted, e.g. -26 or { car: -26, person: -10 })
 }
 
 const DEFAULT_CONFIG: Partial<FrigateEventsCardConfig> = {
@@ -2747,7 +2747,7 @@ export class FrigateEventsCard extends LitElement {
     timelineBtn?.addEventListener('click', (e) => {
       e.stopPropagation();
       this._handleModalClose();
-      this._showTimelineModal(event.camera, event.start_time);
+      this._showTimelineModal(event.camera, event.start_time, event);
     });
 
     // Navigation button handlers
@@ -3122,7 +3122,7 @@ export class FrigateEventsCard extends LitElement {
     menu.querySelector('[data-action="view-timeline"]')?.addEventListener('click', (e) => {
       e.stopPropagation();
       this._closeContextMenu();
-      this._showTimelineModal(event.camera, event.start_time);
+      this._showTimelineModal(event.camera, event.start_time, event);
     });
 
     menu.querySelector('[data-action="open-mask-manager"]')?.addEventListener('click', (e) => {
@@ -4150,7 +4150,28 @@ export class FrigateEventsCard extends LitElement {
      Continuous Footage Timeline Scrubber & Player Modal (Frigate 0.13)
      ───────────────────────────────────────────────────────────── */
 
-  private async _showTimelineModal(initialCamera?: string, initialTimestamp?: number): Promise<void> {
+  private _getEventDetectedTimestamp(event?: FrigateEvent): number {
+    if (!event) return 0;
+    const pathData = this._getValidPathData(event);
+    if (pathData.length > 0 && typeof pathData[0][1] === 'number' && pathData[0][1] > 0) {
+      return pathData[0][1];
+    }
+    return event.start_time || 0;
+  }
+
+  private _getEventSeekOffset(event?: FrigateEvent): number {
+    const raw = this._config?.timeline_event_seek_offset;
+    if (raw === undefined || raw === null) return 0;
+    if (typeof raw === 'number') return raw;
+    if (typeof raw === 'string' && !isNaN(Number(raw))) return Number(raw);
+    if (typeof raw === 'object' && event) {
+      const val = this._getConfigValueForEvent(raw as Record<string, number>, event, 0);
+      return typeof val === 'number' ? val : (Number(val) || 0);
+    }
+    return 0;
+  }
+
+  private async _showTimelineModal(initialCamera?: string, initialTimestamp?: number, initialEvent?: FrigateEvent): Promise<void> {
     this._closeContextMenu();
     this._injectModalStyles();
 
@@ -4163,14 +4184,17 @@ export class FrigateEventsCard extends LitElement {
     const duration = this._timelineWindowDurationSec || ((this._config?.timeline_default_window_hours || 1) * 3600);
     this._timelineWindowDurationSec = duration;
 
-    const rawOffset = this._config?.timeline_event_seek_offset;
-    const seekOffset = (rawOffset !== undefined && rawOffset !== null && !isNaN(Number(rawOffset)))
-      ? Number(rawOffset)
-      : 0;
-    const baseTargetTs = initialTimestamp && initialTimestamp > 0 ? initialTimestamp : (Date.now() / 1000);
-    const targetSeekTs = initialTimestamp && initialTimestamp > 0 ? (baseTargetTs + seekOffset) : baseTargetTs;
+    let seekOffset = this._getEventSeekOffset(initialEvent);
 
-    // Center the event's actual timestamp in window or place it near the end
+    let baseDetectionTs = 0;
+    if (initialEvent) {
+      baseDetectionTs = this._getEventDetectedTimestamp(initialEvent);
+    }
+    const baseEventTs = initialTimestamp && initialTimestamp > 0 ? initialTimestamp : (Date.now() / 1000);
+    const baseTargetTs = baseDetectionTs > 0 ? baseDetectionTs : baseEventTs;
+    let targetSeekTs = initialTimestamp && initialTimestamp > 0 ? (baseTargetTs + seekOffset) : baseTargetTs;
+
+    // Center the event in window or place it near the end
     const now = Math.floor(Date.now() / 1000);
     if (initialTimestamp && initialTimestamp > 0) {
       let start = Math.floor(baseTargetTs - duration / 2);
@@ -4187,6 +4211,15 @@ export class FrigateEventsCard extends LitElement {
     if (this._timelineContainer) {
       this._renderTimelineContent(this._timelineContainer);
       await this._fetchTimelineEvents();
+      if (!initialEvent && initialTimestamp && initialTimestamp > 0) {
+        const matched = this._timelineEvents.find(e => Math.abs((e.start_time || 0) - initialTimestamp) < 2);
+        if (matched) {
+          seekOffset = this._getEventSeekOffset(matched);
+          const detected = this._getEventDetectedTimestamp(matched);
+          const base = detected > 0 ? detected : (matched.start_time || initialTimestamp);
+          targetSeekTs = base + seekOffset;
+        }
+      }
       this._updateTimelineScrubberEvents();
       this._loadTimelineVideo(targetSeekTs);
       return;
@@ -4216,6 +4249,15 @@ export class FrigateEventsCard extends LitElement {
 
     // Initial fetch of events & video load
     await this._fetchTimelineEvents();
+    if (!initialEvent && initialTimestamp && initialTimestamp > 0) {
+      const matched = this._timelineEvents.find(e => Math.abs((e.start_time || 0) - initialTimestamp) < 2);
+      if (matched) {
+        seekOffset = this._getEventSeekOffset(matched);
+        const detected = this._getEventDetectedTimestamp(matched);
+        const base = detected > 0 ? detected : (matched.start_time || initialTimestamp);
+        targetSeekTs = base + seekOffset;
+      }
+    }
     this._updateTimelineScrubberEvents();
     this._loadTimelineVideo(targetSeekTs);
   }
@@ -4474,19 +4516,22 @@ export class FrigateEventsCard extends LitElement {
     if (windowDuration <= 0) return;
 
     eventsLayer.innerHTML = this._timelineEvents.map(ev => {
-      const start = ev.start_time || 0;
+      const detectedStart = this._getEventDetectedTimestamp(ev);
+      const start = detectedStart > 0 ? detectedStart : (ev.start_time || 0);
       const end = ev.end_time || (start + 30);
       const startPct = Math.max(0, Math.min(100, ((start - this._timelineStartTs) / windowDuration) * 100));
       const endPct = Math.max(0, Math.min(100, ((end - this._timelineStartTs) / windowDuration) * 100));
       const widthPct = Math.max(0.6, endPct - startPct);
       const labelClass = (ev.label || 'event').toLowerCase();
       const timeStr = this._formatTime(start);
-      const title = `${(ev.label || 'Event').toUpperCase()} at ${timeStr}`;
+      const title = `${(ev.label || 'Event').toUpperCase()} detected at ${timeStr}`;
 
       return `
         <div
           class="timeline-event-marker ${labelClass}"
-          data-event-start="${start}"
+          data-event-id="${ev.id}"
+          data-event-start="${ev.start_time || 0}"
+          data-event-detected="${detectedStart}"
           title="${title}"
           style="left: ${startPct}%; width: ${widthPct}%;"
         ></div>
@@ -4494,16 +4539,17 @@ export class FrigateEventsCard extends LitElement {
     }).join('');
 
     // Attach marker click handlers
-    const rawOffset = this._config?.timeline_event_seek_offset;
-    const seekOffset = (rawOffset !== undefined && rawOffset !== null && !isNaN(Number(rawOffset)))
-      ? Number(rawOffset)
-      : 0;
     eventsLayer.querySelectorAll('.timeline-event-marker').forEach(marker => {
       marker.addEventListener('click', (e) => {
         e.stopPropagation();
+        const eventId = (marker as HTMLElement).getAttribute('data-event-id');
+        const ev = this._timelineEvents.find(item => item.id === eventId);
+        const detected = parseFloat((marker as HTMLElement).getAttribute('data-event-detected') || '0');
         const start = parseFloat((marker as HTMLElement).getAttribute('data-event-start') || '0');
-        if (start > 0 && this._timelineVideoEl) {
-          const targetTs = start + seekOffset;
+        const baseTs = detected > 0 ? detected : start;
+        const seekOffset = this._getEventSeekOffset(ev);
+        if (baseTs > 0 && this._timelineVideoEl) {
+          const targetTs = baseTs + seekOffset;
           const duration = this._timelineEndTs - this._timelineStartTs;
           const maxSeek = (Number.isFinite(this._timelineVideoEl.duration) && this._timelineVideoEl.duration > 0)
             ? Math.max(0, this._timelineVideoEl.duration - 0.5)
