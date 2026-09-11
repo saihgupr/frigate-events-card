@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.4.7';
+const CARD_VERSION = '2.4.8';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -2284,12 +2284,14 @@ export class FrigateEventsCard extends LitElement {
         align-items: center;
         justify-content: center;
         box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.6);
+        cursor: pointer;
       }
 
       .timeline-video {
         width: 100%;
         height: 100%;
         object-fit: contain;
+        pointer-events: none;
       }
 
       .timeline-player-loading {
@@ -4285,6 +4287,7 @@ export class FrigateEventsCard extends LitElement {
     const mp4Url = getVodClipURL(clientId, this._timelineCamera, this._timelineStartTs, this._timelineEndTs, frigateUrl);
 
     let hasInitialSeeked = false;
+    let initialPlayStarted = false;
     const hideLoading = () => {
       if (loadingEl) loadingEl.style.display = 'none';
       if (!hasInitialSeeked && seekTargetTs && seekTargetTs >= this._timelineStartTs && seekTargetTs <= this._timelineEndTs) {
@@ -4297,13 +4300,22 @@ export class FrigateEventsCard extends LitElement {
         }
         hasInitialSeeked = true;
       }
-      video.play().catch(() => {});
+      if (!initialPlayStarted) {
+        initialPlayStarted = true;
+        video.play().catch(() => {});
+      }
     };
 
     video.onloadeddata = hideLoading;
     video.onloadedmetadata = hideLoading;
     video.oncanplay = hideLoading;
-    video.onplaying = hideLoading;
+    video.onplaying = () => {
+      if (loadingEl) loadingEl.style.display = 'none';
+      this._updateTimelinePlayheadUI();
+    };
+    video.onpause = () => {
+      this._updateTimelinePlayheadUI();
+    };
 
     // Prevent video ended event from snapping currentTime back to 0:00
     video.onended = () => {
@@ -4675,6 +4687,19 @@ export class FrigateEventsCard extends LitElement {
         this._updateTimelineScrubberEvents();
         this._loadTimelineVideo(currentTs);
       });
+    });
+
+    // Video click to play/pause
+    const playerContainer = container.querySelector('.timeline-player-container');
+    playerContainer?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (!this._timelineVideoEl) return;
+      if (this._timelineVideoEl.paused) {
+        this._timelineVideoEl.play().catch(() => {});
+      } else {
+        this._timelineVideoEl.pause();
+      }
+      this._updateTimelinePlayheadUI();
     });
 
     // Play / Pause button
