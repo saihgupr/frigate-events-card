@@ -6,9 +6,9 @@ import { customElement, property, state } from 'lit/decorators.js';
 import { ref } from 'lit/directives/ref.js';
 import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/types';
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
-import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, deleteEvent } from './frigate/api';
+import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 
-const CARD_VERSION = '2.4.0';
+const CARD_VERSION = '2.4.1';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -44,6 +44,7 @@ interface FrigateEventsCardConfig extends LovelaceCardConfig {
   frigate_url?: string;
   event_count?: number;
   cameras?: string[];
+  camera?: string;
   labels?: string[];
   zones?: string[];
   show_label?: boolean;
@@ -84,6 +85,9 @@ interface FrigateEventsCardConfig extends LovelaceCardConfig {
   // Temporary false-positive masking options
   show_temp_mask?: boolean;         // default: true
   temp_mask_duration?: string;      // default: '24:00:00'
+  // Continuous footage timeline options
+  show_timeline?: boolean;          // default: true
+  timeline_default_window_hours?: number; // default: 1
 }
 
 const DEFAULT_CONFIG: Partial<FrigateEventsCardConfig> = {
@@ -101,6 +105,8 @@ const DEFAULT_CONFIG: Partial<FrigateEventsCardConfig> = {
   show_modal_navigation: false,
   show_temp_mask: true,
   temp_mask_duration: '24:00:00',
+  show_timeline: true,
+  timeline_default_window_hours: 1,
   title: 'Frigate Events',
   video: true,
   video_on_hover: true,
@@ -173,6 +179,19 @@ export class FrigateEventsCard extends LitElement {
   private _liveTouchStartX?: number;
   private _liveTouchStartY?: number;
   private _didLongPress = false;
+
+  // Timeline modal state
+  private _timelineContainer?: HTMLDivElement;
+  private _timelineVideoEl: HTMLVideoElement | null = null;
+  private _timelineCamera?: string;
+  private _timelineStartTs = 0;
+  private _timelineEndTs = 0;
+  private _timelineWindowDurationSec = 3600; // default 1 hour
+  private _timelinePlaybackRate = 1;
+  private _timelineEvents: FrigateEvent[] = [];
+  private _timelineTimeUpdateRaf?: number;
+  private _timelineIsDragging = false;
+
 
   /**
    * Calculate the daily reset timestamp based on the configured time.
@@ -327,6 +346,7 @@ export class FrigateEventsCard extends LitElement {
     this._intersectionObserver = undefined;
     this._removeModal();
     this._removeMaskManagerModal();
+    this._removeTimelineModal();
     this._closeContextMenu();
     if (this._touchTimeout) {
       clearTimeout(this._touchTimeout);
@@ -2028,6 +2048,453 @@ export class FrigateEventsCard extends LitElement {
         height: 12px;
         fill: currentColor;
       }
+
+      /* ─── Event Modal Timeline Action Button ─── */
+      .frigate-events-modal-timeline-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        background: rgba(59, 130, 246, 0.18);
+        border: 1px solid rgba(59, 130, 246, 0.4);
+        color: #93c5fd;
+        border-radius: 6px;
+        padding: 4px 10px;
+        font-size: 12px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.15s ease;
+        margin-top: 4px;
+        font-family: inherit;
+      }
+      .frigate-events-modal-timeline-btn:hover {
+        background: rgba(59, 130, 246, 0.3);
+        color: #ffffff;
+        border-color: #60a5fa;
+        transform: translateY(-1px);
+      }
+      .frigate-events-modal-timeline-btn svg {
+        width: 14px;
+        height: 14px;
+        fill: currentColor;
+      }
+
+      /* ─── Timeline Modal Styles ─── */
+      .frigate-timeline-modal .frigate-events-modal-content {
+        min-width: min(840px, 95vw);
+        max-width: 900px;
+        max-height: 92vh;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        box-shadow: 0 24px 48px rgba(0, 0, 0, 0.8);
+        background: #161616;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .timeline-modal-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 14px 20px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        background: rgba(24, 24, 24, 0.98);
+      }
+
+      .timeline-modal-header-left {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .timeline-modal-title {
+        font-size: 16px;
+        font-weight: 600;
+        color: #ffffff;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 0;
+      }
+
+      .timeline-modal-title svg {
+        width: 18px;
+        height: 18px;
+        fill: #60a5fa;
+      }
+
+      .timeline-camera-badge {
+        font-size: 11px;
+        padding: 2px 8px;
+        border-radius: 10px;
+        background: rgba(59, 130, 246, 0.2);
+        color: #93c5fd;
+        border: 1px solid rgba(59, 130, 246, 0.35);
+        font-weight: 600;
+      }
+
+      .timeline-modal-body {
+        padding: 16px 20px;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        box-sizing: border-box;
+      }
+
+      .timeline-camera-tabs {
+        display: flex;
+        gap: 6px;
+        overflow-x: auto;
+        padding-bottom: 4px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      }
+
+      .timeline-camera-tab {
+        padding: 5px 12px;
+        border-radius: 6px;
+        font-size: 12px;
+        font-weight: 500;
+        color: #aaa;
+        background: transparent;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        cursor: pointer;
+        transition: all 0.15s;
+        font-family: inherit;
+        white-space: nowrap;
+      }
+
+      .timeline-camera-tab:hover {
+        background: rgba(255, 255, 255, 0.08);
+        color: #fff;
+      }
+
+      .timeline-camera-tab.active {
+        background: rgba(59, 130, 246, 0.25);
+        color: #93c5fd;
+        border-color: #3b82f6;
+      }
+
+      /* Time & Window Controls Row */
+      .timeline-controls-bar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        background: rgba(255, 255, 255, 0.03);
+        padding: 10px 14px;
+        border-radius: 8px;
+        border: 1px solid rgba(255, 255, 255, 0.06);
+      }
+
+      .timeline-datetime-group {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .timeline-datetime-label {
+        font-size: 12px;
+        font-weight: 500;
+        color: #94a3b8;
+      }
+
+      .timeline-datetime-input {
+        background: rgba(0, 0, 0, 0.4);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        color: #ffffff;
+        padding: 5px 10px;
+        border-radius: 6px;
+        font-size: 12px;
+        font-family: inherit;
+        outline: none;
+        transition: border-color 0.15s;
+      }
+
+      .timeline-datetime-input:focus {
+        border-color: #3b82f6;
+      }
+
+      .timeline-quick-jumps {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        flex-wrap: wrap;
+      }
+
+      .timeline-quick-btn {
+        padding: 3px 8px;
+        font-size: 11px;
+        font-weight: 500;
+        border-radius: 4px;
+        background: rgba(255, 255, 255, 0.06);
+        color: #cbd5e1;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        cursor: pointer;
+        transition: all 0.15s;
+        font-family: inherit;
+      }
+
+      .timeline-quick-btn:hover {
+        background: rgba(255, 255, 255, 0.12);
+        color: #ffffff;
+      }
+
+      .timeline-window-group {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .timeline-window-pills {
+        display: flex;
+        gap: 4px;
+      }
+
+      .timeline-window-pill {
+        padding: 3px 8px;
+        font-size: 11px;
+        font-weight: 500;
+        border-radius: 4px;
+        background: transparent;
+        color: #94a3b8;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        cursor: pointer;
+        transition: all 0.15s;
+        font-family: inherit;
+      }
+
+      .timeline-window-pill.active {
+        background: rgba(59, 130, 246, 0.25);
+        color: #93c5fd;
+        border-color: #3b82f6;
+      }
+
+      /* Video Player Container */
+      .timeline-player-container {
+        position: relative;
+        width: 100%;
+        aspect-ratio: 16 / 9;
+        background: #000000;
+        border-radius: 10px;
+        overflow: hidden;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.6);
+      }
+
+      .timeline-video {
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+      }
+
+      .timeline-player-loading {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        background: rgba(0, 0, 0, 0.6);
+        color: #94a3b8;
+        font-size: 13px;
+        z-index: 5;
+        pointer-events: none;
+      }
+
+      .timeline-spinner {
+        width: 32px;
+        height: 32px;
+        border: 3px solid rgba(255, 255, 255, 0.1);
+        border-top-color: #3b82f6;
+        border-radius: 50%;
+        animation: timeline-spin 0.8s linear infinite;
+      }
+
+      @keyframes timeline-spin {
+        to { transform: rotate(360deg); }
+      }
+
+      /* Scrubber Track Area */
+      .timeline-scrubber-wrapper {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        background: rgba(255, 255, 255, 0.03);
+        padding: 12px 14px;
+        border-radius: 8px;
+        border: 1px solid rgba(255, 255, 255, 0.06);
+      }
+
+      .timeline-track-container {
+        position: relative;
+        height: 36px;
+        background: rgba(255, 255, 255, 0.08);
+        border-radius: 6px;
+        cursor: pointer;
+        user-select: none;
+        touch-action: none;
+        overflow: hidden;
+      }
+
+      .timeline-events-layer {
+        position: absolute;
+        inset: 0;
+        pointer-events: auto;
+      }
+
+      .timeline-event-marker {
+        position: absolute;
+        top: 2px;
+        bottom: 2px;
+        background: rgba(59, 130, 246, 0.7);
+        border-radius: 3px;
+        cursor: pointer;
+        transition: transform 0.15s, background 0.15s;
+        z-index: 2;
+      }
+
+      .timeline-event-marker:hover {
+        background: #60a5fa;
+        transform: scaleY(1.1);
+        z-index: 4;
+      }
+
+      .timeline-event-marker.person { background: rgba(59, 130, 246, 0.8); }
+      .timeline-event-marker.car { background: rgba(245, 158, 11, 0.8); }
+      .timeline-event-marker.dog, .timeline-event-marker.cat { background: rgba(16, 185, 129, 0.8); }
+
+      .timeline-playhead {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        width: 3px;
+        background: #ef4444;
+        box-shadow: 0 0 8px #ef4444;
+        z-index: 5;
+        pointer-events: none;
+        transform: translateX(-50%);
+      }
+
+      .timeline-playhead::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 9px;
+        height: 9px;
+        background: #ef4444;
+        border-radius: 50%;
+      }
+
+      .timeline-track-labels {
+        display: flex;
+        justify-content: space-between;
+        font-size: 11px;
+        color: #94a3b8;
+        font-family: monospace;
+      }
+
+      /* Transport & Speed Row */
+      .timeline-transport-bar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .timeline-transport-controls {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .timeline-transport-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(255, 255, 255, 0.06);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        color: #ffffff;
+        padding: 6px 10px;
+        border-radius: 6px;
+        font-size: 12px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.15s;
+        font-family: inherit;
+      }
+
+      .timeline-transport-btn:hover {
+        background: rgba(255, 255, 255, 0.15);
+      }
+
+      .timeline-transport-btn.play-btn {
+        background: #3b82f6;
+        border-color: #2563eb;
+        padding: 6px 14px;
+      }
+
+      .timeline-transport-btn.play-btn:hover {
+        background: #2563eb;
+      }
+
+      .timeline-transport-btn svg {
+        width: 14px;
+        height: 14px;
+        fill: currentColor;
+      }
+
+      .timeline-speed-controls {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
+
+      .timeline-speed-label {
+        font-size: 11px;
+        color: #94a3b8;
+        margin-right: 2px;
+      }
+
+      .timeline-speed-btn {
+        padding: 3px 7px;
+        font-size: 11px;
+        font-weight: 600;
+        border-radius: 4px;
+        background: rgba(255, 255, 255, 0.05);
+        color: #94a3b8;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        cursor: pointer;
+        transition: all 0.15s;
+        font-family: inherit;
+      }
+
+      .timeline-speed-btn:hover {
+        background: rgba(255, 255, 255, 0.12);
+        color: #ffffff;
+      }
+
+      .timeline-speed-btn.active {
+        background: rgba(59, 130, 246, 0.25);
+        color: #93c5fd;
+        border-color: #3b82f6;
+      }
+
+      .timeline-time-badge {
+        font-size: 12px;
+        font-family: monospace;
+        color: #e2e8f0;
+        background: rgba(0, 0, 0, 0.3);
+        padding: 4px 8px;
+        border-radius: 4px;
+        border: 1px solid rgba(255, 255, 255, 0.06);
+      }
     `;
     if (!style.parentNode) {
       document.head.appendChild(style);
@@ -2236,6 +2703,12 @@ export class FrigateEventsCard extends LitElement {
               <div class="frigate-events-modal-time">${rightLine1}</div>
               ${showZones && zones ? `<div class="frigate-events-modal-zones">${zones}</div>` : ''}
               ${showDuration ? `<div class="frigate-events-modal-duration">${duration}</div>` : ''}
+              ${this._config?.show_timeline !== false ? `
+                <button class="frigate-events-modal-timeline-btn" data-action="open-timeline" title="View in Continuous Timeline">
+                  <svg viewBox="0 0 24 24"><path d="M12,20A8,8 0 0,0 20,12A8,8 0 0,0 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,2C6.47,2 2,6.48 2,12A10,10 0 0,1 12,2M12.5,7V12.25L17,14.92L16.25,16.15L11,13V7H12.5Z"/></svg>
+                  <span>Timeline</span>
+                </button>
+              ` : ''}
             </div>
           </div>
           ${showDescription && (event.description || event.data?.description)
@@ -2261,6 +2734,14 @@ export class FrigateEventsCard extends LitElement {
     // Close button handler
     const closeBtn = container.querySelector('.frigate-events-modal-close');
     closeBtn?.addEventListener('click', () => this._handleModalClose());
+
+    // Timeline button handler
+    const timelineBtn = container.querySelector('[data-action="open-timeline"]');
+    timelineBtn?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this._handleModalClose();
+      this._showTimelineModal(event.camera, event.start_time);
+    });
 
     // Navigation button handlers
     if (showNav && hasPrev) {
@@ -2537,6 +3018,12 @@ export class FrigateEventsCard extends LitElement {
         <svg viewBox="0 0 24 24"><path d="M12,9A3,3 0 0,0 9,12A3,3 0 0,0 12,15A3,3 0 0,0 15,12A3,3 0 0,0 12,9M12,17A5,5 0 0,1 7,12A5,5 0 0,1 12,7A5,5 0 0,1 17,12A5,5 0 0,1 12,7M12,4.5C7,4.5 2.73,7.61 1,12C2.73,16.39 7,19.5 12,19.5C17,19.5 21.27,16.39 23,12C21.27,7.61 17,4.5 12,4.5Z"/></svg>
         <span>View Details</span>
       </button>
+      ${this._config?.show_timeline !== false ? `
+      <button class="frigate-events-context-item" data-action="view-timeline">
+        <svg viewBox="0 0 24 24"><path d="M12,20A8,8 0 0,0 20,12A8,8 0 0,0 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,2C6.47,2 2,6.48 2,12A10,10 0 0,1 12,2M12.5,7V12.25L17,14.92L16.25,16.15L11,13V7H12.5Z"/></svg>
+        <span>View in Timeline</span>
+      </button>
+      ` : ''}
       <button class="frigate-events-context-item" data-action="open-mask-manager">
         <svg viewBox="0 0 24 24"><path d="M2,2H8V4H16V2H22V8H20V16H22V22H16V20H8V22H2V16H4V8H2V2M4,4V6H6V4H4M18,4V6H20V4H18M20,18V20H18V18H20M4,18V20H6V18H4M8,6V8H6V16H8V18H16V16H18V8H16V6H8M9,9H15V15H9V9Z"/></svg>
         <span>Manage Temp Masks</span>
@@ -2623,6 +3110,12 @@ export class FrigateEventsCard extends LitElement {
       e.stopPropagation();
       this._closeContextMenu();
       this._handleEventClick(event);
+    });
+
+    menu.querySelector('[data-action="view-timeline"]')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this._closeContextMenu();
+      this._showTimelineModal(event.camera, event.start_time);
     });
 
     menu.querySelector('[data-action="open-mask-manager"]')?.addEventListener('click', (e) => {
@@ -2712,6 +3205,70 @@ export class FrigateEventsCard extends LitElement {
     return `${diffSecs}s left`;
   }
 
+  private _openLiveViewContextMenu(x: number, y: number): void {
+    this._closeContextMenu();
+    this._injectModalStyles();
+
+    const liveCam = this._config?.camera || (this._getAvailableCameras()[0] || '');
+    const hasTempMaskIntegration = !!(
+      this._config?.show_temp_mask !== false &&
+      (this.hass?.services?.['frigate_temp_mask'] || this.hass?.services?.['shell_command']?.['frigate_add_temp_mask'] || this.hass?.states?.['sensor.frigate_active_masks'])
+    );
+
+    const menu = document.createElement('div');
+    menu.className = 'frigate-events-context-menu';
+
+    menu.innerHTML = `
+      ${this._config?.show_timeline !== false ? `
+      <button class="frigate-events-context-item" data-action="live-timeline">
+        <svg viewBox="0 0 24 24"><path d="M12,20A8,8 0 0,0 20,12A8,8 0 0,0 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,2C6.47,2 2,6.48 2,12A10,10 0 0,1 12,2M12.5,7V12.25L17,14.92L16.25,16.15L11,13V7H12.5Z"/></svg>
+        <span>View in Timeline</span>
+      </button>
+      ` : ''}
+      ${hasTempMaskIntegration ? `
+      <button class="frigate-events-context-item" data-action="open-mask-manager">
+        <svg viewBox="0 0 24 24"><path d="M2,2H8V4H16V2H22V8H20V16H22V22H16V20H8V22H2V16H4V8H2V2M4,4V6H6V4H4M18,4V6H20V4H18M20,18V20H18V18H20M4,18V20H6V18H4M8,6V8H6V16H8V18H16V16H18V8H16V6H8M9,9H15V15H9V9Z"/></svg>
+        <span>Manage Temp Masks</span>
+      </button>
+      ` : ''}
+    `;
+
+    document.body.appendChild(menu);
+    const rect = menu.getBoundingClientRect();
+    let posX = x;
+    let posY = y;
+    if (posX + rect.width > window.innerWidth - 10) {
+      posX = window.innerWidth - rect.width - 10;
+    }
+    if (posY + rect.height > window.innerHeight - 10) {
+      posY = window.innerHeight - rect.height - 10;
+    }
+    menu.style.left = `${Math.max(10, posX)}px`;
+    menu.style.top = `${Math.max(10, posY)}px`;
+
+    menu.querySelector('[data-action="live-timeline"]')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this._closeContextMenu();
+      this._showTimelineModal(liveCam);
+    });
+
+    menu.querySelector('[data-action="open-mask-manager"]')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this._closeContextMenu();
+      this._showMaskManagerModal();
+    });
+
+    const onDocClick = (ev: MouseEvent) => {
+      if (!menu.contains(ev.target as Node)) {
+        this._closeContextMenu();
+        window.removeEventListener('click', onDocClick);
+      }
+    };
+    setTimeout(() => window.addEventListener('click', onDocClick), 10);
+
+    this._contextMenuEl = menu;
+  }
+
   private _handleLiveViewContextMenu(e: MouseEvent): void {
     e.preventDefault();
     e.stopPropagation();
@@ -2719,14 +3276,16 @@ export class FrigateEventsCard extends LitElement {
       clearTimeout(this._liveTouchTimeout);
       this._liveTouchTimeout = undefined;
     }
-    this._showMaskManagerModal();
+    this._openLiveViewContextMenu(e.clientX, e.clientY);
   }
 
   private _handleLiveViewTouchStart(e: TouchEvent): void {
     if (e.touches.length !== 1) return;
     const touch = e.touches[0];
-    this._liveTouchStartX = touch.clientX;
-    this._liveTouchStartY = touch.clientY;
+    const clientX = touch.clientX;
+    const clientY = touch.clientY;
+    this._liveTouchStartX = clientX;
+    this._liveTouchStartY = clientY;
     this._didLongPress = false;
 
     if (this._liveTouchTimeout) {
@@ -2734,7 +3293,7 @@ export class FrigateEventsCard extends LitElement {
     }
     this._liveTouchTimeout = setTimeout(() => {
       this._didLongPress = true;
-      this._showMaskManagerModal();
+      this._openLiveViewContextMenu(clientX, clientY);
     }, 450);
   }
 
@@ -3580,6 +4139,538 @@ export class FrigateEventsCard extends LitElement {
     }
   }
 
+  /* ─────────────────────────────────────────────────────────────
+     Continuous Footage Timeline Scrubber & Player Modal (Frigate 0.13)
+     ───────────────────────────────────────────────────────────── */
+
+  private async _showTimelineModal(initialCamera?: string, initialTimestamp?: number): Promise<void> {
+    this._closeContextMenu();
+    this._injectModalStyles();
+
+    // Determine initial camera
+    const availableCameras = this._getAvailableCameras();
+    const camera = initialCamera || this._timelineCamera || (availableCameras.length > 0 ? availableCameras[0] : (this._config?.camera || ''));
+    this._timelineCamera = camera;
+
+    // Determine initial time window
+    const duration = this._timelineWindowDurationSec || ((this._config?.timeline_default_window_hours || 1) * 3600);
+    this._timelineWindowDurationSec = duration;
+
+    const targetTs = initialTimestamp && initialTimestamp > 0 ? initialTimestamp : (Date.now() / 1000);
+    // Center target timestamp in window or place it near the middle/end
+    if (initialTimestamp && initialTimestamp > 0) {
+      this._timelineStartTs = Math.max(0, Math.floor(targetTs - duration / 2));
+      this._timelineEndTs = Math.floor(this._timelineStartTs + duration);
+    } else {
+      this._timelineEndTs = Math.floor(targetTs);
+      this._timelineStartTs = Math.max(0, Math.floor(this._timelineEndTs - duration));
+    }
+
+    if (this._timelineContainer) {
+      this._renderTimelineContent(this._timelineContainer);
+      await this._fetchTimelineEvents();
+      this._updateTimelineScrubberEvents();
+      this._loadTimelineVideo(targetTs);
+      return;
+    }
+
+    const container = document.createElement('div');
+    container.className = 'frigate-events-modal frigate-timeline-modal';
+    this._timelineContainer = container;
+
+    this._renderTimelineContent(container);
+
+    container.addEventListener('click', (e) => {
+      if (e.target === container) {
+        this._removeTimelineModal();
+      }
+    });
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        this._removeTimelineModal();
+        window.removeEventListener('keydown', onKeyDown);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+
+    document.body.appendChild(container);
+
+    // Initial fetch of events & video load
+    await this._fetchTimelineEvents();
+    this._updateTimelineScrubberEvents();
+    this._loadTimelineVideo(targetTs);
+  }
+
+  private _removeTimelineModal(): void {
+    if (this._timelineTimeUpdateRaf) {
+      cancelAnimationFrame(this._timelineTimeUpdateRaf);
+      this._timelineTimeUpdateRaf = undefined;
+    }
+    if (this._timelineVideoEl) {
+      try {
+        this._timelineVideoEl.pause();
+        this._timelineVideoEl.removeAttribute('src');
+        this._timelineVideoEl.load();
+      } catch (_) {}
+      this._timelineVideoEl = null;
+    }
+    if (this._timelineContainer && this._timelineContainer.parentNode) {
+      this._timelineContainer.parentNode.removeChild(this._timelineContainer);
+      this._timelineContainer = undefined;
+    }
+  }
+
+  private _getAvailableCameras(): string[] {
+    const cams = new Set<string>();
+    if (this._config?.camera) cams.add(this._config.camera);
+    if (Array.isArray(this._config?.cameras)) {
+      this._config.cameras.forEach(c => cams.add(c));
+    }
+    if (Array.isArray(this._events)) {
+      this._events.forEach(e => {
+        if (e.camera) cams.add(e.camera);
+      });
+    }
+    return Array.from(cams);
+  }
+
+  private async _fetchTimelineEvents(): Promise<void> {
+    if (!this.hass || !this._timelineCamera) return;
+    try {
+      const events = await getEvents(this.hass, {
+        instance_id: this._config?.frigate_client_id,
+        cameras: [this._timelineCamera],
+        after: this._timelineStartTs,
+        before: this._timelineEndTs,
+        limit: 100,
+      });
+      this._timelineEvents = Array.isArray(events) ? events : [];
+    } catch (e) {
+      console.warn('Failed to fetch events for timeline window:', e);
+      this._timelineEvents = [];
+    }
+  }
+
+  private _loadTimelineVideo(seekTargetTs?: number): void {
+    if (!this._timelineContainer) return;
+    const video = this._timelineContainer.querySelector('video.timeline-video') as HTMLVideoElement | null;
+    if (!video || !this._timelineCamera) return;
+
+    this._timelineVideoEl = video;
+    video.playbackRate = this._timelinePlaybackRate;
+
+    const loadingEl = this._timelineContainer.querySelector('.timeline-player-loading') as HTMLElement | null;
+    if (loadingEl) loadingEl.style.display = 'flex';
+
+    const clientId = this._config?.frigate_client_id || 'frigate';
+    const frigateUrl = this._config?.frigate_url;
+    const mp4Url = getVodClipURL(clientId, this._timelineCamera, this._timelineStartTs, this._timelineEndTs, frigateUrl);
+    const hlsUrl = getVodHlsURL(clientId, this._timelineCamera, this._timelineStartTs, this._timelineEndTs, frigateUrl);
+
+    // Prefer MP4 dynamic clip, Safari/HLS fallback
+    const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+    video.src = isSafari ? hlsUrl : mp4Url;
+
+    const onLoaded = () => {
+      if (loadingEl) loadingEl.style.display = 'none';
+      if (seekTargetTs && seekTargetTs >= this._timelineStartTs && seekTargetTs <= this._timelineEndTs) {
+        const offset = Math.max(0, seekTargetTs - this._timelineStartTs);
+        video.currentTime = offset;
+      }
+      video.play().catch(() => {});
+    };
+
+    video.onloadeddata = onLoaded;
+    video.onerror = () => {
+      // If MP4 fails, try HLS
+      if (video.src !== hlsUrl) {
+        video.src = hlsUrl;
+        video.load();
+      } else if (loadingEl) {
+        loadingEl.textContent = 'Footage unavailable for this time window.';
+      }
+    };
+
+    video.load();
+    this._startTimelineTimeUpdates();
+  }
+
+  private _startTimelineTimeUpdates(): void {
+    if (this._timelineTimeUpdateRaf) {
+      cancelAnimationFrame(this._timelineTimeUpdateRaf);
+    }
+    const tick = () => {
+      if (!this._timelineContainer || !this._timelineVideoEl) return;
+      if (!this._timelineIsDragging) {
+        this._updateTimelinePlayheadUI();
+      }
+      this._timelineTimeUpdateRaf = requestAnimationFrame(tick);
+    };
+    this._timelineTimeUpdateRaf = requestAnimationFrame(tick);
+  }
+
+  private _updateTimelinePlayheadUI(): void {
+    if (!this._timelineContainer || !this._timelineVideoEl) return;
+    const video = this._timelineVideoEl;
+    const duration = this._timelineEndTs - this._timelineStartTs;
+    if (duration <= 0) return;
+
+    const currentOffset = video.currentTime || 0;
+    const currentTs = this._timelineStartTs + currentOffset;
+    const pct = Math.max(0, Math.min(100, (currentOffset / duration) * 100));
+
+    const playhead = this._timelineContainer.querySelector('.timeline-playhead') as HTMLElement | null;
+    if (playhead) {
+      playhead.style.left = `${pct}%`;
+    }
+
+    const currentBadge = this._timelineContainer.querySelector('[data-timeline-current-time]') as HTMLElement | null;
+    if (currentBadge) {
+      const curDate = new Date(currentTs * 1000);
+      currentBadge.textContent = curDate.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+    }
+
+    const playPauseBtn = this._timelineContainer.querySelector('[data-action="toggle-play"]') as HTMLElement | null;
+    if (playPauseBtn) {
+      const isPaused = video.paused;
+      playPauseBtn.innerHTML = isPaused
+        ? `<svg viewBox="0 0 24 24"><path d="M8,5.14V19.14L19,12.14L8,5.14Z"/></svg>`
+        : `<svg viewBox="0 0 24 24"><path d="M14,19H18V5H14M6,19H10V5H6V19Z"/></svg>`;
+    }
+  }
+
+  private _updateTimelineScrubberEvents(): void {
+    if (!this._timelineContainer) return;
+    const eventsLayer = this._timelineContainer.querySelector('.timeline-events-layer');
+    if (!eventsLayer) return;
+
+    const windowDuration = this._timelineEndTs - this._timelineStartTs;
+    if (windowDuration <= 0) return;
+
+    eventsLayer.innerHTML = this._timelineEvents.map(ev => {
+      const start = ev.start_time || 0;
+      const end = ev.end_time || (start + 30);
+      const startPct = Math.max(0, Math.min(100, ((start - this._timelineStartTs) / windowDuration) * 100));
+      const endPct = Math.max(0, Math.min(100, ((end - this._timelineStartTs) / windowDuration) * 100));
+      const widthPct = Math.max(0.6, endPct - startPct);
+      const labelClass = (ev.label || 'event').toLowerCase();
+      const timeStr = this._formatTime(start);
+      const title = `${(ev.label || 'Event').toUpperCase()} at ${timeStr}`;
+
+      return `
+        <div
+          class="timeline-event-marker ${labelClass}"
+          data-event-start="${start}"
+          title="${title}"
+          style="left: ${startPct}%; width: ${widthPct}%;"
+        ></div>
+      `;
+    }).join('');
+
+    // Attach marker click handlers
+    eventsLayer.querySelectorAll('.timeline-event-marker').forEach(marker => {
+      marker.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const start = parseFloat((marker as HTMLElement).getAttribute('data-event-start') || '0');
+        if (start > 0 && this._timelineVideoEl) {
+          const offset = Math.max(0, start - this._timelineStartTs);
+          this._timelineVideoEl.currentTime = offset;
+          this._timelineVideoEl.play().catch(() => {});
+        }
+      });
+    });
+  }
+
+  private _renderTimelineContent(container: HTMLElement): void {
+    const availableCameras = this._getAvailableCameras();
+    const currentCamera = this._timelineCamera || (availableCameras[0] || 'Camera');
+    const startDate = new Date(this._timelineStartTs * 1000);
+    const endDate = new Date(this._timelineEndTs * 1000);
+
+    // Format ISO string for datetime-local input (YYYY-MM-DDTHH:mm)
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const dtValue = `${startDate.getFullYear()}-${pad(startDate.getMonth() + 1)}-${pad(startDate.getDate())}T${pad(startDate.getHours())}:${pad(startDate.getMinutes())}`;
+
+    const windowMinutes = Math.round(this._timelineWindowDurationSec / 60);
+
+    container.innerHTML = `
+      <div class="frigate-events-modal-content">
+        <div class="timeline-modal-header">
+          <div class="timeline-modal-header-left">
+            <h3 class="timeline-modal-title">
+              <svg viewBox="0 0 24 24"><path d="M12,20A8,8 0 0,0 20,12A8,8 0 0,0 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,2C6.47,2 2,6.48 2,12A10,10 0 0,1 12,2M12.5,7V12.25L17,14.92L16.25,16.15L11,13V7H12.5Z"/></svg>
+              <span>Continuous Footage Timeline</span>
+            </h3>
+            <span class="timeline-camera-badge">${this._formatCameraName(currentCamera)}</span>
+          </div>
+          <button class="frigate-events-modal-close" data-action="close" title="Close">
+            <svg viewBox="0 0 24 24"><path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"/></svg>
+          </button>
+        </div>
+
+        <div class="timeline-modal-body">
+          ${availableCameras.length > 1 ? `
+            <div class="timeline-camera-tabs">
+              ${availableCameras.map(cam => `
+                <button class="timeline-camera-tab ${cam === currentCamera ? 'active' : ''}" data-camera="${cam}">
+                  ${this._formatCameraName(cam)}
+                </button>
+              `).join('')}
+            </div>
+          ` : ''}
+
+          <!-- Controls: DateTime picker, Quick jumps, Window duration -->
+          <div class="timeline-controls-bar">
+            <div class="timeline-datetime-group">
+              <span class="timeline-datetime-label">Start Time:</span>
+              <input type="datetime-local" class="timeline-datetime-input" value="${dtValue}" />
+              <div class="timeline-quick-jumps">
+                <button class="timeline-quick-btn" data-jump="now">Now</button>
+                <button class="timeline-quick-btn" data-jump="-15m">-15m</button>
+                <button class="timeline-quick-btn" data-jump="-1h">-1h</button>
+                <button class="timeline-quick-btn" data-jump="-3h">-3h</button>
+                <button class="timeline-quick-btn" data-jump="-12h">-12h</button>
+                <button class="timeline-quick-btn" data-jump="day-start">Start of Day</button>
+              </div>
+            </div>
+
+            <div class="timeline-window-group">
+              <span class="timeline-datetime-label">Window:</span>
+              <div class="timeline-window-pills">
+                <button class="timeline-window-pill ${windowMinutes === 15 ? 'active' : ''}" data-window="15">15m</button>
+                <button class="timeline-window-pill ${windowMinutes === 30 ? 'active' : ''}" data-window="30">30m</button>
+                <button class="timeline-window-pill ${windowMinutes === 60 ? 'active' : ''}" data-window="60">1h</button>
+                <button class="timeline-window-pill ${windowMinutes === 120 ? 'active' : ''}" data-window="120">2h</button>
+                <button class="timeline-window-pill ${windowMinutes === 240 ? 'active' : ''}" data-window="240">4h</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Video Player -->
+          <div class="timeline-player-container">
+            <video class="timeline-video" playsinline webkit-playsinline></video>
+            <div class="timeline-player-loading">
+              <div class="timeline-spinner"></div>
+              <span>Buffering continuous footage...</span>
+            </div>
+          </div>
+
+          <!-- Scrubber Track -->
+          <div class="timeline-scrubber-wrapper">
+            <div class="timeline-track-container">
+              <div class="timeline-events-layer"></div>
+              <div class="timeline-playhead"></div>
+            </div>
+            <div class="timeline-track-labels">
+              <span>${startDate.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}</span>
+              <span class="timeline-time-badge" data-timeline-current-time>--:--:--</span>
+              <span>${endDate.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}</span>
+            </div>
+          </div>
+
+          <!-- Transport & Speed Controls -->
+          <div class="timeline-transport-bar">
+            <div class="timeline-transport-controls">
+              <button class="timeline-transport-btn" data-skip="-300" title="Back 5 minutes">-5m</button>
+              <button class="timeline-transport-btn" data-skip="-60" title="Back 1 minute">-1m</button>
+              <button class="timeline-transport-btn" data-skip="-30" title="Back 30 seconds">-30s</button>
+              <button class="timeline-transport-btn play-btn" data-action="toggle-play" title="Play / Pause">
+                <svg viewBox="0 0 24 24"><path d="M8,5.14V19.14L19,12.14L8,5.14Z"/></svg>
+              </button>
+              <button class="timeline-transport-btn" data-skip="30" title="Forward 30 seconds">+30s</button>
+              <button class="timeline-transport-btn" data-skip="60" title="Forward 1 minute">+1m</button>
+              <button class="timeline-transport-btn" data-skip="300" title="Forward 5 minutes">+5m</button>
+            </div>
+
+            <div class="timeline-speed-controls">
+              <span class="timeline-speed-label">Speed:</span>
+              <button class="timeline-speed-btn ${this._timelinePlaybackRate === 0.5 ? 'active' : ''}" data-speed="0.5">0.5x</button>
+              <button class="timeline-speed-btn ${this._timelinePlaybackRate === 1 ? 'active' : ''}" data-speed="1">1x</button>
+              <button class="timeline-speed-btn ${this._timelinePlaybackRate === 2 ? 'active' : ''}" data-speed="2">2x</button>
+              <button class="timeline-speed-btn ${this._timelinePlaybackRate === 4 ? 'active' : ''}" data-speed="4">4x</button>
+              <button class="timeline-speed-btn ${this._timelinePlaybackRate === 8 ? 'active' : ''}" data-speed="8">8x</button>
+              <button class="timeline-speed-btn ${this._timelinePlaybackRate === 16 ? 'active' : ''}" data-speed="16">16x</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    // Attach Event Listeners
+    const content = container.querySelector('.frigate-events-modal-content');
+    content?.addEventListener('click', (e) => e.stopPropagation());
+
+    // Close button
+    container.querySelector('[data-action="close"]')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this._removeTimelineModal();
+    });
+
+    // Camera tabs
+    container.querySelectorAll('.timeline-camera-tab').forEach(tab => {
+      tab.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const cam = (tab as HTMLElement).getAttribute('data-camera');
+        if (cam && cam !== this._timelineCamera) {
+          this._timelineCamera = cam;
+          this._renderTimelineContent(container);
+          await this._fetchTimelineEvents();
+          this._updateTimelineScrubberEvents();
+          this._loadTimelineVideo(this._timelineStartTs);
+        }
+      });
+    });
+
+    // Datetime change
+    const dtInput = container.querySelector('.timeline-datetime-input') as HTMLInputElement | null;
+    dtInput?.addEventListener('change', async () => {
+      if (!dtInput.value) return;
+      const parsed = new Date(dtInput.value).getTime() / 1000;
+      if (!isNaN(parsed) && parsed > 0) {
+        this._timelineStartTs = Math.floor(parsed);
+        this._timelineEndTs = Math.floor(this._timelineStartTs + this._timelineWindowDurationSec);
+        this._renderTimelineContent(container);
+        await this._fetchTimelineEvents();
+        this._updateTimelineScrubberEvents();
+        this._loadTimelineVideo(this._timelineStartTs);
+      }
+    });
+
+    // Quick jump buttons
+    container.querySelectorAll('[data-jump]').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const jump = (btn as HTMLElement).getAttribute('data-jump');
+        const now = Date.now() / 1000;
+        let newEnd = now;
+
+        if (jump === 'now') {
+          newEnd = now;
+        } else if (jump === '-15m') {
+          newEnd = now - 900;
+        } else if (jump === '-1h') {
+          newEnd = now - 3600;
+        } else if (jump === '-3h') {
+          newEnd = now - 10800;
+        } else if (jump === '-12h') {
+          newEnd = now - 43200;
+        } else if (jump === 'day-start') {
+          const startOfDay = new Date();
+          startOfDay.setHours(0, 0, 0, 0);
+          this._timelineStartTs = Math.floor(startOfDay.getTime() / 1000);
+          this._timelineEndTs = Math.floor(this._timelineStartTs + this._timelineWindowDurationSec);
+          this._renderTimelineContent(container);
+          await this._fetchTimelineEvents();
+          this._updateTimelineScrubberEvents();
+          this._loadTimelineVideo(this._timelineStartTs);
+          return;
+        }
+
+        this._timelineEndTs = Math.floor(newEnd);
+        this._timelineStartTs = Math.max(0, Math.floor(newEnd - this._timelineWindowDurationSec));
+        this._renderTimelineContent(container);
+        await this._fetchTimelineEvents();
+        this._updateTimelineScrubberEvents();
+        this._loadTimelineVideo(this._timelineStartTs);
+      });
+    });
+
+    // Window duration pills
+    container.querySelectorAll('.timeline-window-pill').forEach(pill => {
+      pill.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const mins = parseInt((pill as HTMLElement).getAttribute('data-window') || '60', 10);
+        this._timelineWindowDurationSec = mins * 60;
+        this._timelineEndTs = Math.floor(this._timelineStartTs + this._timelineWindowDurationSec);
+        this._renderTimelineContent(container);
+        await this._fetchTimelineEvents();
+        this._updateTimelineScrubberEvents();
+        this._loadTimelineVideo(this._timelineStartTs);
+      });
+    });
+
+    // Play / Pause button
+    const playPauseBtn = container.querySelector('[data-action="toggle-play"]');
+    playPauseBtn?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (!this._timelineVideoEl) return;
+      if (this._timelineVideoEl.paused) {
+        this._timelineVideoEl.play().catch(() => {});
+      } else {
+        this._timelineVideoEl.pause();
+      }
+      this._updateTimelinePlayheadUI();
+    });
+
+    // Skip buttons
+    container.querySelectorAll('[data-skip]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (!this._timelineVideoEl) return;
+        const delta = parseFloat((btn as HTMLElement).getAttribute('data-skip') || '0');
+        const duration = this._timelineEndTs - this._timelineStartTs;
+        this._timelineVideoEl.currentTime = Math.max(0, Math.min(duration, this._timelineVideoEl.currentTime + delta));
+        this._updateTimelinePlayheadUI();
+      });
+    });
+
+    // Speed buttons
+    container.querySelectorAll('.timeline-speed-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const speed = parseFloat((btn as HTMLElement).getAttribute('data-speed') || '1');
+        this._timelinePlaybackRate = speed;
+        if (this._timelineVideoEl) {
+          this._timelineVideoEl.playbackRate = speed;
+        }
+        container.querySelectorAll('.timeline-speed-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+      });
+    });
+
+    // Scrubber track click / drag scrubbing
+    const track = container.querySelector('.timeline-track-container') as HTMLElement | null;
+    if (track) {
+      const handleSeek = (clientX: number) => {
+        const rect = track.getBoundingClientRect();
+        if (rect.width <= 0 || !this._timelineVideoEl) return;
+        const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+        const duration = this._timelineEndTs - this._timelineStartTs;
+        this._timelineVideoEl.currentTime = ratio * duration;
+        this._updateTimelinePlayheadUI();
+      };
+
+      track.addEventListener('pointerdown', (e: PointerEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this._timelineIsDragging = true;
+        track.setPointerCapture(e.pointerId);
+        handleSeek(e.clientX);
+
+        const onMove = (ev: PointerEvent) => {
+          if (this._timelineIsDragging) {
+            handleSeek(ev.clientX);
+          }
+        };
+
+        const onUp = (ev: PointerEvent) => {
+          this._timelineIsDragging = false;
+          try {
+            track.releasePointerCapture(ev.pointerId);
+          } catch (_) {}
+          track.removeEventListener('pointermove', onMove);
+          track.removeEventListener('pointerup', onUp);
+          track.removeEventListener('pointercancel', onUp);
+        };
+
+        track.addEventListener('pointermove', onMove);
+        track.addEventListener('pointerup', onUp);
+        track.addEventListener('pointercancel', onUp);
+      });
+    }
+  }
+
   private async _executeDeleteEvent(event: FrigateEvent): Promise<void> {
     const clientId = this._config?.frigate_client_id || 'frigate';
     const success = await deleteEvent(
@@ -4020,14 +5111,39 @@ export class FrigateEventsCard extends LitElement {
     let renderedEvents = eventsToShow.map(event => this._renderEvent(event));
     const hasTempMask = !!(this._config?.show_temp_mask !== false &&
       (this.hass?.services?.['frigate_temp_mask'] || this.hass?.states?.['sensor.frigate_active_masks']));
+    const hasTimeline = this._config?.show_timeline !== false;
     let renderedPlaceholders = Array(placeholderCount).fill(0).map(() =>
       html`<div
         class="placeholder"
         title="No events found. Check that snapshots: enabled: true in Frigate."
-        @contextmenu=${hasTempMask ? (e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); this._showMaskManagerModal(); } : undefined}
-        @touchstart=${hasTempMask ? (e: TouchEvent) => { if (e.touches.length !== 1) return; this._liveTouchTimeout = setTimeout(() => this._showMaskManagerModal(), 500); } : undefined}
-        @touchend=${hasTempMask ? () => { if (this._liveTouchTimeout) { clearTimeout(this._liveTouchTimeout); this._liveTouchTimeout = undefined; } } : undefined}
-        @touchcancel=${hasTempMask ? () => { if (this._liveTouchTimeout) { clearTimeout(this._liveTouchTimeout); this._liveTouchTimeout = undefined; } } : undefined}
+        @contextmenu=${(e: MouseEvent) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (hasTimeline && hasTempMask) {
+            this._openLiveViewContextMenu(e.clientX, e.clientY);
+          } else if (hasTimeline) {
+            this._showTimelineModal();
+          } else if (hasTempMask) {
+            this._showMaskManagerModal();
+          }
+        }}
+        @touchstart=${(e: TouchEvent) => {
+          if (e.touches.length !== 1) return;
+          const touch = e.touches[0];
+          const cx = touch.clientX;
+          const cy = touch.clientY;
+          this._liveTouchTimeout = setTimeout(() => {
+            if (hasTimeline && hasTempMask) {
+              this._openLiveViewContextMenu(cx, cy);
+            } else if (hasTimeline) {
+              this._showTimelineModal();
+            } else if (hasTempMask) {
+              this._showMaskManagerModal();
+            }
+          }, 500);
+        }}
+        @touchend=${() => { if (this._liveTouchTimeout) { clearTimeout(this._liveTouchTimeout); this._liveTouchTimeout = undefined; } }}
+        @touchcancel=${() => { if (this._liveTouchTimeout) { clearTimeout(this._liveTouchTimeout); this._liveTouchTimeout = undefined; } }}
       ></div>`
     );
     

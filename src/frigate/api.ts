@@ -60,6 +60,36 @@ export function getEventHlsURL(clientId: string, eventId: string): string {
 }
 
 /**
+ * Get continuous footage dynamic clip MP4 URL for a camera window (Frigate 0.13)
+ */
+export function getVodClipURL(clientId: string, camera: string, startTs: number, endTs: number, frigateUrl?: string): string {
+    const start = Math.floor(startTs);
+    const end = Math.floor(endTs);
+    const encCam = encodeURIComponent(camera);
+    if (frigateUrl) {
+        const base = frigateUrl.replace(/\/$/, '');
+        return `${base}/api/${encCam}/start/${start}/end/${end}/clip.mp4`;
+    }
+    // Standard HA Frigate integration proxy route or direct /api route
+    return `/api/frigate/${encodeURIComponent(clientId)}/vod/${encCam}/start/${start}/end/${end}/clip.mp4`;
+}
+
+/**
+ * Get continuous footage VOD HLS playlist URL for a camera window (Frigate 0.13)
+ */
+export function getVodHlsURL(clientId: string, camera: string, startTs: number, endTs: number, frigateUrl?: string): string {
+    const start = Math.floor(startTs);
+    const end = Math.floor(endTs);
+    const encCam = encodeURIComponent(camera);
+    if (frigateUrl) {
+        const base = frigateUrl.replace(/\/$/, '');
+        return `${base}/vod/${encCam}/start/${start}/end/${end}/index.m3u8`;
+    }
+    return `/api/frigate/${encodeURIComponent(clientId)}/vod/${encCam}/start/${start}/end/${end}/index.m3u8`;
+}
+
+
+/**
  * Subscribe to real-time Frigate events
  */
 export async function subscribeToEvents(

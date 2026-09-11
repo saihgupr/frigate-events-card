@@ -29,8 +29,9 @@ A simple Lovelace card for displaying recent Frigate detection events in a horiz
 - **Scrollable Gallery**: Optional horizontal scroll mode with arrow navigation and hidden scrollbar for a clean, native feel.
 - **Customizable Layout**: Reverse the rendering order or offset the timeline to build the exact dashboard you want.
 - **Daily Reset**: Optional automated clearing for a fresh daily view.
+- **Continuous Footage Timeline & Scrubber (Frigate 0.13 VOD)**: Stream continuous video recordings for any time window directly in a dedicated modal player. Scrub dynamically across an interactive visual track with color-coded event markers, jump by relative intervals (`-15m`, `-1h`, `-3h`, `-12h`, `Start of Day`), and skim at variable speeds up to 16x.
 - **Interactive Details Modal**: Deep-dive popup displaying full event information, including AI-generated descriptions (if available), duration, date, camera, zones, and accuracy. Supports interactive previous/next navigation arrows and keyboard hotkeys (ArrowLeft / ArrowRight / Escape).
-- **Right-Click & Long-Press Context Menu**: Right-click (desktop) or long-press (mobile) any event thumbnail to instantly view details, permanently delete events from Frigate, or apply temporary false-positive masks.
+- **Right-Click & Long-Press Context Menu**: Right-click (desktop) or long-press (mobile) any event thumbnail to instantly view details, view the exact moment in continuous timeline, permanently delete events from Frigate, or apply temporary false-positive masks.
 - **Configurable Modal Metadata**: Fine-grained visibility controls to show/hide specific metadata elements (like date, duration, or camera name) in the details popup.
 
 ## Installation
@@ -119,6 +120,10 @@ show_modal_navigation: false
 # Optional: Layout overrides
 reverse: true
 offset: 1
+
+# Optional: Continuous footage timeline (Frigate 0.13 VOD)
+show_timeline: true
+timeline_default_window_hours: 1
 
 # Optional: Reset display daily at a specific time (24hr format)
 daily_clear_time: "04:00"
@@ -216,9 +221,10 @@ Right-clicking (desktop) or long-pressing (touch devices) any event thumbnail op
 
 * **Delete Event**: Permanently deletes the selected event, snapshot, and clip from the Frigate NVR backend directly from your dashboard and immediately removes the thumbnail from your gallery.
 * **View Details**: Opens the full interactive details modal popup with snapshot, video playback, AI description, detection score, and timestamp metrics.
+* **View in Timeline (Frigate 0.13 Continuous Footage)**: Instantly opens continuous VOD recording playback centered on the event's exact start time. Scrub forward and backward around the event, visually spot other detections on the color-coded marker track, adjust window spans (15m, 30m, 1h, 2h, 4h), and fast-forward at variable speeds (up to 16x).
 * **Temporary Masking (Optional)**: Dynamically available when the companion `frigate_temp_mask` custom component is installed. Automatically calculates a 10% expanded bounding box around false detections (such as a wheelbarrow, package, or parked vehicle), injects a temporary mask into Frigate, and automatically restarts Frigate's backend process so the mask takes effect immediately.
 * **Change Duration / Remove Mask**: Right-clicking an already masked event allows changing the mask duration on the fly (1h, 4h, 8h, 12h, 24h, 48h, 7d, or Custom hours) or removing the mask.
-* **Live Video Feed Right-Click (Temporary Mask Manager)**: Right-clicking (or long-pressing on touch devices) the live video feed opens the interactive Mask Manager modal directly, displaying all active masks with object snapshots/minimaps, countdown timers, polygon coordinates, per-mask duration adjustments, and individual removal controls.
+* **Live Video Feed Right-Click (Timeline & Mask Manager)**: Right-clicking (or long-pressing on touch devices) the live video feed opens the context menu to launch the **Continuous Footage Timeline** for that camera or open the interactive **Mask Manager** modal directly.
 
 <p align="center">
   <img src="images/snapshots/temp_mask_1.png" width="32%" alt="Temporary Mask Context Menu" />
