@@ -188,3 +188,29 @@ export async function deleteEvent(
 
     return false;
 }
+
+/**
+ * Get recordings for a camera via Home Assistant WebSocket
+ */
+export async function getRecordings(
+    hass: HomeAssistant,
+    instanceId: string,
+    camera: string,
+    after?: number,
+    before?: number
+): Promise<Array<{ start_time: number; end_time: number; id: string }>> {
+    try {
+        const response = await hass.callWS<string>({
+            type: 'frigate/recordings/get',
+            instance_id: instanceId,
+            camera: camera,
+            after: after ? Math.floor(after) : undefined,
+            before: before ? Math.floor(before) : undefined,
+        });
+        const parsed = typeof response === 'string' ? JSON.parse(response) : response;
+        return Array.isArray(parsed) ? parsed : [];
+    } catch (e) {
+        console.debug('Failed to fetch recordings via WS:', e);
+        return [];
+    }
+}
