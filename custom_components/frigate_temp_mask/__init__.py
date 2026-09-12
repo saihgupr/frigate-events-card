@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import asyncio
 import re
+import json
 try:
     import yaml
 except ImportError:
@@ -182,11 +183,265 @@ def _parse_mask_timestamp(mask_id: str) -> float | None:
     return None
 
 
+def _parse_frigate_version(version_str: str) -> tuple[int, ...]:
+    """Parse Frigate version string (e.g. '0.18-0', '0.14.1') into tuple of ints."""
+    if not version_str:
+        return (0, 0)
+    v = version_str.lstrip("v").strip()
+    parts = re.findall(r"\d+", v)
+    if not parts:
+        return (0, 0)
+    return tuple(int(p) for p in parts)
+
+
+def _box_to_polygon(box: list[float], width: int, height: int, padding: float = DEFAULT_PADDING, normalized: bool = True) -> str:
+    """Convert bounding box [x, y, w, h] to 8-point polygon coordinate string."""
+    box = _coerce_frigate_box(box)
+    if not box or width <= 0 or height <= 0:
+        return ""
+    x_val, y_val, box_w, box_h = box
+    if box_w <= 0 or box_h <= 0:
+        return ""
+
+    is_box_normalized = all(0.0 <= v <= 1.0 for v in box)
+    if is_box_normalized:
+        norm_x = x_val
+        norm_y = y_val
+        norm_w = box_w
+        norm_h = box_h
+    else:
+        norm_x = x_val / width
+        norm_y = y_val / height
+        norm_w = box_w / width
+        norm_h = box_h / height
+
+    pad_x = norm_w * padding
+    pad_y = norm_h * padding
+
+    x_min = max(0.0, min(1.0, norm_x - pad_x))
+    y_min = max(0.0, min(1.0, norm_y - pad_y))
+    x_max = max(0.0, min(1.0, norm_x + norm_w + pad_x))
+    y_max = max(0.0, min(1.0, norm_y + norm_h + pad_y))
+
+    if normalized:
+        x_min_r = round(x_min, 3)
+        y_min_r = round(y_min, 3)
+        x_max_r = round(x_max, 3)
+        y_max_r = round(y_max, 3)
+        return f"{x_min_r},{y_min_r},{x_max_r},{y_min_r},{x_max_r},{y_max_r},{x_min_r},{y_max_r}"
+    else:
+        px_min = max(0, int(round(x_min * width)))
+        py_min = max(0, int(round(y_min * height)))
+        px_max = min(width, int(round(x_max * width)))
+        py_max = min(height, int(round(y_max * height)))
+        return f"{px_min},{py_min},{px_max},{py_min},{px_max},{py_max},{px_min},{py_max}"
+
+
+
+def _normalize_raw_config(text: str) -> str:
+    """Normalize raw config text.
+
+    Frigate 0.18+ (FastAPI) returns /api/config/raw as a JSON-encoded string literal
+    containing escaped newlines (e.g. "mqtt:\\n  enabled: true...").
+    Earlier Frigate versions return plain text. This helper unescapes JSON strings when present.
+    """
+    if not text:
+        return ""
+    text_stripped = text.strip()
+    if (text_stripped.startswith('"') and text_stripped.endswith('"')) or (text_stripped.startswith("'") and text_stripped.endswith("'")):
+        try:
+            return json.loads(text_stripped)
+        except Exception:
+            pass
+    return text
+
+
+def _detect_config_version_and_format(config_text: str, camera: str = "", version_str: str = "") -> tuple[tuple[int, ...], bool]:
+    """Detect Frigate version and whether to use dictionary-style masks.
+    
+    Returns (version_tuple, is_dict).
+    """
+    config_text = _normalize_raw_config(config_text)
+    if not version_str:
+        m = re.search(r"^version:\s*['\"]?([0-9a-zA-Z._-]+)['\"]?", config_text, re.MULTILINE)
+        if m:
+            version_str = m.group(1).strip()
+
+    version_tuple = _parse_frigate_version(version_str) if version_str else (0, 18, 0)
+
+    # Frigate 0.18+ always uses dict format
+    if version_tuple >= (0, 18):
+        return version_tuple, True
+
+    # Check if target camera or any camera already uses dictionary-style masks
+    # (has lines with "coordinates:" under "mask:")
+    lines = config_text.splitlines()
+    in_camera = not camera
+    in_mask = False
+    mask_indent = -1
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        if stripped.endswith(":") and not stripped.startswith("-"):
+            key = stripped[:-1].strip()
+            if key == "cameras":
+                continue
+            if camera and key == camera and indent == 2:
+                in_camera = True
+                continue
+            elif in_camera and camera and indent <= 2 and key != camera:
+                in_camera = False
+                continue
+            if in_camera and key == "mask":
+                in_mask = True
+                mask_indent = indent
+                continue
+            elif in_mask and indent <= mask_indent:
+                in_mask = False
+
+        if in_camera and in_mask:
+            if stripped.startswith("coordinates:"):
+                return version_tuple, True
+            if stripped.startswith("-"):
+                return version_tuple, False
+
+    # Default based on version: 0.18+ dict, earlier list
+    is_dict = version_tuple >= (0, 18)
+    return version_tuple, is_dict
+
+
+def _find_camera_block_bounds(lines: list[str], camera: str) -> tuple[int, int, int]:
+    """Find start, end line index and indent of a specific camera under cameras:
+    
+    Returns (start_idx, end_idx, camera_indent).
+    If camera not found, returns (-1, -1, -1).
+    """
+    in_cameras = False
+    cameras_indent = -1
+    camera_start = -1
+    camera_indent = -1
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+
+        if stripped == "cameras:" or stripped.startswith("cameras:"):
+            in_cameras = True
+            cameras_indent = indent
+            continue
+
+        if in_cameras:
+            if indent <= cameras_indent:
+                break
+            if camera_start == -1:
+                colon_idx = stripped.find(":")
+                if colon_idx != -1:
+                    key = stripped[:colon_idx].strip()
+                    if key == camera:
+                        camera_start = i
+                        camera_indent = indent
+                        continue
+            else:
+                if indent <= camera_indent:
+                    return camera_start, i, camera_indent
+
+    if camera_start != -1:
+        return camera_start, len(lines), camera_indent
+
+    return -1, -1, -1
+
+
+def _clean_config_masks(config_text: str, mask_id_to_remove: str = "") -> str:
+    """Remove temporary mask entries (both dictionary blocks and list items)."""
+    config_text = _normalize_raw_config(config_text)
+    target_tag = f"TEMP_MASK_{mask_id_to_remove}" if mask_id_to_remove else "TEMP_MASK_"
+    target_key = f"temp_mask_{mask_id_to_remove}" if mask_id_to_remove else "temp_mask_"
+
+    lines = config_text.splitlines()
+    filtered: list[str] = []
+    i = 0
+    n = len(lines)
+
+    while i < n:
+        line = lines[i]
+        stripped = line.strip()
+        indent = len(line) - len(line.lstrip(" "))
+
+        is_match = False
+        if mask_id_to_remove:
+            if target_tag in line or (stripped.startswith(f"{target_key}:") or stripped.startswith(f"{target_key} ")):
+                is_match = True
+        else:
+            if "TEMP_MASK_" in line or stripped.startswith("temp_mask_"):
+                is_match = True
+
+        if is_match:
+            colon_idx = stripped.find(":")
+            if colon_idx != -1 and not stripped.startswith("-"):
+                i += 1
+                while i < n:
+                    next_line = lines[i]
+                    if not next_line.strip():
+                        j = i + 1
+                        still_child = False
+                        while j < n:
+                            if lines[j].strip():
+                                if len(lines[j]) - len(lines[j].lstrip(" ")) > indent:
+                                    still_child = True
+                                break
+                            j += 1
+                        if still_child:
+                            i += 1
+                            continue
+                        else:
+                            break
+                    next_indent = len(next_line) - len(next_line.lstrip(" "))
+                    if next_indent > indent:
+                        i += 1
+                    else:
+                        break
+                continue
+            else:
+                i += 1
+                continue
+
+        filtered.append(line)
+        i += 1
+
+    final_lines: list[str] = []
+    for idx, l in enumerate(filtered):
+        stripped = l.strip()
+        if stripped == "mask:":
+            indent = len(l) - len(l.lstrip(" "))
+            has_child = False
+            for next_l in filtered[idx + 1:]:
+                if not next_l.strip() or next_l.strip().startswith("#"):
+                    continue
+                next_indent = len(next_l) - len(next_l.lstrip(" "))
+                if next_indent > indent:
+                    has_child = True
+                break
+            if not has_child:
+                continue
+        final_lines.append(l)
+
+    return "\n".join(final_lines) + "\n"
+
+
 def _parse_temp_masks_from_config(config_text: str) -> list[dict[str, str]]:
-    """Scan Frigate raw YAML configuration for # TEMP_MASK_<id> entries."""
+    """Scan Frigate raw YAML configuration for temp mask entries (dict and list formats)."""
+    config_text = _normalize_raw_config(config_text)
     masks: list[dict[str, str]] = []
     lines = config_text.splitlines()
     stack: list[dict[str, any]] = []
+
+    curr_dict_mask_id = ""
+    curr_dict_indent = -1
+    curr_coords_indent = -1
 
     for line in lines:
         stripped = line.strip()
@@ -198,6 +453,59 @@ def _parse_temp_masks_from_config(config_text: str) -> list[dict[str, str]]:
         while stack and stack[-1]["indent"] >= indent:
             stack.pop()
 
+        if curr_dict_mask_id and indent <= curr_dict_indent:
+            curr_dict_mask_id = ""
+            curr_dict_indent = -1
+            curr_coords_indent = -1
+
+        if curr_dict_mask_id:
+            if stripped.startswith("coordinates:"):
+                coords = stripped.split(":", 1)[1].strip().strip("\"'")
+                if coords:
+                    camera = ""
+                    label = ""
+                    for item in stack:
+                        ctx = item.get("context")
+                        if ctx == "camera":
+                            camera = item["key"]
+                        elif ctx == "filter_label":
+                            label = item["key"]
+
+                    masks.append({
+                        "mask_id": curr_dict_mask_id,
+                        "polygon": coords,
+                        "camera": camera,
+                        "label": label,
+                    })
+                    curr_dict_mask_id = ""
+                    curr_dict_indent = -1
+                    curr_coords_indent = -1
+                    continue
+                else:
+                    curr_coords_indent = indent
+                    continue
+            elif curr_coords_indent != -1 and indent > curr_coords_indent:
+                coords = stripped.strip("\"'")
+                camera = ""
+                label = ""
+                for item in stack:
+                    ctx = item.get("context")
+                    if ctx == "camera":
+                        camera = item["key"]
+                    elif ctx == "filter_label":
+                        label = item["key"]
+
+                masks.append({
+                    "mask_id": curr_dict_mask_id,
+                    "polygon": coords,
+                    "camera": camera,
+                    "label": label,
+                })
+                curr_dict_mask_id = ""
+                curr_dict_indent = -1
+                curr_coords_indent = -1
+                continue
+
         if stripped.startswith("-") and "TEMP_MASK_" in stripped:
             m = re.search(r"-\s*([0-9.,\s]+?)\s*#\s*TEMP_MASK_(\S+)", stripped)
             if m:
@@ -206,7 +514,6 @@ def _parse_temp_masks_from_config(config_text: str) -> list[dict[str, str]]:
 
                 camera = ""
                 label = ""
-
                 for item in stack:
                     ctx = item.get("context")
                     if ctx == "camera":
@@ -241,6 +548,16 @@ def _parse_temp_masks_from_config(config_text: str) -> list[dict[str, str]]:
             elif key == "mask":
                 context = "mask"
 
+            if parent_context == "mask":
+                if key.startswith("temp_mask_"):
+                    curr_dict_mask_id = key.removeprefix("temp_mask_").split("#")[0].strip()
+                    curr_dict_indent = indent
+                elif "TEMP_MASK_" in stripped:
+                    m = re.search(r"TEMP_MASK_(\S+)", stripped)
+                    if m:
+                        curr_dict_mask_id = m.group(1).strip().strip(":")
+                        curr_dict_indent = indent
+
             stack.append({
                 "indent": indent,
                 "key": key,
@@ -248,6 +565,295 @@ def _parse_temp_masks_from_config(config_text: str) -> list[dict[str, str]]:
             })
 
     return masks
+
+
+def _inject_temp_mask(config_text: str, camera: str, polygon: str, mask_id: str, label: str = "", is_dict: bool = True) -> str:
+    """Inject a temporary mask into the Frigate config text cleanly scoped to camera."""
+    tag = f"TEMP_MASK_{mask_id}"
+    cleaned = _clean_config_masks(config_text, mask_id)
+    lines = cleaned.splitlines()
+
+    obj_label = label.lower().strip() if label else ""
+    if obj_label in ["people", "human", "persons"]:
+        obj_label = "person"
+
+    cam_start, cam_end, cam_indent = _find_camera_block_bounds(lines, camera)
+    if cam_start == -1:
+        cameras_idx = -1
+        for i, l in enumerate(lines):
+            if l.strip() == "cameras:" or l.strip().startswith("cameras:"):
+                cameras_idx = i
+                break
+        if cameras_idx != -1:
+            c_indent = "  "
+            new_lines = [
+                f"{c_indent}{camera}:",
+                f"{c_indent}  objects:",
+                f"{c_indent}    filters:",
+                f"{c_indent}      {obj_label or 'car'}:",
+                f"{c_indent}        mask:",
+            ]
+            if is_dict:
+                friendly = f"Temporary Mask ({obj_label})" if obj_label else "Temporary Mask"
+                new_lines.extend([
+                    f"{c_indent}          temp_mask_{mask_id}: # {tag}",
+                    f"{c_indent}            friendly_name: \"{friendly}\"",
+                    f"{c_indent}            enabled: true",
+                    f"{c_indent}            coordinates: \"{polygon}\"",
+                ])
+            else:
+                new_lines.append(f"{c_indent}          - {polygon} # {tag}")
+            lines = lines[:cameras_idx + 1] + new_lines + lines[cameras_idx + 1:]
+            return "\n".join(lines) + "\n"
+        else:
+            lines.append("objects:")
+            lines.append("  mask:")
+            if is_dict:
+                lines.append(f"    temp_mask_{mask_id}: # {tag}")
+                lines.append("      friendly_name: \"Temporary Mask\"")
+                lines.append("      enabled: true")
+                lines.append(f"      coordinates: \"{polygon}\"")
+            else:
+                lines.append(f"    - {polygon} # {tag}")
+            return "\n".join(lines) + "\n"
+
+    cam_lines = lines[cam_start:cam_end]
+    cam_ind_str = " " * cam_indent
+
+    objects_rel_idx = -1
+    objects_indent = -1
+    for i, l in enumerate(cam_lines):
+        if i == 0:
+            continue
+        stripped = l.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        ind = len(l) - len(l.lstrip(" "))
+        if ind == cam_indent + 2:
+            colon_idx = stripped.find(":")
+            if colon_idx != -1 and stripped[:colon_idx].strip() == "objects":
+                objects_rel_idx = i
+                objects_indent = ind
+                break
+
+    if objects_rel_idx == -1:
+        new_cam_lines = [
+            f"{cam_ind_str}  objects:",
+            f"{cam_ind_str}    filters:",
+            f"{cam_ind_str}      {obj_label or 'car'}:",
+            f"{cam_ind_str}        mask:",
+        ]
+        m_indent = cam_indent + 10
+        if is_dict:
+            friendly = f"Temporary Mask ({obj_label})" if obj_label else "Temporary Mask"
+            new_cam_lines.extend([
+                f"{' ' * m_indent}temp_mask_{mask_id}: # {tag}",
+                f"{' ' * (m_indent + 2)}friendly_name: \"{friendly}\"",
+                f"{' ' * (m_indent + 2)}enabled: true",
+                f"{' ' * (m_indent + 2)}coordinates: \"{polygon}\"",
+            ])
+        else:
+            new_cam_lines.append(f"{' ' * m_indent}- {polygon} # {tag}")
+
+        lines = lines[:cam_start + 1] + new_cam_lines + lines[cam_start + 1:]
+        return "\n".join(lines) + "\n"
+
+    obj_abs_start = cam_start + objects_rel_idx
+    obj_abs_end = cam_end
+    for i in range(obj_abs_start + 1, cam_end):
+        l = lines[i]
+        stripped = l.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        ind = len(l) - len(l.lstrip(" "))
+        if ind <= objects_indent:
+            obj_abs_end = i
+            break
+
+    filters_abs_idx = -1
+    filters_indent = -1
+    obj_mask_abs_idx = -1
+    obj_mask_indent = -1
+
+    for i in range(obj_abs_start + 1, obj_abs_end):
+        l = lines[i]
+        stripped = l.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        ind = len(l) - len(l.lstrip(" "))
+        if ind == objects_indent + 2:
+            colon_idx = stripped.find(":")
+            if colon_idx != -1:
+                key = stripped[:colon_idx].strip()
+                if key == "filters":
+                    filters_abs_idx = i
+                    filters_indent = ind
+                elif key == "mask":
+                    obj_mask_abs_idx = i
+                    obj_mask_indent = ind
+
+    target_label = obj_label
+    if target_label and filters_abs_idx != -1:
+        filt_end = obj_abs_end
+        for i in range(filters_abs_idx + 1, obj_abs_end):
+            l = lines[i]
+            stripped = l.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            ind = len(l) - len(l.lstrip(" "))
+            if ind <= filters_indent:
+                filt_end = i
+                break
+
+        label_abs_idx = -1
+        label_indent = -1
+        for i in range(filters_abs_idx + 1, filt_end):
+            l = lines[i]
+            stripped = l.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            ind = len(l) - len(l.lstrip(" "))
+            if ind == filters_indent + 2:
+                colon_idx = stripped.find(":")
+                if colon_idx != -1:
+                    key = stripped[:colon_idx].strip()
+                    if key == target_label:
+                        label_abs_idx = i
+                        label_indent = ind
+                        break
+
+        if label_abs_idx != -1:
+            label_line = lines[label_abs_idx]
+            stripped_label = label_line.strip()
+            label_ind_str = " " * label_indent
+
+            label_end = filt_end
+            for i in range(label_abs_idx + 1, filt_end):
+                l = lines[i]
+                stripped = l.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                ind = len(l) - len(l.lstrip(" "))
+                if ind <= label_indent:
+                    label_end = i
+                    break
+
+            label_mask_idx = -1
+            label_mask_indent = -1
+            for i in range(label_abs_idx + 1, label_end):
+                l = lines[i]
+                stripped = l.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                ind = len(l) - len(l.lstrip(" "))
+                if ind == label_indent + 2 and stripped.startswith("mask:"):
+                    label_mask_idx = i
+                    label_mask_indent = ind
+                    break
+
+            if label_mask_idx != -1:
+                insert_idx = label_mask_idx + 1
+                m_indent = label_mask_indent + 2
+                if is_dict:
+                    friendly = f"Temporary Mask ({target_label})"
+                    to_insert = [
+                        f"{' ' * m_indent}temp_mask_{mask_id}: # {tag}",
+                        f"{' ' * (m_indent + 2)}friendly_name: \"{friendly}\"",
+                        f"{' ' * (m_indent + 2)}enabled: true",
+                        f"{' ' * (m_indent + 2)}coordinates: \"{polygon}\"",
+                    ]
+                else:
+                    to_insert = [f"{' ' * m_indent}- {polygon} # {tag}"]
+                lines = lines[:insert_idx] + to_insert + lines[insert_idx:]
+                return "\n".join(lines) + "\n"
+            else:
+                if "{}" in stripped_label:
+                    lines[label_abs_idx] = f"{label_ind_str}{target_label}:"
+
+                m_indent = label_indent + 2
+                to_insert = [f"{' ' * m_indent}mask:"]
+                if is_dict:
+                    friendly = f"Temporary Mask ({target_label})"
+                    to_insert.extend([
+                        f"{' ' * (m_indent + 2)}temp_mask_{mask_id}: # {tag}",
+                        f"{' ' * (m_indent + 4)}friendly_name: \"{friendly}\"",
+                        f"{' ' * (m_indent + 4)}enabled: true",
+                        f"{' ' * (m_indent + 4)}coordinates: \"{polygon}\"",
+                    ])
+                else:
+                    to_insert.append(f"{' ' * (m_indent + 2)}- {polygon} # {tag}")
+
+                lines = lines[:label_abs_idx + 1] + to_insert + lines[label_abs_idx + 1:]
+                return "\n".join(lines) + "\n"
+        else:
+            f_indent = filters_indent + 2
+            to_insert = [
+                f"{' ' * f_indent}{target_label}:",
+                f"{' ' * (f_indent + 2)}mask:",
+            ]
+            if is_dict:
+                friendly = f"Temporary Mask ({target_label})"
+                to_insert.extend([
+                    f"{' ' * (f_indent + 4)}temp_mask_{mask_id}: # {tag}",
+                    f"{' ' * (f_indent + 6)}friendly_name: \"{friendly}\"",
+                    f"{' ' * (f_indent + 6)}enabled: true",
+                    f"{' ' * (f_indent + 6)}coordinates: \"{polygon}\"",
+                ])
+            else:
+                to_insert.append(f"{' ' * (f_indent + 4)}- {polygon} # {tag}")
+            lines = lines[:filters_abs_idx + 1] + to_insert + lines[filters_abs_idx + 1:]
+            return "\n".join(lines) + "\n"
+
+    elif target_label and filters_abs_idx == -1:
+        o_indent = objects_indent + 2
+        to_insert = [
+            f"{' ' * o_indent}filters:",
+            f"{' ' * (o_indent + 2)}{target_label}:",
+            f"{' ' * (o_indent + 4)}mask:",
+        ]
+        if is_dict:
+            friendly = f"Temporary Mask ({target_label})"
+            to_insert.extend([
+                f"{' ' * (o_indent + 6)}temp_mask_{mask_id}: # {tag}",
+                f"{' ' * (o_indent + 8)}friendly_name: \"{friendly}\"",
+                f"{' ' * (o_indent + 8)}enabled: true",
+                f"{' ' * (o_indent + 8)}coordinates: \"{polygon}\"",
+            ])
+        else:
+            to_insert.append(f"{' ' * (o_indent + 6)}- {polygon} # {tag}")
+        lines = lines[:obj_abs_start + 1] + to_insert + lines[obj_abs_start + 1:]
+        return "\n".join(lines) + "\n"
+
+    else:
+        if obj_mask_abs_idx != -1:
+            m_indent = obj_mask_indent + 2
+            if is_dict:
+                friendly = "Temporary Mask"
+                to_insert = [
+                    f"{' ' * m_indent}temp_mask_{mask_id}: # {tag}",
+                    f"{' ' * (m_indent + 2)}friendly_name: \"{friendly}\"",
+                    f"{' ' * (m_indent + 2)}enabled: true",
+                    f"{' ' * (m_indent + 2)}coordinates: \"{polygon}\"",
+                ]
+            else:
+                to_insert = [f"{' ' * m_indent}- {polygon} # {tag}"]
+            lines = lines[:obj_mask_abs_idx + 1] + to_insert + lines[obj_mask_abs_idx + 1:]
+            return "\n".join(lines) + "\n"
+        else:
+            o_indent = objects_indent + 2
+            to_insert = [f"{' ' * o_indent}mask:"]
+            if is_dict:
+                friendly = "Temporary Mask"
+                to_insert.extend([
+                    f"{' ' * (o_indent + 2)}temp_mask_{mask_id}: # {tag}",
+                    f"{' ' * (o_indent + 4)}friendly_name: \"{friendly}\"",
+                    f"{' ' * (o_indent + 4)}enabled: true",
+                    f"{' ' * (o_indent + 4)}coordinates: \"{polygon}\"",
+                ])
+            else:
+                to_insert.append(f"{' ' * (o_indent + 2)}- {polygon} # {tag}")
+            lines = lines[:obj_abs_start + 1] + to_insert + lines[obj_abs_start + 1:]
+            return "\n".join(lines) + "\n"
 
 
 
@@ -271,39 +877,6 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                 if url:
                     return url.rstrip("/")
         return DEFAULT_FRIGATE_URL
-
-    def _box_to_polygon(box: list[float], width: int, height: int, padding: float = DEFAULT_PADDING) -> str:
-        box = _coerce_frigate_box(box)
-        if not box or width <= 0 or height <= 0:
-            return ""
-        # Frigate's event API uses [x, y, width, height]. The last two values
-        # are dimensions, not bottom-right coordinates.
-        x_val, y_val, box_width_val, box_height_val = box
-        if box_width_val <= 0 or box_height_val <= 0:
-            return ""
-
-        # Detect if values are normalized (0.0 to 1.0) or already in pixels
-        is_normalized = all(0.0 <= v <= 1.0 for v in box)
-        scale_x = width if is_normalized else 1.0
-        scale_y = height if is_normalized else 1.0
-
-        x1_px = x_val * scale_x
-        y1_px = y_val * scale_y
-        x2_px = (x_val + box_width_val) * scale_x
-        y2_px = (y_val + box_height_val) * scale_y
-
-        w = max(1.0, x2_px - x1_px)
-        h = max(1.0, y2_px - y1_px)
-        pad_x = w * padding
-        pad_y_top = h * padding
-        pad_y_bottom = h * padding
-
-        x_min = max(0, int(round(min(x1_px, x2_px) - pad_x)))
-        y_min = max(0, int(round(min(y1_px, y2_px) - pad_y_top)))
-        x_max = min(width, int(round(x2_px + pad_x)))
-        y_max = min(height, int(round(y2_px + pad_y_bottom)))
-
-        return f"{x_min},{y_min},{x_max},{y_min},{x_max},{y_max},{x_min},{y_max}"
 
     def _update_state():
         active = domain_data.get("active_masks", {})
@@ -401,7 +974,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         try:
             async with session.get(f"{base_url}/api/config/raw", timeout=10) as cfg_resp:
                 if cfg_resp.status == 200:
-                    raw_config_text = await cfg_resp.text()
+                    raw_config_text = _normalize_raw_config(await cfg_resp.text())
                     discovered_masks = _parse_temp_masks_from_config(raw_config_text)
                     discovered_by_id = {m["mask_id"]: m for m in discovered_masks}
                     now_dt = datetime.now(timezone.utc)
@@ -609,6 +1182,28 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
             _LOGGER.warning("No camera specified or inferred from event; falling back to default camera '%s'", camera)
 
         width, height = 1920, 1080
+
+        # Fetch version (optional) and raw config
+        version_str = ""
+        try:
+            async with session.get(f"{base_url}/api/version", timeout=5) as resp:
+                if resp.status == 200:
+                    version_str = (await resp.text()).strip().strip("\"'")
+        except Exception:
+            pass
+
+        raw_config = ""
+        try:
+            async with session.get(f"{base_url}/api/config/raw", timeout=10) as resp:
+                if resp.status == 200:
+                    raw_config = _normalize_raw_config(await resp.text())
+        except Exception as e:
+            _LOGGER.error("Failed to read Frigate config: %s", e)
+            return
+
+        version_tuple, is_dict = _detect_config_version_and_format(raw_config, camera, version_str)
+        use_normalized = version_tuple >= (0, 14) or is_dict
+
         if not poly_str:
             # Fetch camera detect stream resolution
             try:
@@ -621,98 +1216,20 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
             except Exception as e:
                 _LOGGER.warning("Using fallback resolution 1920x1080 for camera %s: %s", camera, e)
 
-            poly_str = _box_to_polygon(box_coords, width, height, padding)
+            poly_str = _box_to_polygon(box_coords, width, height, padding, normalized=use_normalized)
             if not poly_str:
                 _LOGGER.error("Could not create a temporary mask from invalid box data: %s", box_coords)
                 return
+
         tag = f"# TEMP_MASK_{mask_id}"
         if not label_val and event_data and isinstance(event_data, dict):
             label_val = event_data.get("label", "")
 
-        # Fetch raw config
-        raw_config = ""
-        try:
-            async with session.get(f"{base_url}/api/config/raw", timeout=10) as resp:
-                if resp.status == 200:
-                    raw_config = await resp.text()
-        except Exception as e:
-            _LOGGER.error("Failed to read Frigate config: %s", e)
-            return
-
-        def _inject_temp_mask(config_text: str, polygon: str, mask_tag: str, obj_label: str = "") -> str:
-            lines = [l for l in config_text.splitlines() if mask_tag not in l]
-            cleaned = "\n".join(lines) + "\n"
-            obj_label = obj_label.lower().strip() if obj_label else ""
-            if obj_label in ["people", "person", "human", "persons"]:
-                obj_label = "person"
-
-            if obj_label:
-                f_match = re.search(r"^([ ]*)filters:\s*$", cleaned, re.MULTILINE)
-                if f_match:
-                    f_indent = f_match.group(1)
-                    label_pattern = rf"^{f_indent}  {re.escape(obj_label)}:\s*(?:{{}}\s*)?$"
-                    l_match = re.search(label_pattern, cleaned, re.MULTILINE)
-                    if l_match:
-                        matched_line = l_match.group(0)
-                        if "{}" in matched_line:
-                            label_indent = f_indent + "  "
-                            mask_indent = label_indent + "  "
-                            item_indent = mask_indent
-                            replacement = f"{label_indent}{obj_label}:\n{mask_indent}mask:\n{item_indent}- {polygon} {mask_tag}"
-                            return cleaned[:l_match.start()] + replacement + cleaned[l_match.end():]
-
-                        label_pos = l_match.end()
-                        rest = cleaned[label_pos:]
-                        mask_match = re.search(rf"^([ ]+)mask:\s*$", rest, re.MULTILINE)
-                        next_peer = re.search(rf"^{f_indent}  [a-zA-Z0-9_-]+:\s*$", rest, re.MULTILINE)
-                        
-                        if mask_match and (not next_peer or mask_match.start() < next_peer.start()):
-                            mask_indent = mask_match.group(1)
-                            mask_line_end = label_pos + mask_match.end()
-                            after_mask = cleaned[mask_line_end:]
-                            
-                            item_match = re.search(r"^\n?([ ]*)- ", after_mask)
-                            item_indent = item_match.group(1) if item_match else mask_indent
-                            
-                            insertion = f"\n{item_indent}- {polygon} {mask_tag}"
-                            return cleaned[:mask_line_end] + insertion + cleaned[mask_line_end:]
-                        else:
-                            label_indent = f_indent + "  "
-                            mask_indent = label_indent + "  "
-                            item_indent = mask_indent
-                            insertion = f"\n{mask_indent}mask:\n{item_indent}- {polygon} {mask_tag}"
-                            return cleaned[:label_pos] + insertion + cleaned[label_pos:]
-                    else:
-                        f_pos = f_match.end()
-                        label_indent = f_indent + "  "
-                        mask_indent = label_indent + "  "
-                        item_indent = mask_indent
-                        insertion = f"\n{label_indent}{obj_label}:\n{mask_indent}mask:\n{item_indent}- {polygon} {mask_tag}"
-                        return cleaned[:f_pos] + insertion + cleaned[f_pos:]
-
-            obj_match = re.search(r"^([ ]*)objects:\s*$", cleaned, re.MULTILINE)
-            if obj_match:
-                obj_indent = obj_match.group(1)
-                rest = cleaned[obj_match.end():]
-                mask_match = re.search(rf"^([ ]+)mask:\s*$", rest, re.MULTILINE)
-                if mask_match:
-                    mask_line_end = obj_match.end() + mask_match.end()
-                    after_mask = cleaned[mask_line_end:]
-                    item_match = re.search(r"^\n?([ ]*)- ", after_mask)
-                    item_indent = item_match.group(1) if item_match else mask_match.group(1)
-                    insertion = f"\n{item_indent}- {polygon} {mask_tag}"
-                    return cleaned[:mask_line_end] + insertion + cleaned[mask_line_end:]
-                else:
-                    insertion = f"\n{obj_indent}  mask:\n{obj_indent}  - {polygon} {mask_tag}"
-                    return cleaned[:obj_match.end()] + insertion + cleaned[obj_match.end():]
-
-            return cleaned + f"\nobjects:\n  mask:\n  - {polygon} {mask_tag}\n"
-
-        updated_config = _inject_temp_mask(raw_config, poly_str, tag, label_val)
+        updated_config = _inject_temp_mask(raw_config, camera, poly_str, mask_id, label_val, is_dict=is_dict)
 
         # Check if the mask is already active and config is unchanged (duration-only update)
         existing_mask = domain_data["active_masks"].get(mask_id)
-        tag_already_in_config = tag in raw_config
+        tag_already_in_config = tag in raw_config or f"temp_mask_{mask_id}" in raw_config
         is_same_geometry = existing_mask and existing_mask.get("polygon") == poly_str
         is_config_identical = updated_config.strip() == raw_config.strip()
         is_pending_restart = mask_id in domain_data["pending_restart_masks"]
@@ -728,19 +1245,17 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         else:
             # Save and restart Frigate process
             try:
+                # Frigate 0.18 requires ?save_option=query param; 'restart' saves and triggers restart
                 async with session.post(
-                    f"{base_url}/api/config/save",
+                    f"{base_url}/api/config/save?save_option=restart",
                     data=updated_config.encode("utf-8"),
                     headers={"Content-Type": "text/plain"},
                     timeout=15
                 ) as resp:
                     resp.raise_for_status()
-                
-                # Restart backend to load into memory
-                async with session.post(f"{base_url}/api/restart", timeout=10) as restart_resp:
-                    _LOGGER.info("Frigate restart triggered: %s", restart_resp.status)
-                    # Restart applied all pending changes
-                    domain_data["pending_restart_masks"].clear()
+
+                # Restart applied all pending changes
+                domain_data["pending_restart_masks"].clear()
             except Exception as e:
                 _LOGGER.error("Failed to save Frigate config: %s", e)
                 return
@@ -800,55 +1315,24 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         session = async_get_clientsession(hass)
         base_url = _get_frigate_base_url()
         tag = f"TEMP_MASK_{mask_id}"
-
-        def _clean_config_masks(config_text: str, tag_to_remove: str = "") -> str:
-            lines = config_text.splitlines()
-            filtered = []
-            for l in lines:
-                if tag_to_remove:
-                    if tag_to_remove in l:
-                        continue
-                else:
-                    if "TEMP_MASK_" in l:
-                        continue
-                filtered.append(l)
-
-            # Clean up empty/orphaned "mask:" lines with no list items under them
-            final_lines = []
-            for i, l in enumerate(filtered):
-                stripped = l.strip()
-                if stripped == "mask:":
-                    indent = len(l) - len(l.lstrip(" "))
-                    has_child = False
-                    for next_l in filtered[i + 1:]:
-                        if not next_l.strip() or next_l.strip().startswith("#"):
-                            continue
-                        next_indent = len(next_l) - len(next_l.lstrip(" "))
-                        if next_indent > indent and next_l.strip().startswith("-"):
-                            has_child = True
-                        break
-                    if not has_child:
-                        continue
-                final_lines.append(l)
-
-            return "\n".join(final_lines) + "\n"
+        dict_key = f"temp_mask_{mask_id}"
 
         try:
             async with session.get(f"{base_url}/api/config/raw", timeout=10) as resp:
                 if resp.status == 200:
-                    raw_config = await resp.text()
+                    raw_config = _normalize_raw_config(await resp.text())
                 else:
                     _LOGGER.error("Failed to fetch Frigate raw config during remove_mask (status: %s)", resp.status)
                     return
 
-            if tag not in raw_config:
+            if tag not in raw_config and dict_key not in raw_config:
                 return
 
-            updated_config = _clean_config_masks(raw_config, tag)
+            updated_config = _clean_config_masks(raw_config, mask_id)
 
             # Save WITHOUT restart to avoid interrupting live video/detections
             async with session.post(
-                f"{base_url}/api/config/save",
+                f"{base_url}/api/config/save?save_option=none",
                 data=updated_config.encode("utf-8"),
                 headers={"Content-Type": "text/plain"},
                 timeout=15
@@ -879,17 +1363,17 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         try:
             async with session.get(f"{base_url}/api/config/raw", timeout=10) as resp:
                 if resp.status == 200:
-                    raw_config = await resp.text()
+                    raw_config = _normalize_raw_config(await resp.text())
                 else:
                     return
 
-            if "TEMP_MASK_" not in raw_config:
+            if "TEMP_MASK_" not in raw_config and "temp_mask_" not in raw_config:
                 return
 
             updated_config = _clean_config_masks(raw_config)
 
             async with session.post(
-                f"{base_url}/api/config/save",
+                f"{base_url}/api/config/save?save_option=none",
                 data=updated_config.encode("utf-8"),
                 headers={"Content-Type": "text/plain"},
                 timeout=15
