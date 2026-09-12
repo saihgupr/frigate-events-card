@@ -324,6 +324,31 @@ version: 0.18-0
         # Clean should remove it using the raw_id
         cleaned = _clean_config_masks(injected, raw_id)
         self.assertNotIn("1789218715", cleaned)
+        # Ensure person: is not left childless without {}
+        self.assertIn("person: {}", cleaned)
+        self.assertNotIn("person:\n        car:", cleaned)
+
+    def test_clean_mask_leaves_valid_yaml_and_no_childless_keys(self):
+        raw_id = "1789218715.393093"
+        poly = "0.688,0.737,0.716,0.737,0.716,0.813,0.688,0.813"
+        v, is_dict = _detect_config_version_and_format(self.config_v18, "wyze_camera")
+        injected = _inject_temp_mask(self.config_v18, "wyze_camera", poly, raw_id, label="person", is_dict=is_dict)
+        cleaned = _clean_config_masks(injected, raw_id)
+        
+        # Verify no lines end with ':' without children (which would parse as null/None in YAML)
+        lines = cleaned.splitlines()
+        for i, l in enumerate(lines):
+            stripped = l.strip()
+            indent = len(l) - len(l.lstrip(" "))
+            if indent >= 4 and stripped.endswith(":") and not stripped.startswith("-"):
+                has_child = False
+                for next_l in lines[i + 1:]:
+                    if not next_l.strip() or next_l.strip().startswith("#"):
+                        continue
+                    if len(next_l) - len(next_l.lstrip(" ")) > indent:
+                        has_child = True
+                    break
+                self.assertTrue(has_child, f"Dangling childless key found: '{stripped}' at line {i+1}")
 
 
 if __name__ == "__main__":

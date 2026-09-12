@@ -360,7 +360,9 @@ def _clean_config_masks(config_text: str, mask_id_to_remove: str = "") -> str:
     config_text = _normalize_raw_config(config_text)
     target_tag = f"TEMP_MASK_{mask_id_to_remove}" if mask_id_to_remove else "TEMP_MASK_"
     target_key = f"temp_mask_{mask_id_to_remove}" if mask_id_to_remove else "temp_mask_"
-    safe_key = f"temp_mask_{re.sub(r'[^a-zA-Z0-9_]', '_', mask_id_to_remove)}" if mask_id_to_remove else "temp_mask_"
+    subbed = re.sub(r'[^a-zA-Z0-9_]', '_', mask_id_to_remove) if mask_id_to_remove else ""
+    safe_key = f"temp_mask_{subbed}" if mask_id_to_remove else "temp_mask_"
+    safe_tag = f"TEMP_MASK_{subbed}" if mask_id_to_remove else "TEMP_MASK_"
 
     lines = config_text.splitlines()
     filtered: list[str] = []
@@ -374,7 +376,7 @@ def _clean_config_masks(config_text: str, mask_id_to_remove: str = "") -> str:
 
         is_match = False
         if mask_id_to_remove:
-            if target_tag in line or (
+            if target_tag in line or safe_tag in line or (
                 stripped.startswith(f"{target_key}:")
                 or stripped.startswith(f"{target_key} ")
                 or stripped.startswith(f"{safe_key}:")
@@ -418,24 +420,39 @@ def _clean_config_masks(config_text: str, mask_id_to_remove: str = "") -> str:
         filtered.append(line)
         i += 1
 
-    final_lines: list[str] = []
-    for idx, l in enumerate(filtered):
-        stripped = l.strip()
-        if stripped == "mask:":
+    # Iteratively handle childless keys.
+    # Structural keys (mask:, filters:, objects:) that become childless are pruned.
+    # Filter labels (e.g. "person:", "car:") that have no children are converted to "{}"
+    # so they remain valid FilterConfig dictionaries in YAML.
+    pass_lines = filtered
+    changed = True
+    while changed:
+        changed = False
+        next_pass: list[str] = []
+        for idx, l in enumerate(pass_lines):
+            stripped = l.strip()
             indent = len(l) - len(l.lstrip(" "))
-            has_child = False
-            for next_l in filtered[idx + 1:]:
-                if not next_l.strip() or next_l.strip().startswith("#"):
-                    continue
-                next_indent = len(next_l) - len(next_l.lstrip(" "))
-                if next_indent > indent:
-                    has_child = True
-                break
-            if not has_child:
-                continue
-        final_lines.append(l)
+            if indent >= 4 and stripped.endswith(":") and not stripped.startswith("-"):
+                # Check if it has any children
+                has_child = False
+                for next_l in pass_lines[idx + 1:]:
+                    if not next_l.strip() or next_l.strip().startswith("#"):
+                        continue
+                    next_indent = len(next_l) - len(next_l.lstrip(" "))
+                    if next_indent > indent:
+                        has_child = True
+                    break
+                if not has_child:
+                    changed = True
+                    if stripped in ("mask:", "filters:", "objects:"):
+                        continue
+                    else:
+                        next_pass.append(f"{' ' * indent}{stripped[:-1]}: {{}}")
+                        continue
+            next_pass.append(l)
+        pass_lines = next_pass
 
-    return "\n".join(final_lines) + "\n"
+    return "\n".join(pass_lines) + "\n"
 
 
 def _parse_temp_masks_from_config(config_text: str) -> list[dict[str, str]]:
@@ -671,7 +688,7 @@ def _inject_temp_mask(config_text: str, camera: str, polygon: str, mask_id: str,
             m_indent = cam_indent + 10
             if is_dict:
                 new_cam_lines.extend([
-                    f"{' ' * m_indent}temp_mask_{mask_id}: # {tag}",
+                    f"{' ' * m_indent}temp_mask_{safe_mask_id}: # {tag}",
                     f"{' ' * (m_indent + 2)}friendly_name: \"{friendly}\"",
                     f"{' ' * (m_indent + 2)}enabled: true",
                     f"{' ' * (m_indent + 2)}coordinates: \"{polygon}\"",
@@ -686,7 +703,7 @@ def _inject_temp_mask(config_text: str, camera: str, polygon: str, mask_id: str,
             m_indent = cam_indent + 6
             if is_dict:
                 new_cam_lines.extend([
-                    f"{' ' * m_indent}temp_mask_{mask_id}: # {tag}",
+                    f"{' ' * m_indent}temp_mask_{safe_mask_id}: # {tag}",
                     f"{' ' * (m_indent + 2)}friendly_name: \"{friendly}\"",
                     f"{' ' * (m_indent + 2)}enabled: true",
                     f"{' ' * (m_indent + 2)}coordinates: \"{polygon}\"",
@@ -1009,10 +1026,13 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         if not should_audit:
             return
 
-        domain_data["last_config_audit_ts"] = now_ts
         try:
             async with session.get(f"{base_url}/api/config/raw", timeout=10) as cfg_resp:
                 if cfg_resp.status == 200:
+                    # Only stamp the audit time on a successful fetch so a
+                    # Frigate-down window (e.g. during restart) doesn't silently
+                    # consume the audit interval and leave stale masks in active_masks.
+                    domain_data["last_config_audit_ts"] = now_ts
                     raw_config_text = _normalize_raw_config(await cfg_resp.text())
                     discovered_masks = _parse_temp_masks_from_config(raw_config_text)
                     discovered_by_id = {m["mask_id"]: m for m in discovered_masks}
@@ -1355,8 +1375,11 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
 
         session = async_get_clientsession(hass)
         base_url = _get_frigate_base_url()
+        safe_mask_id = re.sub(r"[^a-zA-Z0-9_]", "_", mask_id)
         tag = f"TEMP_MASK_{mask_id}"
         dict_key = f"temp_mask_{mask_id}"
+        safe_tag = f"TEMP_MASK_{safe_mask_id}"
+        safe_dict_key = f"temp_mask_{safe_mask_id}"
 
         try:
             async with session.get(f"{base_url}/api/config/raw", timeout=10) as resp:
@@ -1366,22 +1389,33 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                     _LOGGER.error("Failed to fetch Frigate raw config during remove_mask (status: %s)", resp.status)
                     return
 
-            if tag not in raw_config and dict_key not in raw_config:
+            if (tag not in raw_config and dict_key not in raw_config
+                and safe_tag not in raw_config and safe_dict_key not in raw_config):
+                domain_data["pending_restart_masks"].pop(mask_id, None)
+                domain_data["pending_restart_masks"].pop(safe_mask_id, None)
+                _update_state()
                 return
 
             updated_config = _clean_config_masks(raw_config, mask_id)
 
-            # Save WITHOUT restart to avoid interrupting live video/detections
             async with session.post(
-                f"{base_url}/api/config/save?save_option=none",
+                f"{base_url}/api/config/save?save_option=restart",
                 data=updated_config.encode("utf-8"),
                 headers={"Content-Type": "text/plain"},
                 timeout=15
             ) as save_resp:
                 if save_resp.status == 200:
-                    _LOGGER.info("Removed temporary mask %s (saved to config without restart)", mask_id)
+                    _LOGGER.info("Removed temporary mask %s (reloaded Frigate detector)", mask_id)
+                    domain_data["pending_restart_masks"].pop(mask_id, None)
+                    domain_data["pending_restart_masks"].pop(safe_mask_id, None)
+                    # Reset audit timestamp so the next sync immediately re-audits Frigate
+                    # config rather than waiting up to 10 minutes, ensuring the mask is
+                    # confirmed gone before the user reopens the mask manager.
+                    domain_data["last_config_audit_ts"] = 0.0
+                    _update_state()
                 else:
-                    _LOGGER.error("Failed to save Frigate config during remove_mask (status: %s)", save_resp.status)
+                    err_msg = await save_resp.text()
+                    _LOGGER.error("Failed to save Frigate config during remove_mask (status: %s): %s", save_resp.status, err_msg)
         except Exception as e:
             _LOGGER.error("Failed to remove mask %s: %s", mask_id, e)
 
@@ -1409,17 +1443,25 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                     return
 
             if "TEMP_MASK_" not in raw_config and "temp_mask_" not in raw_config:
+                domain_data["pending_restart_masks"].clear()
+                _update_state()
                 return
 
             updated_config = _clean_config_masks(raw_config)
 
             async with session.post(
-                f"{base_url}/api/config/save?save_option=none",
+                f"{base_url}/api/config/save?save_option=restart",
                 data=updated_config.encode("utf-8"),
                 headers={"Content-Type": "text/plain"},
                 timeout=15
             ) as save_resp:
-                _LOGGER.info("Pruned all temporary masks (saved to config without restart)")
+                if save_resp.status == 200:
+                    _LOGGER.info("Pruned all temporary masks (reloaded Frigate detector)")
+                    domain_data["pending_restart_masks"].clear()
+                    _update_state()
+                else:
+                    err_msg = await save_resp.text()
+                    _LOGGER.error("Failed to save Frigate config during prune_all (status: %s): %s", save_resp.status, err_msg)
         except Exception as e:
             _LOGGER.error("Failed to prune masks: %s", e)
 
