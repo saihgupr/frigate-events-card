@@ -219,9 +219,9 @@ Right-clicking (desktop) or long-pressing (touch devices) any event thumbnail op
 * **Live Video Feed Right-Click (Temporary Mask Manager)**: Right-clicking (or long-pressing on touch devices) the live video feed opens the interactive Mask Manager modal directly, displaying all active masks with object snapshots/minimaps, countdown timers, polygon coordinates, per-mask duration adjustments, and individual removal controls.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/temp_mask_1.png" width="32%" />
-  <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/temp_mask_4.png" width="32%" />
-  <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/temp_mask_3.png" width="32%" />
+  <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/develop/images/snapshots/temp_mask_1.png" width="32%" />
+  <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/develop/images/snapshots/temp_mask_4.png" width="32%" />
+  <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/develop/images/snapshots/temp_mask_3.png" width="32%" />
 </p>
 
 > [!NOTE]
