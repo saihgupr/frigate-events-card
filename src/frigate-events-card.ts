@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.4.14';
+const CARD_VERSION = '2.4.16';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -141,6 +141,10 @@ const LABEL_ICONS: Record<string, string> = {
   boat: '🚤',
 };
 
+// Playback speeds for continuous footage timeline
+const TIMELINE_PLAYBACK_SPEEDS = [0.5, 1, 2, 4, 8, 16, 32, 64, 128];
+
+
 @customElement('frigate-events-card')
 export class FrigateEventsCard extends LitElement {
   @property({ attribute: false }) public hass?: HomeAssistant;
@@ -192,6 +196,7 @@ export class FrigateEventsCard extends LitElement {
   private _timelineEndTs = 0;
   private _timelineWindowDurationSec = 3600; // default 1 hour
   private _timelinePlaybackRate = 1;
+  private _timelineSpeedInterval?: number;
   private _timelineEvents: FrigateEvent[] = [];
   private _timelineRecordings: Array<{ start_time: number; end_time: number }> = [];
   private _timelineTimeUpdateRaf?: number;
@@ -2459,39 +2464,59 @@ export class FrigateEventsCard extends LitElement {
       }
 
       .timeline-speed-controls {
-        display: flex;
+        display: inline-flex;
         align-items: center;
-        gap: 4px;
-      }
-
-      .timeline-speed-label {
-        font-size: 11px;
-        color: #94a3b8;
-        margin-right: 2px;
-      }
-
-      .timeline-speed-btn {
-        padding: 3px 7px;
-        font-size: 11px;
-        font-weight: 600;
-        border-radius: 4px;
+        gap: 2px;
         background: rgba(255, 255, 255, 0.05);
-        color: #94a3b8;
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        cursor: pointer;
-        transition: all 0.15s;
-        font-family: inherit;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 6px;
+        padding: 2px;
       }
 
-      .timeline-speed-btn:hover {
+      .timeline-stepper-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 22px;
+        height: 22px;
+        background: transparent;
+        color: #94a3b8;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: 700;
+        line-height: 1;
+        transition: all 0.15s;
+        user-select: none;
+      }
+
+      .timeline-stepper-btn:hover:not(:disabled) {
         background: rgba(255, 255, 255, 0.12);
         color: #ffffff;
       }
 
-      .timeline-speed-btn.active {
-        background: rgba(59, 130, 246, 0.25);
+      .timeline-stepper-btn:disabled {
+        opacity: 0.3;
+        cursor: not-allowed;
+      }
+
+      .timeline-speed-display {
+        font-size: 11px;
+        font-weight: 700;
+        min-width: 38px;
+        text-align: center;
         color: #93c5fd;
-        border-color: #3b82f6;
+        padding: 2px 4px;
+        border-radius: 4px;
+        cursor: pointer;
+        user-select: none;
+        transition: all 0.15s;
+      }
+
+      .timeline-speed-display:hover {
+        background: rgba(59, 130, 246, 0.2);
+        color: #60a5fa;
       }
 
       .timeline-time-badge {
@@ -4263,7 +4288,77 @@ export class FrigateEventsCard extends LitElement {
     this._loadTimelineVideo(targetSeekTs);
   }
 
+  private _clearTimelineSpeedInterval(): void {
+    if (this._timelineSpeedInterval) {
+      clearInterval(this._timelineSpeedInterval);
+      this._timelineSpeedInterval = undefined;
+    }
+  }
+
+  private _syncTimelineSpeedStepperUI(container?: HTMLElement): void {
+    const root = container || this._timelineContainer;
+    if (!root) return;
+    const currentIndex = TIMELINE_PLAYBACK_SPEEDS.indexOf(this._timelinePlaybackRate);
+    const speedDisplay = root.querySelector('[data-timeline-speed-display]') as HTMLElement | null;
+    if (speedDisplay) {
+      speedDisplay.textContent = `${this._timelinePlaybackRate}x`;
+    }
+    const downBtn = root.querySelector('[data-action="speed-down"]') as HTMLButtonElement | null;
+    if (downBtn) {
+      downBtn.disabled = currentIndex <= 0;
+    }
+    const upBtn = root.querySelector('[data-action="speed-up"]') as HTMLButtonElement | null;
+    if (upBtn) {
+      upBtn.disabled = currentIndex >= TIMELINE_PLAYBACK_SPEEDS.length - 1;
+    }
+  }
+
+  private _applyTimelinePlaybackRate(rate: number): void {
+    this._timelinePlaybackRate = rate;
+    this._syncTimelineSpeedStepperUI();
+    const video = this._timelineVideoEl;
+    if (!video) return;
+
+    if (rate <= 16) {
+      this._clearTimelineSpeedInterval();
+      video.playbackRate = rate;
+      video.muted = false;
+      if (video.paused) {
+        video.play().catch(() => {});
+      }
+    } else {
+      // Speeds > 16x: Browser playbackRate limit workaround via stepping interval
+      video.playbackRate = 1;
+      video.muted = true;
+      video.pause();
+      this._clearTimelineSpeedInterval();
+
+      // Step every 100ms
+      const stepDelta = (rate * 100) / 1000;
+      this._timelineSpeedInterval = window.setInterval(() => {
+        if (!this._timelineVideoEl) {
+          this._clearTimelineSpeedInterval();
+          return;
+        }
+        const v = this._timelineVideoEl;
+        const duration = this._timelineEndTs - this._timelineStartTs;
+        const maxSeek = (Number.isFinite(v.duration) && v.duration > 0)
+          ? Math.max(0, v.duration - 0.5)
+          : duration;
+        if (v.currentTime >= maxSeek) {
+          this._clearTimelineSpeedInterval();
+          this._updateTimelinePlayheadUI();
+          return;
+        }
+        v.currentTime = Math.min(maxSeek, v.currentTime + stepDelta);
+        this._updateTimelinePlayheadUI();
+      }, 100);
+    }
+    this._updateTimelinePlayheadUI();
+  }
+
   private _removeTimelineModal(): void {
+    this._clearTimelineSpeedInterval();
     if (this._timelineTimeUpdateRaf) {
       cancelAnimationFrame(this._timelineTimeUpdateRaf);
       this._timelineTimeUpdateRaf = undefined;
@@ -4370,7 +4465,14 @@ export class FrigateEventsCard extends LitElement {
     }
 
     this._timelineVideoEl = video;
-    video.playbackRate = this._timelinePlaybackRate;
+    this._clearTimelineSpeedInterval();
+    if (this._timelinePlaybackRate <= 16) {
+      video.playbackRate = this._timelinePlaybackRate;
+      video.muted = false;
+    } else {
+      video.playbackRate = 1;
+      video.muted = true;
+    }
 
     const loadingEl = this._timelineContainer.querySelector('.timeline-player-loading') as HTMLElement | null;
     if (loadingEl) {
@@ -4418,7 +4520,7 @@ export class FrigateEventsCard extends LitElement {
       }
       if (!initialPlayStarted) {
         initialPlayStarted = true;
-        video.play().catch(() => {});
+        this._applyTimelinePlaybackRate(this._timelinePlaybackRate);
       }
     };
 
@@ -4430,11 +4532,15 @@ export class FrigateEventsCard extends LitElement {
       this._updateTimelinePlayheadUI();
     };
     video.onpause = () => {
+      if (this._timelinePlaybackRate <= 16) {
+        this._clearTimelineSpeedInterval();
+      }
       this._updateTimelinePlayheadUI();
     };
 
     // Prevent video ended event from snapping currentTime back to 0:00
     video.onended = () => {
+      this._clearTimelineSpeedInterval();
       video.pause();
       if (Number.isFinite(video.duration) && video.duration > 0) {
         video.currentTime = Math.max(0, video.duration - 0.1);
@@ -4542,7 +4648,9 @@ export class FrigateEventsCard extends LitElement {
 
     const playPauseBtn = this._timelineContainer.querySelector('[data-action="toggle-play"]') as HTMLElement | null;
     if (playPauseBtn) {
-      const isPaused = video.paused;
+      const isPaused = this._timelinePlaybackRate > 16
+        ? !this._timelineSpeedInterval
+        : video.paused;
       playPauseBtn.innerHTML = isPaused
         ? `<svg viewBox="0 0 24 24"><path d="M8,5.14V19.14L19,12.14L8,5.14Z"/></svg>`
         : `<svg viewBox="0 0 24 24"><path d="M14,19H18V5H14M6,19H10V5H6V19Z"/></svg>`;
@@ -4732,13 +4840,9 @@ export class FrigateEventsCard extends LitElement {
             </div>
 
             <div class="timeline-speed-controls">
-              <span class="timeline-speed-label">Speed:</span>
-              <button class="timeline-speed-btn ${this._timelinePlaybackRate === 0.5 ? 'active' : ''}" data-speed="0.5">0.5x</button>
-              <button class="timeline-speed-btn ${this._timelinePlaybackRate === 1 ? 'active' : ''}" data-speed="1">1x</button>
-              <button class="timeline-speed-btn ${this._timelinePlaybackRate === 2 ? 'active' : ''}" data-speed="2">2x</button>
-              <button class="timeline-speed-btn ${this._timelinePlaybackRate === 4 ? 'active' : ''}" data-speed="4">4x</button>
-              <button class="timeline-speed-btn ${this._timelinePlaybackRate === 8 ? 'active' : ''}" data-speed="8">8x</button>
-              <button class="timeline-speed-btn ${this._timelinePlaybackRate === 16 ? 'active' : ''}" data-speed="16">16x</button>
+              <button class="timeline-stepper-btn" data-action="speed-down" title="Decrease speed (min 0.5x)">−</button>
+              <span class="timeline-speed-display" data-timeline-speed-display title="Click to reset to 1x">${this._timelinePlaybackRate}x</span>
+              <button class="timeline-stepper-btn" data-action="speed-up" title="Increase speed (max 128x)">+</button>
             </div>
           </div>
         </div>
@@ -4849,10 +4953,18 @@ export class FrigateEventsCard extends LitElement {
     playerContainer?.addEventListener('click', (e) => {
       e.stopPropagation();
       if (!this._timelineVideoEl) return;
-      if (this._timelineVideoEl.paused) {
-        this._timelineVideoEl.play().catch(() => {});
+      if (this._timelinePlaybackRate > 16) {
+        if (this._timelineSpeedInterval) {
+          this._clearTimelineSpeedInterval();
+        } else {
+          this._applyTimelinePlaybackRate(this._timelinePlaybackRate);
+        }
       } else {
-        this._timelineVideoEl.pause();
+        if (this._timelineVideoEl.paused) {
+          this._timelineVideoEl.play().catch(() => {});
+        } else {
+          this._timelineVideoEl.pause();
+        }
       }
       this._updateTimelinePlayheadUI();
     });
@@ -4862,10 +4974,18 @@ export class FrigateEventsCard extends LitElement {
     playPauseBtn?.addEventListener('click', (e) => {
       e.stopPropagation();
       if (!this._timelineVideoEl) return;
-      if (this._timelineVideoEl.paused) {
-        this._timelineVideoEl.play().catch(() => {});
+      if (this._timelinePlaybackRate > 16) {
+        if (this._timelineSpeedInterval) {
+          this._clearTimelineSpeedInterval();
+        } else {
+          this._applyTimelinePlaybackRate(this._timelinePlaybackRate);
+        }
       } else {
-        this._timelineVideoEl.pause();
+        if (this._timelineVideoEl.paused) {
+          this._timelineVideoEl.play().catch(() => {});
+        } else {
+          this._timelineVideoEl.pause();
+        }
       }
       this._updateTimelinePlayheadUI();
     });
@@ -4885,18 +5005,28 @@ export class FrigateEventsCard extends LitElement {
       });
     });
 
-    // Speed buttons
-    container.querySelectorAll('.timeline-speed-btn').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const speed = parseFloat((btn as HTMLElement).getAttribute('data-speed') || '1');
-        this._timelinePlaybackRate = speed;
-        if (this._timelineVideoEl) {
-          this._timelineVideoEl.playbackRate = speed;
-        }
-        container.querySelectorAll('.timeline-speed-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-      });
+    // Stepper Speed controls
+    this._syncTimelineSpeedStepperUI(container);
+
+    container.querySelector('[data-action="speed-down"]')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const currentIndex = TIMELINE_PLAYBACK_SPEEDS.indexOf(this._timelinePlaybackRate);
+      if (currentIndex > 0) {
+        this._applyTimelinePlaybackRate(TIMELINE_PLAYBACK_SPEEDS[currentIndex - 1]);
+      }
+    });
+
+    container.querySelector('[data-action="speed-up"]')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const currentIndex = TIMELINE_PLAYBACK_SPEEDS.indexOf(this._timelinePlaybackRate);
+      if (currentIndex >= 0 && currentIndex < TIMELINE_PLAYBACK_SPEEDS.length - 1) {
+        this._applyTimelinePlaybackRate(TIMELINE_PLAYBACK_SPEEDS[currentIndex + 1]);
+      }
+    });
+
+    container.querySelector('[data-timeline-speed-display]')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this._applyTimelinePlaybackRate(1);
     });
 
     // Scrubber track click / drag scrubbing
