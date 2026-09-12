@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.4.13';
+const CARD_VERSION = '2.4.14';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -4581,17 +4581,17 @@ export class FrigateEventsCard extends LitElement {
     }).join('');
 
     // Attach marker click handlers
-    eventsLayer.querySelectorAll('.timeline-event-marker').forEach(marker => {
-      marker.addEventListener('click', (e) => {
+    eventsLayer.querySelectorAll<HTMLElement>('.timeline-event-marker').forEach(marker => {
+      const handleMarkerClick = (e: Event) => {
         e.stopPropagation();
         const eventId = (marker as HTMLElement).getAttribute('data-event-id');
         const ev = this._timelineEvents.find(item => item.id === eventId);
-        const detected = parseFloat((marker as HTMLElement).getAttribute('data-event-detected') || '0');
-        const start = parseFloat((marker as HTMLElement).getAttribute('data-event-start') || '0');
+        const detected = ev ? this._getEventDetectedTimestamp(ev) : parseFloat((marker as HTMLElement).getAttribute('data-event-detected') || '0');
+        const start = (ev && ev.start_time) ? ev.start_time : parseFloat((marker as HTMLElement).getAttribute('data-event-start') || '0');
         const baseTs = detected > 0 ? detected : start;
         const seekOffset = this._getEventSeekOffset(ev);
         if (baseTs > 0 && this._timelineVideoEl) {
-          const targetTs = baseTs + seekOffset;
+          const targetTs = Math.max(this._timelineStartTs, Math.min(this._timelineEndTs, baseTs + seekOffset));
           const targetOffset = this._wallClockToVideoOffset(targetTs);
           const maxSeek = (Number.isFinite(this._timelineVideoEl.duration) && this._timelineVideoEl.duration > 0)
             ? Math.max(0, this._timelineVideoEl.duration - 0.5)
@@ -4599,8 +4599,33 @@ export class FrigateEventsCard extends LitElement {
           const offset = Math.max(0, Math.min(maxSeek, targetOffset));
           this._timelineVideoEl.currentTime = offset;
           this._timelineVideoEl.play().catch(() => {});
+
+          // Immediately reflect position visually on track even before video timeupdate fires
+          const windowDuration = this._timelineEndTs - this._timelineStartTs;
+          if (windowDuration > 0 && this._timelineContainer) {
+            const pct = Math.max(0, Math.min(100, ((targetTs - this._timelineStartTs) / windowDuration) * 100));
+            const playhead = this._timelineContainer.querySelector('.timeline-playhead') as HTMLElement | null;
+            if (playhead) {
+              playhead.style.left = `${pct}%`;
+            }
+            const currentBadge = this._timelineContainer.querySelector('[data-timeline-current-time]') as HTMLElement | null;
+            if (currentBadge) {
+              const curDate = new Date(targetTs * 1000);
+              currentBadge.textContent = curDate.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+            }
+          }
           this._updateTimelinePlayheadUI();
         }
+      };
+
+      marker.addEventListener('pointerdown', (e: PointerEvent) => {
+        e.stopPropagation();
+      });
+      marker.addEventListener('pointerup', (e: PointerEvent) => {
+        e.stopPropagation();
+      });
+      marker.addEventListener('click', (e: MouseEvent) => {
+        handleMarkerClick(e);
       });
     });
   }
@@ -4906,6 +4931,7 @@ export class FrigateEventsCard extends LitElement {
       };
 
       track.addEventListener('pointerdown', (e: PointerEvent) => {
+        if ((e.target as HTMLElement)?.closest('.timeline-event-marker')) return;
         e.preventDefault();
         e.stopPropagation();
         this._timelineIsDragging = true;
@@ -4938,6 +4964,7 @@ export class FrigateEventsCard extends LitElement {
       });
 
       track.addEventListener('click', (e: MouseEvent) => {
+        if ((e.target as HTMLElement)?.closest('.timeline-event-marker')) return;
         e.stopPropagation();
         handleSeek(e.clientX);
       });
