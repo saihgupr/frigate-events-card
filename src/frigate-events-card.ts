@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.4.18';
+const CARD_VERSION = '2.4.20';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -142,7 +142,7 @@ const LABEL_ICONS: Record<string, string> = {
 };
 
 // Playback speeds for continuous footage timeline
-const TIMELINE_PLAYBACK_SPEEDS = [0.5, 1, 2, 4, 8, 16, 32, 64, 128];
+const TIMELINE_PLAYBACK_SPEEDS = [0.5, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096];
 
 
 @customElement('frigate-events-card')
@@ -4842,7 +4842,7 @@ export class FrigateEventsCard extends LitElement {
             <div class="timeline-speed-controls">
               <button class="timeline-stepper-btn" data-action="speed-down" title="Decrease speed (min 0.5x)">−</button>
               <span class="timeline-speed-display" data-timeline-speed-display title="Click to reset to 1x">${this._timelinePlaybackRate}x</span>
-              <button class="timeline-stepper-btn" data-action="speed-up" title="Increase speed (max 128x)">+</button>
+              <button class="timeline-stepper-btn" data-action="speed-up" title="Increase speed (max 4096x)">+</button>
             </div>
           </div>
         </div>
