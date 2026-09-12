@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.4.17';
+const CARD_VERSION = '2.4.18';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -4901,9 +4901,28 @@ export class FrigateEventsCard extends LitElement {
           this._timelineEndTs = now;
           this._timelineStartTs = Math.max(0, this._timelineEndTs - this._timelineWindowDurationSec);
         } else if (jump === 'day-start') {
-          const startOfDay = new Date();
-          startOfDay.setHours(0, 0, 0, 0);
-          this._timelineStartTs = Math.floor(startOfDay.getTime() / 1000);
+          // Find the beginning of the currently viewed day (based on current timeline start)
+          const refDate = new Date(this._timelineStartTs * 1000);
+          const startOfDay = new Date(refDate.getFullYear(), refDate.getMonth(), refDate.getDate(), 0, 0, 0, 0);
+          const endOfDay = new Date(refDate.getFullYear(), refDate.getMonth(), refDate.getDate(), 23, 59, 59, 999);
+          const dayStartTs = Math.floor(startOfDay.getTime() / 1000);
+          const dayEndTs = Math.floor(endOfDay.getTime() / 1000);
+
+          let targetTs = dayStartTs;
+          if (this.hass && this._timelineCamera) {
+            try {
+              const clientId = this._config?.frigate_client_id || 'frigate';
+              const dayRecordings = await getRecordings(this.hass, clientId, this._timelineCamera, dayStartTs, dayEndTs);
+              if (Array.isArray(dayRecordings) && dayRecordings.length > 0) {
+                dayRecordings.sort((a, b) => a.start_time - b.start_time);
+                targetTs = dayRecordings[0].start_time;
+              }
+            } catch (err) {
+              console.debug('Failed to fetch recordings for day-start jump:', err);
+            }
+          }
+
+          this._timelineStartTs = targetTs;
           this._timelineEndTs = Math.floor(this._timelineStartTs + this._timelineWindowDurationSec);
         } else {
           // Relative shifts backward from current window start time
