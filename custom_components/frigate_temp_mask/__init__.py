@@ -593,23 +593,39 @@ def _inject_temp_mask(config_text: str, camera: str, polygon: str, mask_id: str,
                 break
         if cameras_idx != -1:
             c_indent = "  "
-            new_lines = [
-                f"{c_indent}{camera}:",
-                f"{c_indent}  objects:",
-                f"{c_indent}    filters:",
-                f"{c_indent}      {obj_label or 'car'}:",
-                f"{c_indent}        mask:",
-            ]
-            if is_dict:
-                friendly = f"Temporary Mask ({obj_label})" if obj_label else "Temporary Mask"
-                new_lines.extend([
-                    f"{c_indent}          temp_mask_{safe_mask_id}: # {tag}",
-                    f"{c_indent}            friendly_name: \"{friendly}\"",
-                    f"{c_indent}            enabled: true",
-                    f"{c_indent}            coordinates: {polygon}",
-                ])
+            friendly = f"Temporary Mask ({obj_label})" if obj_label else "Temporary Mask"
+            if obj_label:
+                new_lines = [
+                    f"{c_indent}{camera}:",
+                    f"{c_indent}  objects:",
+                    f"{c_indent}    filters:",
+                    f"{c_indent}      {obj_label}:",
+                    f"{c_indent}        mask:",
+                ]
+                if is_dict:
+                    new_lines.extend([
+                        f"{c_indent}          temp_mask_{safe_mask_id}: # {tag}",
+                        f"{c_indent}            friendly_name: \"{friendly}\"",
+                        f"{c_indent}            enabled: true",
+                        f"{c_indent}            coordinates: {polygon}",
+                    ])
+                else:
+                    new_lines.append(f"{c_indent}          - {polygon} # {tag}")
             else:
-                new_lines.append(f"{c_indent}          - {polygon} # {tag}")
+                new_lines = [
+                    f"{c_indent}{camera}:",
+                    f"{c_indent}  objects:",
+                    f"{c_indent}    mask:",
+                ]
+                if is_dict:
+                    new_lines.extend([
+                        f"{c_indent}      temp_mask_{safe_mask_id}: # {tag}",
+                        f"{c_indent}        friendly_name: \"{friendly}\"",
+                        f"{c_indent}        enabled: true",
+                        f"{c_indent}        coordinates: {polygon}",
+                    ])
+                else:
+                    new_lines.append(f"{c_indent}      - {polygon} # {tag}")
             lines = lines[:cameras_idx + 1] + new_lines + lines[cameras_idx + 1:]
             return "\n".join(lines) + "\n"
         else:
@@ -644,23 +660,39 @@ def _inject_temp_mask(config_text: str, camera: str, polygon: str, mask_id: str,
                 break
 
     if objects_rel_idx == -1:
-        new_cam_lines = [
-            f"{cam_ind_str}  objects:",
-            f"{cam_ind_str}    filters:",
-            f"{cam_ind_str}      {obj_label or 'car'}:",
-            f"{cam_ind_str}        mask:",
-        ]
-        m_indent = cam_indent + 10
-        if is_dict:
-            friendly = f"Temporary Mask ({obj_label})" if obj_label else "Temporary Mask"
-            new_cam_lines.extend([
-                f"{' ' * m_indent}temp_mask_{mask_id}: # {tag}",
-                f"{' ' * (m_indent + 2)}friendly_name: \"{friendly}\"",
-                f"{' ' * (m_indent + 2)}enabled: true",
-                f"{' ' * (m_indent + 2)}coordinates: \"{polygon}\"",
-            ])
+        friendly = f"Temporary Mask ({obj_label})" if obj_label else "Temporary Mask"
+        if obj_label:
+            new_cam_lines = [
+                f"{cam_ind_str}  objects:",
+                f"{cam_ind_str}    filters:",
+                f"{cam_ind_str}      {obj_label}:",
+                f"{cam_ind_str}        mask:",
+            ]
+            m_indent = cam_indent + 10
+            if is_dict:
+                new_cam_lines.extend([
+                    f"{' ' * m_indent}temp_mask_{mask_id}: # {tag}",
+                    f"{' ' * (m_indent + 2)}friendly_name: \"{friendly}\"",
+                    f"{' ' * (m_indent + 2)}enabled: true",
+                    f"{' ' * (m_indent + 2)}coordinates: \"{polygon}\"",
+                ])
+            else:
+                new_cam_lines.append(f"{' ' * m_indent}- {polygon} # {tag}")
         else:
-            new_cam_lines.append(f"{' ' * m_indent}- {polygon} # {tag}")
+            new_cam_lines = [
+                f"{cam_ind_str}  objects:",
+                f"{cam_ind_str}    mask:",
+            ]
+            m_indent = cam_indent + 6
+            if is_dict:
+                new_cam_lines.extend([
+                    f"{' ' * m_indent}temp_mask_{mask_id}: # {tag}",
+                    f"{' ' * (m_indent + 2)}friendly_name: \"{friendly}\"",
+                    f"{' ' * (m_indent + 2)}enabled: true",
+                    f"{' ' * (m_indent + 2)}coordinates: \"{polygon}\"",
+                ])
+            else:
+                new_cam_lines.append(f"{' ' * m_indent}- {polygon} # {tag}")
 
         lines = lines[:cam_start + 1] + new_cam_lines + lines[cam_start + 1:]
         return "\n".join(lines) + "\n"
@@ -1120,24 +1152,26 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                 _LOGGER.warning("Error parsing bounding box '%s': %s", box_str, e)
 
         event_data = None
-        if not box_coords and not polygon_arg:
+        need_event_data = (not box_coords and not polygon_arg) or not label_val or not camera
+        if need_event_data:
             if event_id:
                 try:
                     async with session.get(f"{base_url}/api/events/{event_id}", timeout=10) as resp:
                         if resp.status == 200:
                             event_data = await resp.json()
-                            box_coords = _get_event_box(event_data)
-                            if not box_coords:
-                                _LOGGER.error("Frigate event %s found, but no valid bounding box was present in event data: %s", event_id, event_data)
+                            if not box_coords and not polygon_arg:
+                                box_coords = _get_event_box(event_data)
+                                if not box_coords:
+                                    _LOGGER.error("Frigate event %s found, but no valid bounding box was present in event data: %s", event_id, event_data)
                             if not camera:
                                 camera = event_data.get("camera", "")
                             if not label_val:
-                                label_val = event_data.get("label", "")
+                                label_val = event_data.get("label", "") or (event_data.get("data") or {}).get("label", "")
                         else:
                             _LOGGER.error("Frigate event API returned status %s for event_id '%s' at %s/api/events/%s", resp.status, event_id, base_url, event_id)
                 except Exception as e:
                     _LOGGER.error("Error fetching Frigate event %s from %s: %s", event_id, base_url, e)
-            else:
+            elif not box_coords and not polygon_arg:
                 # Fallback: find the most recent event for camera if event_id was not passed
                 try:
                     cam_param = f"?camera={camera}&limit=5" if camera else "?limit=5"
@@ -1151,7 +1185,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                                 if not camera:
                                     camera = event_data.get("camera", "")
                                 if not label_val:
-                                    label_val = event_data.get("label", "")
+                                    label_val = event_data.get("label", "") or (event_data.get("data") or {}).get("label", "")
                                 if not mask_id or mask_id == "manual":
                                     mask_id = event_id.split("-")[0] if "-" in event_id else event_id or "manual"
                                 _LOGGER.info("Using latest Frigate event fallback %s for camera %s", event_id, camera or "unknown")
