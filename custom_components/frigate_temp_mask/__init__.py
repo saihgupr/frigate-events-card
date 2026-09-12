@@ -360,6 +360,7 @@ def _clean_config_masks(config_text: str, mask_id_to_remove: str = "") -> str:
     config_text = _normalize_raw_config(config_text)
     target_tag = f"TEMP_MASK_{mask_id_to_remove}" if mask_id_to_remove else "TEMP_MASK_"
     target_key = f"temp_mask_{mask_id_to_remove}" if mask_id_to_remove else "temp_mask_"
+    safe_key = f"temp_mask_{re.sub(r'[^a-zA-Z0-9_]', '_', mask_id_to_remove)}" if mask_id_to_remove else "temp_mask_"
 
     lines = config_text.splitlines()
     filtered: list[str] = []
@@ -373,7 +374,12 @@ def _clean_config_masks(config_text: str, mask_id_to_remove: str = "") -> str:
 
         is_match = False
         if mask_id_to_remove:
-            if target_tag in line or (stripped.startswith(f"{target_key}:") or stripped.startswith(f"{target_key} ")):
+            if target_tag in line or (
+                stripped.startswith(f"{target_key}:")
+                or stripped.startswith(f"{target_key} ")
+                or stripped.startswith(f"{safe_key}:")
+                or stripped.startswith(f"{safe_key} ")
+            ):
                 is_match = True
         else:
             if "TEMP_MASK_" in line or stripped.startswith("temp_mask_"):
@@ -549,14 +555,14 @@ def _parse_temp_masks_from_config(config_text: str) -> list[dict[str, str]]:
                 context = "mask"
 
             if parent_context == "mask":
-                if key.startswith("temp_mask_"):
-                    curr_dict_mask_id = key.removeprefix("temp_mask_").split("#")[0].strip()
-                    curr_dict_indent = indent
-                elif "TEMP_MASK_" in stripped:
+                if "TEMP_MASK_" in stripped:
                     m = re.search(r"TEMP_MASK_(\S+)", stripped)
                     if m:
                         curr_dict_mask_id = m.group(1).strip().strip(":")
                         curr_dict_indent = indent
+                elif key.startswith("temp_mask_"):
+                    curr_dict_mask_id = key.removeprefix("temp_mask_").split("#")[0].strip()
+                    curr_dict_indent = indent
 
             stack.append({
                 "indent": indent,
@@ -569,6 +575,7 @@ def _parse_temp_masks_from_config(config_text: str) -> list[dict[str, str]]:
 
 def _inject_temp_mask(config_text: str, camera: str, polygon: str, mask_id: str, label: str = "", is_dict: bool = True) -> str:
     """Inject a temporary mask into the Frigate config text cleanly scoped to camera."""
+    safe_mask_id = re.sub(r"[^a-zA-Z0-9_]", "_", mask_id)
     tag = f"TEMP_MASK_{mask_id}"
     cleaned = _clean_config_masks(config_text, mask_id)
     lines = cleaned.splitlines()
@@ -596,10 +603,10 @@ def _inject_temp_mask(config_text: str, camera: str, polygon: str, mask_id: str,
             if is_dict:
                 friendly = f"Temporary Mask ({obj_label})" if obj_label else "Temporary Mask"
                 new_lines.extend([
-                    f"{c_indent}          temp_mask_{mask_id}: # {tag}",
+                    f"{c_indent}          temp_mask_{safe_mask_id}: # {tag}",
                     f"{c_indent}            friendly_name: \"{friendly}\"",
                     f"{c_indent}            enabled: true",
-                    f"{c_indent}            coordinates: \"{polygon}\"",
+                    f"{c_indent}            coordinates: {polygon}",
                 ])
             else:
                 new_lines.append(f"{c_indent}          - {polygon} # {tag}")
@@ -609,10 +616,10 @@ def _inject_temp_mask(config_text: str, camera: str, polygon: str, mask_id: str,
             lines.append("objects:")
             lines.append("  mask:")
             if is_dict:
-                lines.append(f"    temp_mask_{mask_id}: # {tag}")
+                lines.append(f"    temp_mask_{safe_mask_id}: # {tag}")
                 lines.append("      friendly_name: \"Temporary Mask\"")
                 lines.append("      enabled: true")
-                lines.append(f"      coordinates: \"{polygon}\"")
+                lines.append(f"      coordinates: {polygon}")
             else:
                 lines.append(f"    - {polygon} # {tag}")
             return "\n".join(lines) + "\n"
@@ -757,10 +764,10 @@ def _inject_temp_mask(config_text: str, camera: str, polygon: str, mask_id: str,
                 if is_dict:
                     friendly = f"Temporary Mask ({target_label})"
                     to_insert = [
-                        f"{' ' * m_indent}temp_mask_{mask_id}: # {tag}",
+                        f"{' ' * m_indent}temp_mask_{safe_mask_id}: # {tag}",
                         f"{' ' * (m_indent + 2)}friendly_name: \"{friendly}\"",
                         f"{' ' * (m_indent + 2)}enabled: true",
-                        f"{' ' * (m_indent + 2)}coordinates: \"{polygon}\"",
+                        f"{' ' * (m_indent + 2)}coordinates: {polygon}",
                     ]
                 else:
                     to_insert = [f"{' ' * m_indent}- {polygon} # {tag}"]
@@ -775,10 +782,10 @@ def _inject_temp_mask(config_text: str, camera: str, polygon: str, mask_id: str,
                 if is_dict:
                     friendly = f"Temporary Mask ({target_label})"
                     to_insert.extend([
-                        f"{' ' * (m_indent + 2)}temp_mask_{mask_id}: # {tag}",
+                        f"{' ' * (m_indent + 2)}temp_mask_{safe_mask_id}: # {tag}",
                         f"{' ' * (m_indent + 4)}friendly_name: \"{friendly}\"",
                         f"{' ' * (m_indent + 4)}enabled: true",
-                        f"{' ' * (m_indent + 4)}coordinates: \"{polygon}\"",
+                        f"{' ' * (m_indent + 4)}coordinates: {polygon}",
                     ])
                 else:
                     to_insert.append(f"{' ' * (m_indent + 2)}- {polygon} # {tag}")
@@ -794,10 +801,10 @@ def _inject_temp_mask(config_text: str, camera: str, polygon: str, mask_id: str,
             if is_dict:
                 friendly = f"Temporary Mask ({target_label})"
                 to_insert.extend([
-                    f"{' ' * (f_indent + 4)}temp_mask_{mask_id}: # {tag}",
+                    f"{' ' * (f_indent + 4)}temp_mask_{safe_mask_id}: # {tag}",
                     f"{' ' * (f_indent + 6)}friendly_name: \"{friendly}\"",
                     f"{' ' * (f_indent + 6)}enabled: true",
-                    f"{' ' * (f_indent + 6)}coordinates: \"{polygon}\"",
+                    f"{' ' * (f_indent + 6)}coordinates: {polygon}",
                 ])
             else:
                 to_insert.append(f"{' ' * (f_indent + 4)}- {polygon} # {tag}")
@@ -814,10 +821,10 @@ def _inject_temp_mask(config_text: str, camera: str, polygon: str, mask_id: str,
         if is_dict:
             friendly = f"Temporary Mask ({target_label})"
             to_insert.extend([
-                f"{' ' * (o_indent + 6)}temp_mask_{mask_id}: # {tag}",
+                f"{' ' * (o_indent + 6)}temp_mask_{safe_mask_id}: # {tag}",
                 f"{' ' * (o_indent + 8)}friendly_name: \"{friendly}\"",
                 f"{' ' * (o_indent + 8)}enabled: true",
-                f"{' ' * (o_indent + 8)}coordinates: \"{polygon}\"",
+                f"{' ' * (o_indent + 8)}coordinates: {polygon}",
             ])
         else:
             to_insert.append(f"{' ' * (o_indent + 6)}- {polygon} # {tag}")
@@ -830,10 +837,10 @@ def _inject_temp_mask(config_text: str, camera: str, polygon: str, mask_id: str,
             if is_dict:
                 friendly = "Temporary Mask"
                 to_insert = [
-                    f"{' ' * m_indent}temp_mask_{mask_id}: # {tag}",
+                    f"{' ' * m_indent}temp_mask_{safe_mask_id}: # {tag}",
                     f"{' ' * (m_indent + 2)}friendly_name: \"{friendly}\"",
                     f"{' ' * (m_indent + 2)}enabled: true",
-                    f"{' ' * (m_indent + 2)}coordinates: \"{polygon}\"",
+                    f"{' ' * (m_indent + 2)}coordinates: {polygon}",
                 ]
             else:
                 to_insert = [f"{' ' * m_indent}- {polygon} # {tag}"]
@@ -845,10 +852,10 @@ def _inject_temp_mask(config_text: str, camera: str, polygon: str, mask_id: str,
             if is_dict:
                 friendly = "Temporary Mask"
                 to_insert.extend([
-                    f"{' ' * (o_indent + 2)}temp_mask_{mask_id}: # {tag}",
+                    f"{' ' * (o_indent + 2)}temp_mask_{safe_mask_id}: # {tag}",
                     f"{' ' * (o_indent + 4)}friendly_name: \"{friendly}\"",
                     f"{' ' * (o_indent + 4)}enabled: true",
-                    f"{' ' * (o_indent + 4)}coordinates: \"{polygon}\"",
+                    f"{' ' * (o_indent + 4)}coordinates: {polygon}",
                 ])
             else:
                 to_insert.append(f"{' ' * (o_indent + 2)}- {polygon} # {tag}")

@@ -131,7 +131,7 @@ cameras:
         self.assertIn("temp_mask_test1234:", updated)
         self.assertIn("friendly_name: \"Temporary Mask (car)\"", updated)
         self.assertIn("enabled: true", updated)
-        self.assertIn(f"coordinates: \"{poly}\"", updated)
+        self.assertIn(f"coordinates: {poly}", updated)
         self.assertNotIn("temp_mask_test1234", updated.split("back_camera:")[1])
 
         parsed = _parse_temp_masks_from_config(updated)
@@ -238,7 +238,7 @@ cameras:
         poly = "0.1,0.1,0.2,0.1,0.2,0.2,0.1,0.2"
         updated = _inject_temp_mask(json_wrapped, "wyze_camera", poly, "jsonmask1", label="car", is_dict=is_dict)
         self.assertIn("temp_mask_jsonmask1:", updated)
-        self.assertIn("coordinates: \"0.1,0.1,0.2,0.1,0.2,0.2,0.1,0.2\"", updated)
+        self.assertIn("coordinates: 0.1,0.1,0.2,0.1,0.2,0.2,0.1,0.2", updated)
 
         parsed = _parse_temp_masks_from_config(updated)
         self.assertEqual(len(parsed), 1)
@@ -305,6 +305,25 @@ version: 0.18-0
         self.assertNotIn("temp_mask_pmask1", cleaned)
         self.assertIn("temp_mask_cmask1", cleaned)
         self.assertIn("Object Mask 1 (car)", cleaned)
+
+    def test_decimal_dot_in_mask_id_sanitized(self):
+        raw_id = "1789218715.393093"
+        poly = "0.688,0.737,0.716,0.737,0.716,0.813,0.688,0.813"
+        v, is_dict = _detect_config_version_and_format(self.config_v18, "wyze_camera")
+        injected = _inject_temp_mask(self.config_v18, "wyze_camera", poly, raw_id, label="person", is_dict=is_dict)
+        # Dot should be sanitized in key name so Frigate pydantic validation passes
+        self.assertIn("temp_mask_1789218715_393093:", injected)
+        self.assertNotIn("temp_mask_1789218715.393093:", injected)
+        self.assertIn(f"coordinates: {poly}", injected)
+
+        # Parse should recover the mask
+        parsed = _parse_temp_masks_from_config(injected)
+        self.assertEqual(len(parsed), 1)
+        self.assertEqual(parsed[0]["mask_id"], raw_id)
+
+        # Clean should remove it using the raw_id
+        cleaned = _clean_config_masks(injected, raw_id)
+        self.assertNotIn("1789218715", cleaned)
 
 
 if __name__ == "__main__":
