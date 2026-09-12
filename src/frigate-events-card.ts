@@ -6,9 +6,9 @@ import { customElement, property, state } from 'lit/decorators.js';
 import { ref } from 'lit/directives/ref.js';
 import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/types';
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
-import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, deleteEvent } from './frigate/api';
+import { getEvents, getEventSnapshotURL, getEventThumbnailURL, signPath, subscribeToEvents, getEventClipURL, getEventHlsURL, deleteEvent } from './frigate/api';
 
-const CARD_VERSION = '2.4.0';
+const CARD_VERSION = '2.4.1';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -2146,6 +2146,7 @@ export class FrigateEventsCard extends LitElement {
       timestamp: true,
       cacheBust: event.end_time || undefined
     });
+    const thumbnailUrl = getEventThumbnailURL(clientId, event.id);
     const duration = this._formatDuration(event.start_time, event.end_time);
     const zones = this._formatZones(event.zones);
 
@@ -2211,7 +2212,7 @@ export class FrigateEventsCard extends LitElement {
                  <source src="${clipUrl}" type="video/mp4">
                  <source src="${hlsUrl}" type="application/x-mpegURL">
                </video>`
-            : `<img src="${snapshotUrl}" alt="${event.label}" />`
+            : `<img src="${snapshotUrl}" alt="${event.label}" onerror="if(!this.src.includes('thumbnail')){this.src='${thumbnailUrl}';}" />`
           }          ${nextBtnHtml}
           <button class="frigate-events-modal-close" title="Close">
             <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
@@ -4171,10 +4172,22 @@ export class FrigateEventsCard extends LitElement {
           src="${snapshotUrl}"
           alt="${event.label}"
           loading="lazy"
-          @error=${(e: Event) => {
+          @error=${async (e: Event) => {
             const img = e.target as HTMLImageElement;
-            if (img && !img.src.includes('/thumbnail/')) {
+            if (!img) return;
+            if (!img.src.includes('thumbnail')) {
               img.src = thumbnailUrl;
+              return;
+            }
+            if (this.hass && !img.src.includes('authSig=')) {
+              try {
+                const signed = await signPath(this.hass, img.src);
+                if (signed && signed !== img.src) {
+                  img.src = signed;
+                }
+              } catch {
+                // Ignore signing errors
+              }
             }
           }}
         />

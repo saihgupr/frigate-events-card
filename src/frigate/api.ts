@@ -24,7 +24,27 @@ export async function getEvents(
  * Get thumbnail URL for an event
  */
 export function getEventThumbnailURL(clientId: string, eventId: string): string {
-    return `/api/frigate/${encodeURIComponent(clientId)}/thumbnail/${encodeURIComponent(eventId)}`;
+    return `/api/frigate/${encodeURIComponent(clientId)}/notifications/${encodeURIComponent(eventId)}/thumbnail.jpg`;
+}
+
+/**
+ * Request Home Assistant to sign a media/API path with an authentication signature (authSig)
+ */
+export async function signPath(
+    hass: HomeAssistant,
+    path: string,
+    expiresSeconds?: number
+): Promise<string> {
+    try {
+        const response = await hass.callWS<{ path: string }>({
+            type: 'auth/sign_path',
+            path,
+            ...(expiresSeconds ? { expires_ticks: expiresSeconds } : {})
+        });
+        return response?.path || path;
+    } catch {
+        return path;
+    }
 }
 
 /**
