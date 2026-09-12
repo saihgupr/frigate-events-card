@@ -220,7 +220,7 @@ Right-clicking (desktop) or long-pressing (touch devices) any event thumbnail op
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/temp_mask_1.png" width="32%" />
-  <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/temp_mask_2.png" width="32%" />
+  <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/temp_mask_4.png" width="32%" />
   <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/temp_mask_3.png" width="32%" />
 </p>
 
