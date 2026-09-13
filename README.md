@@ -232,10 +232,10 @@ Right-clicking (desktop) or long-pressing (touch devices) any event thumbnail op
 </p>
 
 > [!NOTE]
-> **Restart Behavior & Pending Restart Awareness**:
+> **Restart Behavior by Frigate Version**:
 > * **Adding or Updating Masks:** Frigate **automatically restarts** its internal detector process (~1–2 seconds) so false alarms stop immediately.
-> * **Removing or Expired (Timed Out) Masks:** The mask is cleaned from `config.yml` on disk **without restarting Frigate** to prevent dropping live video streams or interrupting daytime recordings.
-> * **Pending Restart Tracker:** The Mask Manager automatically tracks removed masks and displays a **Restart Pending** banner and status badge with a 1-click **Restart Frigate** button so you can apply removals immediately whenever convenient.
+> * **Removing Masks on Frigate 0.18+:** The mask is **instantly disabled** via the Frigate API (`PUT /api/camera/{camera}/set/object_mask/{name}`) and cleaned from `config.yml` — **no detector restart required**. Detection stops the moment you click Remove.
+> * **Removing Masks on Frigate 0.13 and earlier:** The mask is cleaned from `config.yml` on disk without restarting Frigate automatically. A **Pending Restart Tracker** in the Mask Manager displays a 1-click **Restart Frigate** button so you can apply the removal whenever convenient.
 
 #### Setting Up Temporary Masking (Optional Companion Integration)
 
