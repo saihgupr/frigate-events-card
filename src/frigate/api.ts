@@ -60,6 +60,36 @@ export function getEventHlsURL(clientId: string, eventId: string): string {
 }
 
 /**
+ * Get continuous footage dynamic clip MP4 URL for a camera window (Frigate 0.13)
+ */
+export function getVodClipURL(clientId: string, camera: string, startTs: number, endTs: number, frigateUrl?: string): string {
+    const start = Math.floor(startTs);
+    const end = Math.floor(endTs);
+    const encCam = encodeURIComponent(camera);
+    const directBase = frigateUrl ? frigateUrl.replace(/\/$/, '') : '';
+    if (directBase) {
+        return `${directBase}/api/${encCam}/start/${start}/end/${end}/clip.mp4`;
+    }
+    // Standard HA Frigate integration proxy route:
+    return `/api/frigate/${encodeURIComponent(clientId)}/recording/${encCam}/start/${start}/end/${end}`;
+}
+
+/**
+ * Get continuous footage VOD HLS playlist URL for a camera window (Frigate 0.13)
+ */
+export function getVodHlsURL(clientId: string, camera: string, startTs: number, endTs: number, frigateUrl?: string): string {
+    const start = Math.floor(startTs);
+    const end = Math.floor(endTs);
+    const encCam = encodeURIComponent(camera);
+    const directBase = frigateUrl ? frigateUrl.replace(/\/$/, '') : '';
+    if (directBase) {
+        return `${directBase}/vod/${encCam}/start/${start}/end/${end}/index.m3u8`;
+    }
+    return `/api/frigate/${encodeURIComponent(clientId)}/vod/${encCam}/start/${start}/end/${end}/index.m3u8`;
+}
+
+
+/**
  * Subscribe to real-time Frigate events
  */
 export async function subscribeToEvents(
@@ -157,4 +187,30 @@ export async function deleteEvent(
     }
 
     return false;
+}
+
+/**
+ * Get recordings for a camera via Home Assistant WebSocket
+ */
+export async function getRecordings(
+    hass: HomeAssistant,
+    instanceId: string,
+    camera: string,
+    after?: number,
+    before?: number
+): Promise<Array<{ start_time: number; end_time: number; id: string }>> {
+    try {
+        const response = await hass.callWS<string>({
+            type: 'frigate/recordings/get',
+            instance_id: instanceId,
+            camera: camera,
+            after: after ? Math.floor(after) : undefined,
+            before: before ? Math.floor(before) : undefined,
+        });
+        const parsed = typeof response === 'string' ? JSON.parse(response) : response;
+        return Array.isArray(parsed) ? parsed : [];
+    } catch (e) {
+        console.debug('Failed to fetch recordings via WS:', e);
+        return [];
+    }
 }
