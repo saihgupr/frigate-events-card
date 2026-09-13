@@ -8,7 +8,7 @@ import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/t
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, deleteEvent } from './frigate/api';
 
-const CARD_VERSION = '2.4.8';
+const CARD_VERSION = '2.4.12';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -3017,6 +3017,12 @@ export class FrigateEventsCard extends LitElement {
             <span class="mask-manager-count-badge">${totalCount} active</span>
           </div>
           <div class="mask-manager-header-actions">
+            ${pendingMasks.length > 0 ? `
+              <button class="mask-manager-header-restart-btn" data-action="restart-frigate" title="Restart Frigate detector process now">
+                <svg viewBox="0 0 24 24"><path d="M12,4V1L8,5L12,9V6A6,6 0 0,1 18,12C18,13.34 17.56,14.58 16.82,15.58L18.25,17C19.34,15.61 20,13.88 20,12A8,8 0 0,0 12,4M12,18A6,6 0 0,1 6,12C6,10.66 6.44,9.42 7.18,8.42L5.75,7C4.66,8.39 4,10.12 4,12A8,8 0 0,0 12,20V23L16,19L12,15V18Z"/></svg>
+                <span>Restart Frigate</span>
+              </button>
+            ` : ''}
             <button class="frigate-events-modal-close" data-action="close" title="Close">
               <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
             </button>
@@ -3208,7 +3214,7 @@ export class FrigateEventsCard extends LitElement {
           ${filteredPending.length > 0 ? `
             <div class="pending-masks-section">
               <div class="pending-section-title">
-                <span>Removed (Applying...)</span>
+                <span>Removed (Pending Restart)</span>
                 ${filteredPending.length > 1 ? `
                   <button class="mask-section-dismiss-all-btn" data-action="dismiss-all-pending" title="Dismiss all pending restart notifications">
                     Dismiss All
@@ -3306,7 +3312,7 @@ export class FrigateEventsCard extends LitElement {
                           <div class="mask-card-details">
                             <div class="mask-detail-row">
                               <span class="detail-label">Status:</span>
-                              <span class="detail-value" style="color: #94a3b8; font-size: 11px;">Removed — Frigate detector reloading</span>
+                              <span class="detail-value" style="color: #94a3b8; font-size: 11px;">Removed from config (applied on Frigate restart)</span>
                             </div>
                           </div>
                         </div>
@@ -3315,6 +3321,10 @@ export class FrigateEventsCard extends LitElement {
                         <button class="mask-pending-dismiss-action" data-action="dismiss-pending" data-mask-id="${mask.mask_id}" title="Dismiss">
                           <svg viewBox="0 0 24 24"><path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"/></svg>
                           <span>Dismiss</span>
+                        </button>
+                        <button class="mask-pending-restart-action" data-action="restart-frigate" title="Restart Frigate detector process now">
+                          <svg viewBox="0 0 24 24"><path d="M12,4V1L8,5L12,9V6A6,6 0 0,1 18,12C18,13.34 17.56,14.58 16.82,15.58L18.25,17C19.34,15.61 20,13.88 20,12A8,8 0 0,0 12,4M12,18A6,6 0 0,1 6,12C6,10.66 6.44,9.42 7.18,8.42L5.75,7C4.66,8.39 4,10.12 4,12A8,8 0 0,0 12,20V23L16,19L12,15V18Z"/></svg>
+                          <span>Restart Frigate</span>
                         </button>
                       </div>
                     </div>
@@ -3482,7 +3492,7 @@ export class FrigateEventsCard extends LitElement {
         }
       }
       this.dispatchEvent(new CustomEvent('hass-notification', {
-        detail: { message: `Temporary mask #${maskId} removed ${camera ? `for ${camera}` : ''}` },
+        detail: { message: `Temporary mask #${maskId} removed ${camera ? `for ${camera} ` : ''}(restart Frigate to apply)` },
         bubbles: true,
         composed: true,
       }));
@@ -3508,7 +3518,7 @@ export class FrigateEventsCard extends LitElement {
         }
       }
       this.dispatchEvent(new CustomEvent('hass-notification', {
-        detail: { message: 'All temporary masks pruned from Frigate' },
+        detail: { message: 'All temporary masks pruned from Frigate (restart Frigate to apply)' },
         bubbles: true,
         composed: true,
       }));

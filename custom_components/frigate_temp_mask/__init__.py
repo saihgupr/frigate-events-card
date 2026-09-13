@@ -237,6 +237,41 @@ def _box_to_polygon(box: list[float], width: int, height: int, padding: float = 
         return f"{px_min},{py_min},{px_max},{py_min},{px_max},{py_max},{px_min},{py_max}"
 
 
+def _normalize_polygon_string(poly: str, width: int, height: int, target_normalized: bool) -> str:
+    """Ensure coordinate string matches target format (normalized 0.0-1.0 or pixel integers)."""
+    if not poly:
+        return ""
+    parts = [p.strip() for p in poly.split(",") if p.strip()]
+    if not parts:
+        return poly
+    try:
+        vals = [float(p) for p in parts]
+    except ValueError:
+        return poly
+
+    is_currently_normalized = all(0.0 <= v <= 1.0 for v in vals)
+
+    if target_normalized:
+        if is_currently_normalized:
+            return ",".join(f"{round(v, 3)}" for v in vals)
+        else:
+            res = []
+            for i, v in enumerate(vals):
+                scale = width if (i % 2 == 0) else height
+                scale = scale if scale > 0 else 1920
+                res.append(f"{round(min(1.0, max(0.0, v / scale)), 3)}")
+            return ",".join(res)
+    else:
+        if not is_currently_normalized:
+            return ",".join(str(int(round(v))) for v in vals)
+        else:
+            res = []
+            for i, v in enumerate(vals):
+                scale = width if (i % 2 == 0) else height
+                scale = scale if scale > 0 else 1920
+                res.append(str(int(round(min(scale, max(0, v * scale))))))
+            return ",".join(res)
+
 
 def _normalize_raw_config(text: str) -> str:
     """Normalize raw config text.
@@ -329,25 +364,28 @@ def _find_camera_block_bounds(lines: list[str], camera: str) -> tuple[int, int, 
             continue
         indent = len(line) - len(line.lstrip(" "))
 
-        if stripped == "cameras:" or stripped.startswith("cameras:"):
-            in_cameras = True
-            cameras_indent = indent
+        if not in_cameras:
+            if stripped == "cameras:" or stripped.startswith("cameras:"):
+                in_cameras = True
+                cameras_indent = indent
             continue
 
-        if in_cameras:
-            if indent <= cameras_indent:
-                break
-            if camera_start == -1:
-                colon_idx = stripped.find(":")
-                if colon_idx != -1:
-                    key = stripped[:colon_idx].strip()
-                    if key == camera:
-                        camera_start = i
-                        camera_indent = indent
-                        continue
-            else:
-                if indent <= camera_indent:
-                    return camera_start, i, camera_indent
+        # In cameras block: check if we left the cameras section
+        if indent <= cameras_indent:
+            if camera_start != -1:
+                return camera_start, i, camera_indent
+            break
+
+        if camera_start == -1:
+            colon_idx = stripped.find(":")
+            if colon_idx != -1:
+                key = stripped[:colon_idx].strip()
+                if key == camera:
+                    camera_start = i
+                    camera_indent = indent
+        else:
+            if indent <= camera_indent:
+                return camera_start, i, camera_indent
 
     if camera_start != -1:
         return camera_start, len(lines), camera_indent
@@ -432,15 +470,18 @@ def _clean_config_masks(config_text: str, mask_id_to_remove: str = "") -> str:
         for idx, l in enumerate(pass_lines):
             stripped = l.strip()
             indent = len(l) - len(l.lstrip(" "))
-            if indent >= 4 and stripped.endswith(":") and not stripped.startswith("-"):
+            if indent >= 4 and stripped.endswith(":") and not stripped.startswith("-") and not stripped.startswith("#"):
                 # Check if it has any children
                 has_child = False
                 for next_l in pass_lines[idx + 1:]:
-                    if not next_l.strip() or next_l.strip().startswith("#"):
+                    s = next_l.strip()
+                    if not s or s.startswith("#"):
                         continue
                     next_indent = len(next_l) - len(next_l.lstrip(" "))
-                    if next_indent > indent:
-                        has_child = True
+                    if s.startswith("-"):
+                        has_child = (next_indent >= indent)
+                    else:
+                        has_child = (next_indent > indent)
                     break
                 if not has_child:
                     changed = True
@@ -1058,6 +1099,10 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                         cam_name = disc_data.get("camera", "")
                         creation_ts = _parse_mask_timestamp(disc_id)
 
+                        # If mask is pending Frigate restart, do not adopt back into active masks
+                        if disc_id in domain_data.get("pending_restart_masks", {}):
+                            continue
+
                         if disc_id in active:
                             # Already tracked in memory: update camera/label if missing
                             existing = active[disc_id]
@@ -1265,22 +1310,24 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         version_tuple, is_dict = _detect_config_version_and_format(raw_config, camera, version_str)
         use_normalized = version_tuple >= (0, 14) or is_dict
 
-        if not poly_str:
-            # Fetch camera detect stream resolution
-            try:
-                async with session.get(f"{base_url}/api/config", timeout=10) as resp:
-                    if resp.status == 200:
-                        cfg = await resp.json()
-                        detect_cfg = cfg.get("cameras", {}).get(camera, {}).get("detect", {})
-                        width = detect_cfg.get("width", 1920)
-                        height = detect_cfg.get("height", 1080)
-            except Exception as e:
-                _LOGGER.warning("Using fallback resolution 1920x1080 for camera %s: %s", camera, e)
+        # Fetch camera detect stream resolution if needed
+        try:
+            async with session.get(f"{base_url}/api/config", timeout=10) as resp:
+                if resp.status == 200:
+                    cfg = await resp.json()
+                    detect_cfg = cfg.get("cameras", {}).get(camera, {}).get("detect", {})
+                    width = detect_cfg.get("width", 1920)
+                    height = detect_cfg.get("height", 1080)
+        except Exception as e:
+            _LOGGER.warning("Using fallback resolution 1920x1080 for camera %s: %s", camera, e)
 
+        if not poly_str:
             poly_str = _box_to_polygon(box_coords, width, height, padding, normalized=use_normalized)
             if not poly_str:
                 _LOGGER.error("Could not create a temporary mask from invalid box data: %s", box_coords)
                 return
+        else:
+            poly_str = _normalize_polygon_string(poly_str, width, height, target_normalized=use_normalized)
 
         tag = f"# TEMP_MASK_{mask_id}"
         if not label_val and event_data and isinstance(event_data, dict):
@@ -1306,17 +1353,23 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         else:
             # Save and restart Frigate process
             try:
-                # Frigate 0.18 requires ?save_option=query param; 'restart' saves and triggers restart
+                save_url = (
+                    f"{base_url}/api/config/save?save_option=restart"
+                    if version_tuple >= (0, 18)
+                    else f"{base_url}/api/config/save"
+                )
                 async with session.post(
-                    f"{base_url}/api/config/save?save_option=restart",
+                    save_url,
                     data=updated_config.encode("utf-8"),
                     headers={"Content-Type": "text/plain"},
                     timeout=15
                 ) as resp:
-                    resp.raise_for_status()
-
-                # Restart applied all pending changes
-                domain_data["pending_restart_masks"].clear()
+                    if resp.status == 200:
+                        domain_data["pending_restart_masks"].clear()
+                    else:
+                        err_msg = await resp.text()
+                        _LOGGER.error("Failed to save Frigate config during add_mask (status: %s): %s", resp.status, err_msg)
+                        return
             except Exception as e:
                 _LOGGER.error("Failed to save Frigate config: %s", e)
                 return
@@ -1398,19 +1451,23 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
 
             updated_config = _clean_config_masks(raw_config, mask_id)
 
+            version_str = domain_data.get("frigate_version", "")
+            version_tuple, _ = _detect_config_version_and_format(raw_config, version_str=version_str)
+            save_url = (
+                f"{base_url}/api/config/save?save_option=none"
+                if version_tuple >= (0, 18)
+                else f"{base_url}/api/config/save"
+            )
+
             async with session.post(
-                f"{base_url}/api/config/save?save_option=restart",
+                save_url,
                 data=updated_config.encode("utf-8"),
                 headers={"Content-Type": "text/plain"},
                 timeout=15
             ) as save_resp:
                 if save_resp.status == 200:
-                    _LOGGER.info("Removed temporary mask %s (reloaded Frigate detector)", mask_id)
-                    domain_data["pending_restart_masks"].pop(mask_id, None)
-                    domain_data["pending_restart_masks"].pop(safe_mask_id, None)
-                    # Reset audit timestamp so the next sync immediately re-audits Frigate
-                    # config rather than waiting up to 10 minutes, ensuring the mask is
-                    # confirmed gone before the user reopens the mask manager.
+                    _LOGGER.info("Removed temporary mask %s from Frigate config (pending restart)", mask_id)
+                    # Reset audit timestamp so the next sync immediately re-audits Frigate config
                     domain_data["last_config_audit_ts"] = 0.0
                     _update_state()
                 else:
@@ -1449,15 +1506,23 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
 
             updated_config = _clean_config_masks(raw_config)
 
+            version_str = domain_data.get("frigate_version", "")
+            version_tuple, _ = _detect_config_version_and_format(raw_config, version_str=version_str)
+            save_url = (
+                f"{base_url}/api/config/save?save_option=none"
+                if version_tuple >= (0, 18)
+                else f"{base_url}/api/config/save"
+            )
+
             async with session.post(
-                f"{base_url}/api/config/save?save_option=restart",
+                save_url,
                 data=updated_config.encode("utf-8"),
                 headers={"Content-Type": "text/plain"},
                 timeout=15
             ) as save_resp:
                 if save_resp.status == 200:
-                    _LOGGER.info("Pruned all temporary masks (reloaded Frigate detector)")
-                    domain_data["pending_restart_masks"].clear()
+                    _LOGGER.info("Pruned all temporary masks from Frigate config (pending restart)")
+                    domain_data["last_config_audit_ts"] = 0.0
                     _update_state()
                 else:
                     err_msg = await save_resp.text()
@@ -1574,4 +1639,13 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         for timer_unsub in hass.data[DOMAIN].get("timers", {}).values():
             timer_unsub()
         hass.data[DOMAIN]["timers"].clear()
+
+        # Remove registered services so they re-register with updated handlers on reload
+        for svc in [
+            "add_mask", "set_duration", "remove_mask", "prune_all",
+            "restart", "restart_frigate", "sync", "dismiss_pending", "delete_event"
+        ]:
+            hass.services.async_remove(DOMAIN, svc)
+        hass.data[DOMAIN]["services_registered"] = False
+
     return True
