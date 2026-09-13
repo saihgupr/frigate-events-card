@@ -934,11 +934,52 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                     return url.rstrip("/")
         return DEFAULT_FRIGATE_URL
 
+    async def _async_get_frigate_version() -> tuple[int, ...]:
+        """Fetch and cache running Frigate version tuple, e.g. (0, 18, 0)."""
+        cached = domain_data.get("frigate_version")
+        if cached:
+            return cached
+        session = async_get_clientsession(hass)
+        base_url = _get_frigate_base_url()
+        try:
+            async with session.get(f"{base_url}/api/version", timeout=4) as resp:
+                if resp.status == 200:
+                    v_str = await resp.text()
+                    parsed = _parse_frigate_version(v_str)
+                    if parsed != (0, 0):
+                        domain_data["frigate_version"] = parsed
+                        return parsed
+        except Exception as e:
+            _LOGGER.debug("Could not fetch Frigate version via API: %s", e)
+        return (0, 18, 0)
+
+    async def _async_set_runtime_mask_state(camera: str, mask_key: str, state: str = "OFF") -> bool:
+        """Toggle an object mask dynamically in Frigate 0.18+ without restarting."""
+        if not camera or not mask_key:
+            return False
+        session = async_get_clientsession(hass)
+        base_url = _get_frigate_base_url()
+        try:
+            url = f"{base_url}/api/camera/{camera}/set/object_mask/{mask_key}"
+            payload = json.dumps({"value": state.upper()})
+            async with session.put(url, data=payload, headers={"Content-Type": "application/json"}, timeout=5) as resp:
+                if resp.status == 200:
+                    _LOGGER.info("Successfully toggled mask %s to %s for camera %s via API", mask_key, state, camera)
+                    return True
+                else:
+                    _LOGGER.debug("Runtime mask toggle %s returned status %s", mask_key, resp.status)
+        except Exception as e:
+            _LOGGER.debug("Failed to set runtime mask state for %s: %s", mask_key, e)
+        return False
+
     def _update_state():
         active = domain_data.get("active_masks", {})
         pending = domain_data.get("pending_restart_masks", {})
         count = len(active)
         pending_count = len(pending)
+        f_ver = domain_data.get("frigate_version")
+        ver_str = ".".join(str(x) for x in f_ver) if f_ver else "unknown"
+        supports_dyn = f_ver >= (0, 18) if f_ver else False
         hass.states.async_set(
             "sensor.frigate_active_masks",
             str(count),
@@ -949,6 +990,8 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                 "pending_restart_masks": list(pending.values()),
                 "restart_pending": pending_count > 0,
                 "pending_count": pending_count,
+                "frigate_version": ver_str,
+                "supports_dynamic_toggle": supports_dyn,
             }
         )
 
@@ -1367,9 +1410,16 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
             domain_data["timers"][mask_id]()
             del domain_data["timers"][mask_id]
 
+        removed_mask = None
         if mask_id in domain_data["active_masks"]:
             removed_mask = dict(domain_data["active_masks"].pop(mask_id))
             removed_mask["removed_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        
+        frigate_ver = await _async_get_frigate_version()
+        is_v18_or_newer = frigate_ver >= (0, 18)
+
+        # For Frigate 0.13 and earlier, queue for pending restart
+        if not is_v18_or_newer and removed_mask:
             domain_data["pending_restart_masks"][mask_id] = removed_mask
         _update_state()
 
@@ -1380,6 +1430,15 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         dict_key = f"temp_mask_{mask_id}"
         safe_tag = f"TEMP_MASK_{safe_mask_id}"
         safe_dict_key = f"temp_mask_{safe_mask_id}"
+
+        # In Frigate 0.18+, toggle the mask OFF dynamically first so detection stops immediately
+        if is_v18_or_newer:
+            mask_cam = (removed_mask or {}).get("camera", "")
+            # Toggle both raw and sanitized key names to ensure coverage
+            keys_to_toggle = {dict_key, safe_dict_key}
+            if mask_cam:
+                for k in keys_to_toggle:
+                    await _async_set_runtime_mask_state(mask_cam, k, "OFF")
 
         try:
             async with session.get(f"{base_url}/api/config/raw", timeout=10) as resp:
@@ -1396,16 +1455,29 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                 _update_state()
                 return
 
+            # If camera wasn't known from active_masks, attempt to discover it from raw config for toggle
+            if is_v18_or_newer and not (removed_mask or {}).get("camera"):
+                discovered = _parse_temp_masks_from_config(raw_config)
+                for d in discovered:
+                    if d.get("mask_id") in (mask_id, safe_mask_id) and d.get("camera"):
+                        await _async_set_runtime_mask_state(d["camera"], dict_key, "OFF")
+                        await _async_set_runtime_mask_state(d["camera"], safe_dict_key, "OFF")
+                        break
+
             updated_config = _clean_config_masks(raw_config, mask_id)
+            save_option = "save_only" if is_v18_or_newer else "restart"
 
             async with session.post(
-                f"{base_url}/api/config/save?save_option=restart",
+                f"{base_url}/api/config/save?save_option={save_option}",
                 data=updated_config.encode("utf-8"),
                 headers={"Content-Type": "text/plain"},
                 timeout=15
             ) as save_resp:
                 if save_resp.status == 200:
-                    _LOGGER.info("Removed temporary mask %s (reloaded Frigate detector)", mask_id)
+                    if is_v18_or_newer:
+                        _LOGGER.info("Removed temporary mask %s dynamically (saved config without restart)", mask_id)
+                    else:
+                        _LOGGER.info("Removed temporary mask %s (reloaded Frigate detector)", mask_id)
                     domain_data["pending_restart_masks"].pop(mask_id, None)
                     domain_data["pending_restart_masks"].pop(safe_mask_id, None)
                     # Reset audit timestamp so the next sync immediately re-audits Frigate
@@ -1425,12 +1497,26 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
             unsub()
         domain_data["timers"].clear()
 
-        for m_id, m_val in domain_data["active_masks"].items():
+        frigate_ver = await _async_get_frigate_version()
+        is_v18_or_newer = frigate_ver >= (0, 18)
+
+        active_masks_snapshot = dict(domain_data["active_masks"])
+        for m_id, m_val in active_masks_snapshot.items():
             removed_mask = dict(m_val)
             removed_mask["removed_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-            domain_data["pending_restart_masks"][m_id] = removed_mask
+            if not is_v18_or_newer:
+                domain_data["pending_restart_masks"][m_id] = removed_mask
         domain_data["active_masks"].clear()
         _update_state()
+
+        # In Frigate 0.18+, toggle all active masks OFF dynamically
+        if is_v18_or_newer:
+            for m_id, m_val in active_masks_snapshot.items():
+                cam = m_val.get("camera", "")
+                if cam:
+                    safe_m = re.sub(r"[^a-zA-Z0-9_]", "_", m_id)
+                    await _async_set_runtime_mask_state(cam, f"temp_mask_{m_id}", "OFF")
+                    await _async_set_runtime_mask_state(cam, f"temp_mask_{safe_m}", "OFF")
 
         session = async_get_clientsession(hass)
         base_url = _get_frigate_base_url()
@@ -1447,16 +1533,30 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                 _update_state()
                 return
 
+            if is_v18_or_newer:
+                discovered = _parse_temp_masks_from_config(raw_config)
+                for d in discovered:
+                    m_id = d.get("mask_id", "")
+                    cam = d.get("camera", "")
+                    if cam and m_id:
+                        safe_m = re.sub(r"[^a-zA-Z0-9_]", "_", m_id)
+                        await _async_set_runtime_mask_state(cam, f"temp_mask_{m_id}", "OFF")
+                        await _async_set_runtime_mask_state(cam, f"temp_mask_{safe_m}", "OFF")
+
             updated_config = _clean_config_masks(raw_config)
+            save_option = "save_only" if is_v18_or_newer else "restart"
 
             async with session.post(
-                f"{base_url}/api/config/save?save_option=restart",
+                f"{base_url}/api/config/save?save_option={save_option}",
                 data=updated_config.encode("utf-8"),
                 headers={"Content-Type": "text/plain"},
                 timeout=15
             ) as save_resp:
                 if save_resp.status == 200:
-                    _LOGGER.info("Pruned all temporary masks (reloaded Frigate detector)")
+                    if is_v18_or_newer:
+                        _LOGGER.info("Pruned all temporary masks dynamically (saved config without restart)")
+                    else:
+                        _LOGGER.info("Pruned all temporary masks (reloaded Frigate detector)")
                     domain_data["pending_restart_masks"].clear()
                     _update_state()
                 else:
