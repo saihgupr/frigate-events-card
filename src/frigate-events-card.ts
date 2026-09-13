@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.4.22';
+const CARD_VERSION = '2.4.27';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -3567,10 +3567,15 @@ export class FrigateEventsCard extends LitElement {
     const rawPending = (this.hass?.states?.['sensor.frigate_active_masks']?.attributes?.pending_restart_masks as any[]) || [];
     const backendPending = Array.isArray(rawPending) ? rawPending : [];
 
+    const sensorAttrs = this.hass?.states?.['sensor.frigate_active_masks']?.attributes;
+    const supportsDynamic = sensorAttrs?.supports_dynamic_toggle === true;
+
     // Combine local pending and backend pending
     const pendingMap = new Map<string, any>();
-    this._localPendingMasks.forEach(m => pendingMap.set(String(m.mask_id), m));
-    backendPending.forEach(m => pendingMap.set(String(m.mask_id), m));
+    if (!supportsDynamic) {
+      this._localPendingMasks.forEach(m => pendingMap.set(String(m.mask_id), m));
+      backendPending.forEach(m => pendingMap.set(String(m.mask_id), m));
+    }
 
     // Remove any that are currently in activeMasks
     activeMasks.forEach(m => pendingMap.delete(String(m.mask_id)));
@@ -3800,7 +3805,7 @@ export class FrigateEventsCard extends LitElement {
           ${filteredPending.length > 0 ? `
             <div class="pending-masks-section">
               <div class="pending-section-title">
-                <span>Removed (Applying...)</span>
+                <span>Removed</span>
                 ${filteredPending.length > 1 ? `
                   <button class="mask-section-dismiss-all-btn" data-action="dismiss-all-pending" title="Dismiss all pending restart notifications">
                     Dismiss All
@@ -3898,7 +3903,7 @@ export class FrigateEventsCard extends LitElement {
                           <div class="mask-card-details">
                             <div class="mask-detail-row">
                               <span class="detail-label">Status:</span>
-                              <span class="detail-value" style="color: #94a3b8; font-size: 11px;">Removed — Frigate detector reloading</span>
+                              <span class="detail-value" style="color: #94a3b8; font-size: 11px;">Removed</span>
                             </div>
                           </div>
                         </div>
@@ -4055,12 +4060,20 @@ export class FrigateEventsCard extends LitElement {
   private async _executeRemoveMask(maskId: string, camera?: string): Promise<void> {
     if (!this.hass) return;
     try {
-      const activeMasks = (this.hass?.states?.['sensor.frigate_active_masks']?.attributes?.masks as any[]) || [];
+      const sensorAttrs = this.hass?.states?.['sensor.frigate_active_masks']?.attributes;
+      const activeMasks = (sensorAttrs?.masks as any[]) || [];
+      const supportsDynamic = sensorAttrs?.supports_dynamic_toggle === true;
       const existing = activeMasks.find((m: any) => String(m.mask_id) === String(maskId));
-      this._localPendingMasks = [
-        ...this._localPendingMasks.filter(m => String(m.mask_id) !== String(maskId)),
-        existing ? { ...existing, removed_at: new Date().toISOString() } : { mask_id: maskId, camera: camera || 'Camera', removed_at: new Date().toISOString() }
-      ];
+
+      // In Frigate 0.18+, removal is instant without detector restart, so do not queue as pending restart
+      if (supportsDynamic) {
+        this._localPendingMasks = this._localPendingMasks.filter(m => String(m.mask_id) !== String(maskId));
+      } else {
+        this._localPendingMasks = [
+          ...this._localPendingMasks.filter(m => String(m.mask_id) !== String(maskId)),
+          existing ? { ...existing, removed_at: new Date().toISOString() } : { mask_id: maskId, camera: camera || 'Camera', removed_at: new Date().toISOString() }
+        ];
+      }
 
       if (this.hass.callService) {
         try {
@@ -4073,6 +4086,15 @@ export class FrigateEventsCard extends LitElement {
           });
         }
       }
+
+      // Post-call: re-check supports_dynamic_toggle. The backend fetches and caches
+      // the Frigate version during remove_mask, so the sensor may now report true
+      // even if it was false at click time. Clear the pending entry if so.
+      const postAttrs = this.hass?.states?.['sensor.frigate_active_masks']?.attributes;
+      if (postAttrs?.supports_dynamic_toggle === true) {
+        this._localPendingMasks = this._localPendingMasks.filter(m => String(m.mask_id) !== String(maskId));
+      }
+
       this.dispatchEvent(new CustomEvent('hass-notification', {
         detail: { message: `Temporary mask #${maskId} removed ${camera ? `for ${camera}` : ''}` },
         bubbles: true,
@@ -4083,6 +4105,15 @@ export class FrigateEventsCard extends LitElement {
         setTimeout(() => {
           if (this._maskManagerContainer) this._renderMaskManagerContent(this._maskManagerContainer);
         }, 300);
+        // Second pass: by 600ms HA state has definitely propagated.
+        // If supports_dynamic_toggle is true (0.18+), ensure no pending entry lingers.
+        setTimeout(() => {
+          const lateAttrs = this.hass?.states?.['sensor.frigate_active_masks']?.attributes;
+          if (lateAttrs?.supports_dynamic_toggle === true) {
+            this._localPendingMasks = this._localPendingMasks.filter(m => String(m.mask_id) !== String(maskId));
+            if (this._maskManagerContainer) this._renderMaskManagerContent(this._maskManagerContainer);
+          }
+        }, 600);
       }
     } catch (err) {
       console.error('Failed to remove mask:', err);

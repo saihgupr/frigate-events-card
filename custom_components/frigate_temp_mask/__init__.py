@@ -923,6 +923,9 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
     domain_data.setdefault("services_registered", False)
     domain_data.setdefault("unsub_sync", None)
     domain_data.setdefault("last_config_audit_ts", 0.0)
+    # Optimistic default: assume modern Frigate (0.18+) so supports_dynamic_toggle starts
+    # as true. The real version is fetched on the first sync and will override this.
+    domain_data.setdefault("frigate_version", (0, 18, 0))
 
     def _get_frigate_base_url() -> str:
         # Check if Frigate integration data is available
