@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.4.30] - 2026-09-17
+- Added: **Timeline & Scrubber (Frigate 0.13 VOD)** — Stream continuous video recordings for any time window directly in a dedicated modal player with an interactive visual scrubber track, color-coded event markers, quick jump intervals (`-15m`, `-1h`, `-3h`, `-12h`, `Start of Day`), and variable playback speeds.
+- Changed: Renamed "Continuous Footage Timeline" to **"Timeline"** throughout the interface and context menus.
+- Changed: Enabled Timeline by default (`show_timeline: true`, alias `timeline: true`), with an option to turn it off in configuration.
+- Added: Carousel Click to Timeline — Clicking an event thumbnail on the carousel now opens the event directly in the Timeline window centered on the detection timestamp (when Timeline and video playback are enabled).
+- Added: Preserved snapshot details modal when video playback is disabled (`video: false`) or via the right-click/long-press context menu (**View Details**).
+- Added: `timeline_on_click` config option (default: `true`) to allow configuring card click behavior independently from Timeline availability in context menus.
+
 ## [2.4.0] - 2026-09-12
 - Added: Right-click (desktop) and long-press (mobile/touch) context menu with **Delete Event** to permanently remove events, snapshots, and recordings from Frigate directly from the dashboard.
 - Added: Dynamic Temporary False-Positive Masking — turn false alerts (parked vehicles, spiderwebs, shadows) into auto-padded polygon masks with a single click and customizable duration presets (1h to 7d or custom hours).
