@@ -24,7 +24,8 @@ export async function getEvents(
  * Get thumbnail URL for an event
  */
 export function getEventThumbnailURL(clientId: string, eventId: string): string {
-    return `/api/frigate/${encodeURIComponent(clientId)}/thumbnail/${encodeURIComponent(eventId)}`;
+    const prefix = clientId ? `/api/frigate/${encodeURIComponent(clientId)}` : '/api/frigate';
+    return `${prefix}/notifications/${encodeURIComponent(eventId)}/thumbnail.jpg`;
 }
 
 /**

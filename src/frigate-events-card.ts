@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.4.30';
+const CARD_VERSION = '2.4.31';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -2669,6 +2669,8 @@ export class FrigateEventsCard extends LitElement {
       timestamp: true,
       cacheBust: event.end_time || undefined
     });
+    const thumbnailUrl = getEventThumbnailURL(clientId, event.id);
+    const modalImgUrl = event.has_snapshot !== false ? snapshotUrl : thumbnailUrl;
     const duration = this._formatDuration(event.start_time, event.end_time);
     const zones = this._formatZones(event.zones);
 
@@ -2734,7 +2736,7 @@ export class FrigateEventsCard extends LitElement {
                  <source src="${clipUrl}" type="video/mp4">
                  <source src="${hlsUrl}" type="application/x-mpegURL">
                </video>`
-            : `<img src="${snapshotUrl}" alt="${event.label}" />`
+            : `<img src="${modalImgUrl}" alt="${event.label}" onerror="if(!this.dataset.fallback){this.dataset.fallback='1';this.src='${thumbnailUrl}';}" />`
           }          ${nextBtnHtml}
           <button class="frigate-events-modal-close" title="Close">
             <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
@@ -5791,6 +5793,7 @@ export class FrigateEventsCard extends LitElement {
     const hlsUrl = getEventHlsURL(clientId, event.id) + timeParam;
 
     const thumbnailUrl = getEventThumbnailURL(clientId, event.id);
+    const initialUrl = event.has_snapshot !== false ? snapshotUrl : thumbnailUrl;
 
     return html`
       <div class="event"
@@ -5805,12 +5808,13 @@ export class FrigateEventsCard extends LitElement {
         style="position: relative;"
       >
         <img
-          src="${snapshotUrl}"
+          src="${initialUrl}"
           alt="${event.label}"
           loading="lazy"
           @error=${(e: Event) => {
             const img = e.target as HTMLImageElement;
-            if (img && !img.src.includes('/thumbnail/')) {
+            if (img && !img.dataset.fallback) {
+              img.dataset.fallback = '1';
               img.src = thumbnailUrl;
             }
           }}
