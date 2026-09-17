@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.4.27';
+const CARD_VERSION = '2.4.30';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -86,8 +86,10 @@ interface FrigateEventsCardConfig extends LovelaceCardConfig {
   // Temporary false-positive masking options
   show_temp_mask?: boolean;         // default: true
   temp_mask_duration?: string;      // default: '24:00:00'
-  // Continuous footage timeline options
+  // Timeline options
   show_timeline?: boolean;          // default: true
+  timeline?: boolean;               // alias for show_timeline: default: true
+  timeline_on_click?: boolean;      // default: true (when timeline is on and video is enabled)
   timeline_default_window_hours?: number; // default: 1
   timeline_event_seek_offset?: number | Record<string, number>;    // default: 0 (seconds added/subtracted, e.g. -26 or { car: -26, person: -10 })
 }
@@ -108,6 +110,8 @@ const DEFAULT_CONFIG: Partial<FrigateEventsCardConfig> = {
   show_temp_mask: true,
   temp_mask_duration: '24:00:00',
   show_timeline: true,
+  timeline: true,
+  timeline_on_click: true,
   timeline_default_window_hours: 1,
   timeline_event_seek_offset: 0,
   title: 'Frigate Events',
@@ -948,9 +952,27 @@ export class FrigateEventsCard extends LitElement {
     this._loadEvents();
   }
 
+  private _isTimelineEnabled(): boolean {
+    if (this._config?.show_timeline === false) return false;
+    if (this._config?.timeline === false) return false;
+    return true;
+  }
+
+  private _shouldOpenTimelineOnEventClick(): boolean {
+    if (!this._isTimelineEnabled()) return false;
+    if (this._config?.timeline_on_click === false) return false;
+    // only if video playing is enabled, instead of picture
+    if (this._config?.video === false) return false;
+    return true;
+  }
+
   private _handleEventClick(event: FrigateEvent): void {
     if (this._didLongPress) {
       this._didLongPress = false;
+      return;
+    }
+    if (this._shouldOpenTimelineOnEventClick()) {
+      this._showTimelineModal(event.camera, event.start_time, event);
       return;
     }
     this._selectedEvent = event;
@@ -2461,6 +2483,7 @@ export class FrigateEventsCard extends LitElement {
         width: 14px;
         height: 14px;
         fill: currentColor;
+        pointer-events: none;
       }
 
       .timeline-speed-controls {
@@ -2736,8 +2759,8 @@ export class FrigateEventsCard extends LitElement {
               <div class="frigate-events-modal-time">${rightLine1}</div>
               ${showZones && zones ? `<div class="frigate-events-modal-zones">${zones}</div>` : ''}
               ${showDuration ? `<div class="frigate-events-modal-duration">${duration}</div>` : ''}
-              ${this._config?.show_timeline !== false ? `
-                <button class="frigate-events-modal-timeline-btn" data-action="open-timeline" title="View in Continuous Timeline">
+              ${this._isTimelineEnabled() ? `
+                <button class="frigate-events-modal-timeline-btn" data-action="open-timeline" title="View in Timeline">
                   <svg viewBox="0 0 24 24"><path d="M12,20A8,8 0 0,0 20,12A8,8 0 0,0 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,2C6.47,2 2,6.48 2,12A10,10 0 0,1 12,2M12.5,7V12.25L17,14.92L16.25,16.15L11,13V7H12.5Z"/></svg>
                   <span>Timeline</span>
                 </button>
@@ -3051,7 +3074,7 @@ export class FrigateEventsCard extends LitElement {
         <svg viewBox="0 0 24 24"><path d="M12,9A3,3 0 0,0 9,12A3,3 0 0,0 12,15A3,3 0 0,0 15,12A3,3 0 0,0 12,9M12,17A5,5 0 0,1 7,12A5,5 0 0,1 12,7A5,5 0 0,1 17,12A5,5 0 0,1 12,7M12,4.5C7,4.5 2.73,7.61 1,12C2.73,16.39 7,19.5 12,19.5C17,19.5 21.27,16.39 23,12C21.27,7.61 17,4.5 12,4.5Z"/></svg>
         <span>View Details</span>
       </button>
-      ${this._config?.show_timeline !== false ? `
+      ${this._isTimelineEnabled() ? `
       <button class="frigate-events-context-item" data-action="view-timeline">
         <svg viewBox="0 0 24 24"><path d="M12,20A8,8 0 0,0 20,12A8,8 0 0,0 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,2C6.47,2 2,6.48 2,12A10,10 0 0,1 12,2M12.5,7V12.25L17,14.92L16.25,16.15L11,13V7H12.5Z"/></svg>
         <span>View in Timeline</span>
@@ -3142,7 +3165,8 @@ export class FrigateEventsCard extends LitElement {
     menu.querySelector('[data-action="view"]')?.addEventListener('click', (e) => {
       e.stopPropagation();
       this._closeContextMenu();
-      this._handleEventClick(event);
+      this._selectedEvent = event;
+      this._showModal();
     });
 
     menu.querySelector('[data-action="view-timeline"]')?.addEventListener('click', (e) => {
@@ -3252,7 +3276,7 @@ export class FrigateEventsCard extends LitElement {
     menu.className = 'frigate-events-context-menu';
 
     menu.innerHTML = `
-      ${this._config?.show_timeline !== false ? `
+      ${this._isTimelineEnabled() ? `
       <button class="frigate-events-context-item" data-action="live-timeline">
         <svg viewBox="0 0 24 24"><path d="M12,20A8,8 0 0,0 20,12A8,8 0 0,0 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,2C6.47,2 2,6.48 2,12A10,10 0 0,1 12,2M12.5,7V12.25L17,14.92L16.25,16.15L11,13V7H12.5Z"/></svg>
         <span>View in Timeline</span>
@@ -4203,15 +4227,6 @@ export class FrigateEventsCard extends LitElement {
      Continuous Footage Timeline Scrubber & Player Modal (Frigate 0.13)
      ───────────────────────────────────────────────────────────── */
 
-  private _getEventDetectedTimestamp(event?: FrigateEvent): number {
-    if (!event) return 0;
-    const pathData = this._getValidPathData(event);
-    if (pathData.length > 0 && typeof pathData[0][1] === 'number' && pathData[0][1] > 0) {
-      return pathData[0][1];
-    }
-    return event.start_time || 0;
-  }
-
   private _getEventSeekOffset(event?: FrigateEvent): number {
     const raw = this._config?.timeline_event_seek_offset;
     if (raw === undefined || raw === null) return 0;
@@ -4239,12 +4254,10 @@ export class FrigateEventsCard extends LitElement {
 
     let seekOffset = this._getEventSeekOffset(initialEvent);
 
-    let baseDetectionTs = 0;
-    if (initialEvent) {
-      baseDetectionTs = this._getEventDetectedTimestamp(initialEvent);
-    }
-    const baseEventTs = initialTimestamp && initialTimestamp > 0 ? initialTimestamp : (Date.now() / 1000);
-    const baseTargetTs = baseDetectionTs > 0 ? baseDetectionTs : baseEventTs;
+    const baseEventTs = (initialEvent && initialEvent.start_time)
+      ? initialEvent.start_time
+      : (initialTimestamp && initialTimestamp > 0 ? initialTimestamp : (Date.now() / 1000));
+    const baseTargetTs = baseEventTs;
     let targetSeekTs = initialTimestamp && initialTimestamp > 0 ? (baseTargetTs + seekOffset) : baseTargetTs;
 
     // Center the event in window or place it near the end
@@ -4268,8 +4281,7 @@ export class FrigateEventsCard extends LitElement {
         const matched = this._timelineEvents.find(e => Math.abs((e.start_time || 0) - initialTimestamp) < 2);
         if (matched) {
           seekOffset = this._getEventSeekOffset(matched);
-          const detected = this._getEventDetectedTimestamp(matched);
-          const base = detected > 0 ? detected : (matched.start_time || initialTimestamp);
+          const base = matched.start_time || initialTimestamp;
           targetSeekTs = base + seekOffset;
         }
       }
@@ -4294,6 +4306,27 @@ export class FrigateEventsCard extends LitElement {
       if (e.key === 'Escape') {
         this._removeTimelineModal();
         window.removeEventListener('keydown', onKeyDown);
+      } else if (e.code === 'Space' || e.key === ' ') {
+        const target = e.target as HTMLElement | null;
+        if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+          return;
+        }
+        e.preventDefault();
+        if (!this._timelineVideoEl) return;
+        if (this._timelinePlaybackRate > 16) {
+          if (this._timelineSpeedInterval) {
+            this._clearTimelineSpeedInterval();
+          } else {
+            this._applyTimelinePlaybackRate(this._timelinePlaybackRate);
+          }
+        } else {
+          if (this._timelineVideoEl.paused) {
+            this._timelineVideoEl.play().catch(() => {});
+          } else {
+            this._timelineVideoEl.pause();
+          }
+        }
+        this._updateTimelinePlayheadUI();
       }
     };
     window.addEventListener('keydown', onKeyDown);
@@ -4306,8 +4339,7 @@ export class FrigateEventsCard extends LitElement {
       const matched = this._timelineEvents.find(e => Math.abs((e.start_time || 0) - initialTimestamp) < 2);
       if (matched) {
         seekOffset = this._getEventSeekOffset(matched);
-        const detected = this._getEventDetectedTimestamp(matched);
-        const base = detected > 0 ? detected : (matched.start_time || initialTimestamp);
+        const base = matched.start_time || initialTimestamp;
         targetSeekTs = base + seekOffset;
       }
     }
@@ -4451,10 +4483,14 @@ export class FrigateEventsCard extends LitElement {
     }
     let videoSeconds = 0;
     for (const rec of this._timelineRecordings) {
-      if (rec.end_time <= targetTs) {
-        videoSeconds += (rec.end_time - rec.start_time);
-      } else if (rec.start_time < targetTs) {
-        videoSeconds += Math.max(0, targetTs - rec.start_time);
+      const recStart = Math.max(this._timelineStartTs, rec.start_time);
+      const recEnd = Math.min(this._timelineEndTs, rec.end_time);
+      if (recEnd <= recStart) continue;
+
+      if (recEnd <= targetTs) {
+        videoSeconds += (recEnd - recStart);
+      } else if (recStart < targetTs) {
+        videoSeconds += Math.max(0, targetTs - recStart);
         return videoSeconds;
       } else {
         return videoSeconds;
@@ -4469,14 +4505,18 @@ export class FrigateEventsCard extends LitElement {
     }
     let accumulated = 0;
     for (const rec of this._timelineRecordings) {
-      const dur = rec.end_time - rec.start_time;
+      const recStart = Math.max(this._timelineStartTs, rec.start_time);
+      const recEnd = Math.min(this._timelineEndTs, rec.end_time);
+      if (recEnd <= recStart) continue;
+
+      const dur = recEnd - recStart;
       if (accumulated + dur >= videoOffset) {
-        return rec.start_time + (videoOffset - accumulated);
+        return recStart + (videoOffset - accumulated);
       }
       accumulated += dur;
     }
     return this._timelineRecordings.length > 0
-      ? this._timelineRecordings[this._timelineRecordings.length - 1].end_time
+      ? Math.min(this._timelineEndTs, this._timelineRecordings[this._timelineRecordings.length - 1].end_time)
       : (this._timelineStartTs + videoOffset);
   }
 
@@ -4554,6 +4594,9 @@ export class FrigateEventsCard extends LitElement {
     video.onloadeddata = hideLoading;
     video.onloadedmetadata = hideLoading;
     video.oncanplay = hideLoading;
+    video.onplay = () => {
+      this._updateTimelinePlayheadUI();
+    };
     video.onplaying = () => {
       if (loadingEl) loadingEl.style.display = 'none';
       this._updateTimelinePlayheadUI();
@@ -4678,9 +4721,14 @@ export class FrigateEventsCard extends LitElement {
       const isPaused = this._timelinePlaybackRate > 16
         ? !this._timelineSpeedInterval
         : video.paused;
-      playPauseBtn.innerHTML = isPaused
-        ? `<svg viewBox="0 0 24 24"><path d="M8,5.14V19.14L19,12.14L8,5.14Z"/></svg>`
-        : `<svg viewBox="0 0 24 24"><path d="M14,19H18V5H14M6,19H10V5H6V19Z"/></svg>`;
+      const stateStr = isPaused ? 'paused' : 'playing';
+      if (playPauseBtn.getAttribute('data-play-state') !== stateStr) {
+        playPauseBtn.setAttribute('data-play-state', stateStr);
+        playPauseBtn.setAttribute('title', isPaused ? 'Play' : 'Pause');
+        playPauseBtn.innerHTML = isPaused
+          ? `<svg viewBox="0 0 24 24"><path d="M8,5.14V19.14L19,12.14L8,5.14Z"/></svg>`
+          : `<svg viewBox="0 0 24 24"><path d="M14,19H18V5H14M6,19H10V5H6V19Z"/></svg>`;
+      }
     }
   }
 
@@ -4693,22 +4741,20 @@ export class FrigateEventsCard extends LitElement {
     if (windowDuration <= 0) return;
 
     eventsLayer.innerHTML = this._timelineEvents.map(ev => {
-      const detectedStart = this._getEventDetectedTimestamp(ev);
-      const start = detectedStart > 0 ? detectedStart : (ev.start_time || 0);
+      const start = ev.start_time || 0;
       const end = ev.end_time || (start + 30);
       const startPct = Math.max(0, Math.min(100, ((start - this._timelineStartTs) / windowDuration) * 100));
       const endPct = Math.max(0, Math.min(100, ((end - this._timelineStartTs) / windowDuration) * 100));
       const widthPct = Math.max(0.6, endPct - startPct);
       const labelClass = (ev.label || 'event').toLowerCase();
       const timeStr = this._formatTime(start);
-      const title = `${(ev.label || 'Event').toUpperCase()} detected at ${timeStr}`;
+      const title = `${(ev.label || 'Event').toUpperCase()} at ${timeStr}`;
 
       return `
         <div
           class="timeline-event-marker ${labelClass}"
           data-event-id="${ev.id}"
-          data-event-start="${ev.start_time || 0}"
-          data-event-detected="${detectedStart}"
+          data-event-start="${start}"
           title="${title}"
           style="left: ${startPct}%; width: ${widthPct}%;"
         ></div>
@@ -4721,9 +4767,8 @@ export class FrigateEventsCard extends LitElement {
         e.stopPropagation();
         const eventId = (marker as HTMLElement).getAttribute('data-event-id');
         const ev = this._timelineEvents.find(item => item.id === eventId);
-        const detected = ev ? this._getEventDetectedTimestamp(ev) : parseFloat((marker as HTMLElement).getAttribute('data-event-detected') || '0');
         const start = (ev && ev.start_time) ? ev.start_time : parseFloat((marker as HTMLElement).getAttribute('data-event-start') || '0');
-        const baseTs = detected > 0 ? detected : start;
+        const baseTs = start;
         const seekOffset = this._getEventSeekOffset(ev);
         if (baseTs > 0 && this._timelineVideoEl) {
           const targetTs = Math.max(this._timelineStartTs, Math.min(this._timelineEndTs, baseTs + seekOffset));
@@ -4782,8 +4827,8 @@ export class FrigateEventsCard extends LitElement {
         <div class="timeline-modal-header">
           <div class="timeline-modal-header-left">
             <h3 class="timeline-modal-title">
-              <svg viewBox="0 0 24 24"><path d="M12,20A8,8 0 0,0 20,12A8,8 0 0,0 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,2C6.47,2 2,6.48 2,12A10,10 0 0,1 12,2M12.5,7V12.25L17,14.92L16.25,16.15L11,13V7H12.5Z"/></svg>
-              <span>Continuous Footage Timeline</span>
+              <svg viewBox="0 0 24 24"><path d="M12,20A8,8 0 0,0 20,12A8,8 0 0,0 12,4A8,8 0 0,0 4,12A8,8 0 0,0 4,12A8,8 0 0,0 12,20M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,2C6.47,2 2,6.48 2,12A10,10 0 0,1 12,2M12.5,7V12.25L17,14.92L16.25,16.15L11,13V7H12.5Z"/></svg>
+              <span>Timeline</span>
             </h3>
             <span class="timeline-camera-badge">${this._formatCameraName(currentCamera)}</span>
           </div>
@@ -5587,7 +5632,7 @@ export class FrigateEventsCard extends LitElement {
     let renderedEvents = eventsToShow.map(event => this._renderEvent(event));
     const hasTempMask = !!(this._config?.show_temp_mask !== false &&
       (this.hass?.services?.['frigate_temp_mask'] || this.hass?.states?.['sensor.frigate_active_masks']));
-    const hasTimeline = this._config?.show_timeline !== false;
+    const hasTimeline = this._isTimelineEnabled();
     let renderedPlaceholders = Array(placeholderCount).fill(0).map(() =>
       html`<div
         class="placeholder"
