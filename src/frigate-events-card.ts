@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.4.37';
+const CARD_VERSION = '2.4.38';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -190,6 +190,8 @@ export class FrigateEventsCard extends LitElement {
   private _liveTouchStartX?: number;
   private _liveTouchStartY?: number;
   private _didLongPress = false;
+  private _boundFullscreenHandler?: () => void;
+  private _cursorHideTimeout?: ReturnType<typeof setTimeout>;
 
   // Timeline modal state
   private _timelineContainer?: HTMLDivElement;
@@ -298,6 +300,7 @@ export class FrigateEventsCard extends LitElement {
     this._setupVisibilityHandler();
     this._setupPolling();
     this._setupLiveView();
+    this._setupFullscreenListener();
   }
 
   protected updated(changedProps: PropertyValues): void {
@@ -340,6 +343,9 @@ export class FrigateEventsCard extends LitElement {
       if (!this._intersectionObserver) {
         this._setupLiveView();
       }
+      if (!this._boundFullscreenHandler) {
+        this._setupFullscreenListener();
+      }
     }
   }
 
@@ -360,6 +366,15 @@ export class FrigateEventsCard extends LitElement {
     if (this._boundVisibilityHandler) {
       document.removeEventListener('visibilitychange', this._boundVisibilityHandler);
       this._boundVisibilityHandler = undefined;
+    }
+    if (this._boundFullscreenHandler) {
+      document.removeEventListener('fullscreenchange', this._boundFullscreenHandler);
+      document.removeEventListener('webkitfullscreenchange', this._boundFullscreenHandler);
+      this._boundFullscreenHandler = undefined;
+    }
+    if (this._cursorHideTimeout) {
+      clearTimeout(this._cursorHideTimeout);
+      this._cursorHideTimeout = undefined;
     }
     // Tear down WebRTC peer connection and IntersectionObserver
     this._teardownWebRTC();
@@ -766,6 +781,104 @@ export class FrigateEventsCard extends LitElement {
   }
 
   /**
+   * Check if live view is currently displayed in fullscreen.
+   */
+  private _isLiveViewFullscreen(container?: HTMLElement | null): boolean {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const fsDoc = document as any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const shadowDoc = this.shadowRoot as any;
+    const target = container || (this.renderRoot?.querySelector('.live-view-container') as HTMLElement | null);
+    const videoEl = this._liveVideoEl || target?.querySelector('video');
+    return !!(
+      fsDoc.fullscreenElement ||
+      fsDoc.webkitFullscreenElement ||
+      fsDoc.mozFullScreenElement ||
+      fsDoc.msFullscreenElement ||
+      shadowDoc?.fullscreenElement ||
+      shadowDoc?.webkitFullscreenElement ||
+      (videoEl as any)?.webkitDisplayingFullscreen ||
+      target?.matches?.(':fullscreen') ||
+      target?.matches?.(':-webkit-full-screen')
+    );
+  }
+
+  /**
+   * Listen for document fullscreenchange to clean up cursor state when exiting fullscreen (e.g. via Esc key).
+   */
+  private _setupFullscreenListener(): void {
+    if (this._boundFullscreenHandler) return;
+    this._boundFullscreenHandler = () => this._handleFullscreenChange();
+    document.addEventListener('fullscreenchange', this._boundFullscreenHandler);
+    document.addEventListener('webkitfullscreenchange', this._boundFullscreenHandler);
+  }
+
+  private _handleFullscreenChange(): void {
+    const container = this.renderRoot?.querySelector('.live-view-container') as HTMLElement | null;
+    if (!this._isLiveViewFullscreen(container)) {
+      if (container) {
+        container.classList.remove('hide-cursor');
+      }
+      if (this._cursorHideTimeout) {
+        clearTimeout(this._cursorHideTimeout);
+        this._cursorHideTimeout = undefined;
+      }
+    } else if (container) {
+      if (this._cursorHideTimeout) {
+        clearTimeout(this._cursorHideTimeout);
+      }
+      this._cursorHideTimeout = setTimeout(() => {
+        if (this._isLiveViewFullscreen(container)) {
+          container.classList.add('hide-cursor');
+        }
+      }, 2500);
+    }
+  }
+
+  /**
+   * Handle mouse move over live view to reveal cursor and reset auto-hide timeout when in fullscreen.
+   */
+  private _handleLiveViewMouseMove(e: MouseEvent): void {
+    const container = e.currentTarget as HTMLElement;
+    if (!this._isLiveViewFullscreen(container)) {
+      if (container.classList.contains('hide-cursor')) {
+        container.classList.remove('hide-cursor');
+      }
+      if (this._cursorHideTimeout) {
+        clearTimeout(this._cursorHideTimeout);
+        this._cursorHideTimeout = undefined;
+      }
+      return;
+    }
+
+    if (container.classList.contains('hide-cursor')) {
+      container.classList.remove('hide-cursor');
+    }
+    if (this._cursorHideTimeout) {
+      clearTimeout(this._cursorHideTimeout);
+    }
+    this._cursorHideTimeout = setTimeout(() => {
+      if (this._isLiveViewFullscreen(container)) {
+        container.classList.add('hide-cursor');
+      }
+    }, 2500);
+  }
+
+  /**
+   * Handle mouse leaving the live view container.
+   */
+  private _handleLiveViewMouseLeave(): void {
+    const container = this.renderRoot?.querySelector('.live-view-container') as HTMLElement | null;
+    if (container) {
+      container.classList.remove('hide-cursor');
+    }
+    if (this._cursorHideTimeout) {
+      clearTimeout(this._cursorHideTimeout);
+      this._cursorHideTimeout = undefined;
+    }
+  }
+
+  /**
    * Handle clicking the live view video to toggle fullscreen.
    */
   private _handleLiveViewClick(e: Event): void {
@@ -776,24 +889,16 @@ export class FrigateEventsCard extends LitElement {
     const container = e.currentTarget as HTMLElement;
     const videoEl = this._liveVideoEl || container?.querySelector('video');
 
-    // Check if element or document is currently fullscreen
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const fsDoc = document as any;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const shadowDoc = this.shadowRoot as any;
-    const isFullscreen = !!(
-      fsDoc.fullscreenElement ||
-      fsDoc.webkitFullscreenElement ||
-      fsDoc.mozFullScreenElement ||
-      fsDoc.msFullscreenElement ||
-      shadowDoc?.fullscreenElement ||
-      shadowDoc?.webkitFullscreenElement ||
-      (videoEl as any)?.webkitDisplayingFullscreen ||
-      container?.matches?.(':fullscreen') ||
-      container?.matches?.(':-webkit-full-screen')
-    );
+    const isFullscreen = this._isLiveViewFullscreen(container);
 
     if (isFullscreen) {
+      container?.classList.remove('hide-cursor');
+      if (this._cursorHideTimeout) {
+        clearTimeout(this._cursorHideTimeout);
+        this._cursorHideTimeout = undefined;
+      }
       if (document.exitFullscreen) {
         document.exitFullscreen().catch(() => {});
       } else if (fsDoc.webkitExitFullscreen) {
@@ -807,6 +912,16 @@ export class FrigateEventsCard extends LitElement {
       }
       return;
     }
+
+    // Schedule auto-hiding cursor after 2.5 seconds of inactivity once entered
+    if (this._cursorHideTimeout) {
+      clearTimeout(this._cursorHideTimeout);
+    }
+    this._cursorHideTimeout = setTimeout(() => {
+      if (this._isLiveViewFullscreen(container)) {
+        container.classList.add('hide-cursor');
+      }
+    }, 2500);
 
     // Request fullscreen on the container so click events are captured to exit fullscreen
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -6087,6 +6202,8 @@ export class FrigateEventsCard extends LitElement {
         class="live-view-container"
         style="aspect-ratio: ${aspectRatio};"
         @click=${(e: Event) => this._handleLiveViewClick(e)}
+        @mousemove=${(e: MouseEvent) => this._handleLiveViewMouseMove(e)}
+        @mouseleave=${() => this._handleLiveViewMouseLeave()}
         @contextmenu=${(e: MouseEvent) => this._handleLiveViewContextMenu(e)}
         @touchstart=${(e: TouchEvent) => this._handleLiveViewTouchStart(e)}
         @touchmove=${(e: TouchEvent) => this._handleLiveViewTouchMove(e)}
@@ -6418,6 +6535,13 @@ export class FrigateEventsCard extends LitElement {
         align-items: center;
         justify-content: center;
         cursor: pointer;
+      }
+
+      .live-view-container:fullscreen.hide-cursor,
+      .live-view-container:-webkit-full-screen.hide-cursor,
+      .live-view-container:fullscreen.hide-cursor *,
+      .live-view-container:-webkit-full-screen.hide-cursor * {
+        cursor: none !important;
       }
 
       .live-view-container:fullscreen .live-view-video,
