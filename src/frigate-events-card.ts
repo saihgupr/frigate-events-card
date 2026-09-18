@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.4.32';
+const CARD_VERSION = '2.4.33';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -2325,6 +2325,17 @@ export class FrigateEventsCard extends LitElement {
         pointer-events: none;
       }
 
+      .timeline-player-freeze {
+        position: absolute;
+        inset: 0;
+        background-size: contain;
+        background-repeat: no-repeat;
+        background-position: center;
+        pointer-events: none;
+        display: none;
+        z-index: 2;
+      }
+
       .timeline-player-loading {
         position: absolute;
         inset: 0;
@@ -4278,7 +4289,7 @@ export class FrigateEventsCard extends LitElement {
     }
 
     if (this._timelineContainer) {
-      this._renderTimelineContent(this._timelineContainer);
+      this._updateTimelineWindowUI();
       await this._fetchTimelineEvents();
       if (!initialEvent && initialTimestamp && initialTimestamp > 0) {
         const matched = this._timelineEvents.find(e => Math.abs((e.start_time || 0) - initialTimestamp) < 2);
@@ -4436,7 +4447,7 @@ export class FrigateEventsCard extends LitElement {
       const container = this._timelineContainer;
       if (!container) return;
 
-      this._renderTimelineContent(container);
+      this._updateTimelineWindowUI();
       await this._fetchTimelineEvents();
       this._updateTimelineScrubberEvents();
       this._loadTimelineVideo(this._timelineStartTs);
@@ -4622,6 +4633,22 @@ export class FrigateEventsCard extends LitElement {
     const video = this._timelineContainer.querySelector('video.timeline-video') as HTMLVideoElement | null;
     if (!video || !this._timelineCamera) return;
 
+    // If transitioning from an active video, preserve last frame to eliminate black flash
+    const freezeEl = this._timelineContainer.querySelector('.timeline-player-freeze') as HTMLElement | null;
+    if (freezeEl && video.videoWidth > 0 && video.videoHeight > 0) {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          freezeEl.style.backgroundImage = `url(${canvas.toDataURL('image/jpeg', 0.85)})`;
+          freezeEl.style.display = 'block';
+        }
+      } catch (_) {}
+    }
+
     // Destroy any existing HLS instance
     if (this._timelineHls) {
       this._timelineHls.destroy();
@@ -4674,6 +4701,10 @@ export class FrigateEventsCard extends LitElement {
     let initialPlayStarted = false;
     const hideLoading = () => {
       if (loadingEl) loadingEl.style.display = 'none';
+      if (freezeEl) {
+        freezeEl.style.display = 'none';
+        freezeEl.style.backgroundImage = '';
+      }
       if (!hasInitialSeeked && initialOffset >= 0) {
         let offset = initialOffset;
         if (Number.isFinite(video.duration) && video.duration > 0) {
@@ -4696,6 +4727,10 @@ export class FrigateEventsCard extends LitElement {
     };
     video.onplaying = () => {
       if (loadingEl) loadingEl.style.display = 'none';
+      if (freezeEl) {
+        freezeEl.style.display = 'none';
+        freezeEl.style.backgroundImage = '';
+      }
       this._updateTimelinePlayheadUI();
     };
     video.onpause = () => {
@@ -4722,6 +4757,10 @@ export class FrigateEventsCard extends LitElement {
       console.warn('Frigate Events Card: HLS failed or unsupported, trying MP4 clip:', mp4Url);
       video.onerror = (e) => {
         this._isAdvancingTimeline = false;
+        if (freezeEl) {
+          freezeEl.style.display = 'none';
+          freezeEl.style.backgroundImage = '';
+        }
         console.error('Frigate Events Card: MP4 playback failed:', e, mp4Url);
         if (loadingEl) {
           loadingEl.innerHTML = `
@@ -4919,6 +4958,40 @@ export class FrigateEventsCard extends LitElement {
     });
   }
 
+  private _updateTimelineWindowUI(): void {
+    if (!this._timelineContainer) return;
+    const container = this._timelineContainer;
+    const startDate = new Date(this._timelineStartTs * 1000);
+    const endDate = new Date(this._timelineEndTs * 1000);
+
+    // Format ISO string for datetime-local input (YYYY-MM-DDTHH:mm)
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const dtValue = `${startDate.getFullYear()}-${pad(startDate.getMonth() + 1)}-${pad(startDate.getDate())}T${pad(startDate.getHours())}:${pad(startDate.getMinutes())}`;
+
+    const dtInput = container.querySelector('.timeline-datetime-input') as HTMLInputElement | null;
+    if (dtInput && dtInput.value !== dtValue) {
+      dtInput.value = dtValue;
+    }
+
+    const labels = container.querySelectorAll('.timeline-track-labels > span');
+    if (labels.length >= 3) {
+      labels[0].textContent = startDate.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+      labels[2].textContent = endDate.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    }
+
+    const windowMinutes = Math.round(this._timelineWindowDurationSec / 60);
+    container.querySelectorAll('.timeline-window-pill').forEach(pill => {
+      const mins = parseInt(pill.getAttribute('data-window') || '60', 10);
+      if (mins === windowMinutes) {
+        pill.classList.add('active');
+      } else {
+        pill.classList.remove('active');
+      }
+    });
+
+    this._updateTimelinePlayheadUI();
+  }
+
   private _renderTimelineContent(container: HTMLElement): void {
     const availableCameras = this._getAvailableCameras();
     const currentCamera = this._timelineCamera || (availableCameras[0] || 'Camera');
@@ -4987,6 +5060,7 @@ export class FrigateEventsCard extends LitElement {
           <!-- Video Player -->
           <div class="timeline-player-container">
             <video class="timeline-video" playsinline webkit-playsinline></video>
+            <div class="timeline-player-freeze"></div>
             <div class="timeline-player-loading">
               <div class="timeline-spinner"></div>
               <span>Buffering continuous footage...</span>
@@ -5044,10 +5118,18 @@ export class FrigateEventsCard extends LitElement {
     container.querySelectorAll('.timeline-camera-tab').forEach(tab => {
       tab.addEventListener('click', async (e) => {
         e.stopPropagation();
+        this._isAdvancingTimeline = false;
         const cam = (tab as HTMLElement).getAttribute('data-camera');
         if (cam && cam !== this._timelineCamera) {
           this._timelineCamera = cam;
-          this._renderTimelineContent(container);
+          container.querySelectorAll('.timeline-camera-tab').forEach(t => {
+            t.classList.toggle('active', t.getAttribute('data-camera') === cam);
+          });
+          const badge = container.querySelector('.timeline-camera-badge');
+          if (badge) {
+            badge.textContent = this._formatCameraName(cam);
+          }
+          this._updateTimelineWindowUI();
           await this._fetchTimelineEvents();
           this._updateTimelineScrubberEvents();
           this._loadTimelineVideo(this._timelineStartTs);
@@ -5059,11 +5141,12 @@ export class FrigateEventsCard extends LitElement {
     const dtInput = container.querySelector('.timeline-datetime-input') as HTMLInputElement | null;
     dtInput?.addEventListener('change', async () => {
       if (!dtInput.value) return;
+      this._isAdvancingTimeline = false;
       const parsed = new Date(dtInput.value).getTime() / 1000;
       if (!isNaN(parsed) && parsed > 0) {
         this._timelineStartTs = Math.floor(parsed);
         this._timelineEndTs = Math.floor(this._timelineStartTs + this._timelineWindowDurationSec);
-        this._renderTimelineContent(container);
+        this._updateTimelineWindowUI();
         await this._fetchTimelineEvents();
         this._updateTimelineScrubberEvents();
         this._loadTimelineVideo(this._timelineStartTs);
@@ -5074,6 +5157,7 @@ export class FrigateEventsCard extends LitElement {
     container.querySelectorAll('[data-jump]').forEach(btn => {
       btn.addEventListener('click', async (e) => {
         e.stopPropagation();
+        this._isAdvancingTimeline = false;
         const jump = (btn as HTMLElement).getAttribute('data-jump');
         const now = Math.floor(Date.now() / 1000);
 
@@ -5117,7 +5201,7 @@ export class FrigateEventsCard extends LitElement {
           this._timelineEndTs = Math.floor(this._timelineStartTs + this._timelineWindowDurationSec);
         }
 
-        this._renderTimelineContent(container);
+        this._updateTimelineWindowUI();
         await this._fetchTimelineEvents();
         this._updateTimelineScrubberEvents();
         this._loadTimelineVideo(jump === 'now' ? now : this._timelineStartTs);
@@ -5128,6 +5212,7 @@ export class FrigateEventsCard extends LitElement {
     container.querySelectorAll('.timeline-window-pill').forEach(pill => {
       pill.addEventListener('click', async (e) => {
         e.stopPropagation();
+        this._isAdvancingTimeline = false;
         const mins = parseInt((pill as HTMLElement).getAttribute('data-window') || '60', 10);
         const currentWallClock = this._videoOffsetToWallClock(this._timelineVideoEl?.currentTime || 0);
         this._timelineWindowDurationSec = mins * 60;
@@ -5141,7 +5226,7 @@ export class FrigateEventsCard extends LitElement {
         this._timelineStartTs = Math.max(0, newStart);
         this._timelineEndTs = Math.floor(this._timelineStartTs + this._timelineWindowDurationSec);
 
-        this._renderTimelineContent(container);
+        this._updateTimelineWindowUI();
         await this._fetchTimelineEvents();
         this._updateTimelineScrubberEvents();
         this._loadTimelineVideo(currentWallClock);
