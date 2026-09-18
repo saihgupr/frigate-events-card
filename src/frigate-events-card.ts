@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.4.31';
+const CARD_VERSION = '2.4.32';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -205,6 +205,7 @@ export class FrigateEventsCard extends LitElement {
   private _timelineRecordings: Array<{ start_time: number; end_time: number }> = [];
   private _timelineTimeUpdateRaf?: number;
   private _timelineIsDragging = false;
+  private _isAdvancingTimeline = false;
 
 
   /**
@@ -4314,21 +4315,7 @@ export class FrigateEventsCard extends LitElement {
           return;
         }
         e.preventDefault();
-        if (!this._timelineVideoEl) return;
-        if (this._timelinePlaybackRate > 16) {
-          if (this._timelineSpeedInterval) {
-            this._clearTimelineSpeedInterval();
-          } else {
-            this._applyTimelinePlaybackRate(this._timelinePlaybackRate);
-          }
-        } else {
-          if (this._timelineVideoEl.paused) {
-            this._timelineVideoEl.play().catch(() => {});
-          } else {
-            this._timelineVideoEl.pause();
-          }
-        }
-        this._updateTimelinePlayheadUI();
+        this._toggleTimelinePlayPause();
       }
     };
     window.addEventListener('keydown', onKeyDown);
@@ -4353,6 +4340,112 @@ export class FrigateEventsCard extends LitElement {
     if (this._timelineSpeedInterval) {
       clearInterval(this._timelineSpeedInterval);
       this._timelineSpeedInterval = undefined;
+    }
+  }
+
+  private _toggleTimelinePlayPause(): void {
+    if (!this._timelineVideoEl) return;
+    const v = this._timelineVideoEl;
+    const duration = this._timelineEndTs - this._timelineStartTs;
+    const maxSeek = (Number.isFinite(v.duration) && v.duration > 0)
+      ? Math.max(0, v.duration - 0.5)
+      : duration;
+
+    // If play is triggered while sitting at the end of the window, roll into the next block
+    if (v.currentTime >= maxSeek) {
+      const now = Math.floor(Date.now() / 1000);
+      if (this._timelineEndTs < now) {
+        this._advanceToNextTimelineWindow();
+        return;
+      }
+    }
+
+    if (this._timelinePlaybackRate > 16) {
+      if (this._timelineSpeedInterval) {
+        this._clearTimelineSpeedInterval();
+      } else {
+        this._applyTimelinePlaybackRate(this._timelinePlaybackRate);
+      }
+    } else {
+      if (v.paused) {
+        v.play().catch(() => {});
+      } else {
+        v.pause();
+      }
+    }
+    this._updateTimelinePlayheadUI();
+  }
+
+  private async _advanceToNextTimelineWindow(): Promise<void> {
+    if (this._isAdvancingTimeline || !this._timelineContainer || !this._timelineCamera) return;
+
+    const now = Math.floor(Date.now() / 1000);
+    // If we've reached or passed real-time, stop playback
+    if (this._timelineEndTs >= now) {
+      this._clearTimelineSpeedInterval();
+      if (this._timelineVideoEl) {
+        this._timelineVideoEl.pause();
+      }
+      this._updateTimelinePlayheadUI();
+      return;
+    }
+
+    this._isAdvancingTimeline = true;
+    this._clearTimelineSpeedInterval();
+
+    try {
+      const windowDuration = this._timelineWindowDurationSec || (this._timelineEndTs - this._timelineStartTs) || 3600;
+      let nextStart = this._timelineEndTs;
+      let nextEnd = nextStart + windowDuration;
+      if (nextEnd > now) {
+        nextEnd = now;
+      }
+
+      // Stop if less than 5 seconds remaining up to real-time now
+      if (nextEnd - nextStart < 5) {
+        if (this._timelineVideoEl) {
+          this._timelineVideoEl.pause();
+        }
+        this._updateTimelinePlayheadUI();
+        return;
+      }
+
+      // If recordings exist ahead, check for gaps and skip empty periods
+      if (this.hass) {
+        try {
+          const clientId = this._config?.frigate_client_id || 'frigate';
+          const recs = await getRecordings(this.hass, clientId, this._timelineCamera, nextStart, nextEnd);
+          if (!recs || recs.length === 0) {
+            // Gap detected: look ahead for future recordings before now
+            const futureRecs = await getRecordings(this.hass, clientId, this._timelineCamera, nextEnd, now);
+            if (Array.isArray(futureRecs) && futureRecs.length > 0) {
+              futureRecs.sort((a, b) => a.start_time - b.start_time);
+              const nextRecStart = futureRecs[0].start_time;
+              nextStart = nextRecStart;
+              nextEnd = Math.min(now, Math.floor(nextRecStart + windowDuration));
+            }
+          }
+        } catch (e) {
+          console.debug('Failed to check recordings ahead during auto-advance:', e);
+        }
+      }
+
+      this._timelineStartTs = nextStart;
+      this._timelineEndTs = nextEnd;
+
+      const container = this._timelineContainer;
+      if (!container) return;
+
+      this._renderTimelineContent(container);
+      await this._fetchTimelineEvents();
+      this._updateTimelineScrubberEvents();
+      this._loadTimelineVideo(this._timelineStartTs);
+    } catch (err) {
+      console.warn('Failed to auto-advance timeline window:', err);
+    } finally {
+      setTimeout(() => {
+        this._isAdvancingTimeline = false;
+      }, 800);
     }
   }
 
@@ -4409,6 +4502,7 @@ export class FrigateEventsCard extends LitElement {
         if (v.currentTime >= maxSeek) {
           this._clearTimelineSpeedInterval();
           this._updateTimelinePlayheadUI();
+          this._advanceToNextTimelineWindow();
           return;
         }
         v.currentTime = Math.min(maxSeek, v.currentTime + stepDelta);
@@ -4419,6 +4513,7 @@ export class FrigateEventsCard extends LitElement {
   }
 
   private _removeTimelineModal(): void {
+    this._isAdvancingTimeline = false;
     this._clearTimelineSpeedInterval();
     if (this._timelineTimeUpdateRaf) {
       cancelAnimationFrame(this._timelineTimeUpdateRaf);
@@ -4618,6 +4713,7 @@ export class FrigateEventsCard extends LitElement {
         video.currentTime = Math.max(0, video.duration - 0.1);
       }
       this._updateTimelinePlayheadUI();
+      this._advanceToNextTimelineWindow();
     };
 
     console.log('Frigate Events Card: VOD requested:', { hlsUrl, mp4Url, start: this._timelineStartTs, end: this._timelineEndTs });
@@ -4625,6 +4721,7 @@ export class FrigateEventsCard extends LitElement {
     const fallbackToMp4 = () => {
       console.warn('Frigate Events Card: HLS failed or unsupported, trying MP4 clip:', mp4Url);
       video.onerror = (e) => {
+        this._isAdvancingTimeline = false;
         console.error('Frigate Events Card: MP4 playback failed:', e, mp4Url);
         if (loadingEl) {
           loadingEl.innerHTML = `
@@ -4689,8 +4786,18 @@ export class FrigateEventsCard extends LitElement {
     }
     const tick = () => {
       if (!this._timelineContainer || !this._timelineVideoEl) return;
-      if (!this._timelineIsDragging) {
+      if (!this._timelineIsDragging && !this._isAdvancingTimeline) {
         this._updateTimelinePlayheadUI();
+        const v = this._timelineVideoEl;
+        if (
+          this._timelinePlaybackRate <= 16 &&
+          !v.paused &&
+          Number.isFinite(v.duration) &&
+          v.duration > 0 &&
+          v.currentTime >= Math.max(0, v.duration - 0.3)
+        ) {
+          this._advanceToNextTimelineWindow();
+        }
       }
       this._timelineTimeUpdateRaf = requestAnimationFrame(tick);
     };
@@ -5045,42 +5152,14 @@ export class FrigateEventsCard extends LitElement {
     const playerContainer = container.querySelector('.timeline-player-container');
     playerContainer?.addEventListener('click', (e) => {
       e.stopPropagation();
-      if (!this._timelineVideoEl) return;
-      if (this._timelinePlaybackRate > 16) {
-        if (this._timelineSpeedInterval) {
-          this._clearTimelineSpeedInterval();
-        } else {
-          this._applyTimelinePlaybackRate(this._timelinePlaybackRate);
-        }
-      } else {
-        if (this._timelineVideoEl.paused) {
-          this._timelineVideoEl.play().catch(() => {});
-        } else {
-          this._timelineVideoEl.pause();
-        }
-      }
-      this._updateTimelinePlayheadUI();
+      this._toggleTimelinePlayPause();
     });
 
     // Play / Pause button
     const playPauseBtn = container.querySelector('[data-action="toggle-play"]');
     playPauseBtn?.addEventListener('click', (e) => {
       e.stopPropagation();
-      if (!this._timelineVideoEl) return;
-      if (this._timelinePlaybackRate > 16) {
-        if (this._timelineSpeedInterval) {
-          this._clearTimelineSpeedInterval();
-        } else {
-          this._applyTimelinePlaybackRate(this._timelinePlaybackRate);
-        }
-      } else {
-        if (this._timelineVideoEl.paused) {
-          this._timelineVideoEl.play().catch(() => {});
-        } else {
-          this._timelineVideoEl.pause();
-        }
-      }
-      this._updateTimelinePlayheadUI();
+      this._toggleTimelinePlayPause();
     });
 
     // Skip buttons
