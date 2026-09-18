@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.4.33';
+const CARD_VERSION = '2.4.35';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -206,6 +206,7 @@ export class FrigateEventsCard extends LitElement {
   private _timelineTimeUpdateRaf?: number;
   private _timelineIsDragging = false;
   private _isAdvancingTimeline = false;
+  private _timelineLoadingTimeout?: number;
 
 
   /**
@@ -2113,7 +2114,8 @@ export class FrigateEventsCard extends LitElement {
 
       /* ─── Timeline Modal Styles ─── */
       .frigate-timeline-modal .frigate-events-modal-content {
-        min-width: min(840px, 95vw);
+        width: min(860px, 95vw);
+        min-width: min(860px, 95vw);
         max-width: 900px;
         max-height: 92vh;
         border: 1px solid rgba(255, 255, 255, 0.12);
@@ -2325,12 +2327,12 @@ export class FrigateEventsCard extends LitElement {
         pointer-events: none;
       }
 
-      .timeline-player-freeze {
+      canvas.timeline-player-freeze {
         position: absolute;
         inset: 0;
-        background-size: contain;
-        background-repeat: no-repeat;
-        background-position: center;
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
         pointer-events: none;
         display: none;
         z-index: 2;
@@ -2349,6 +2351,11 @@ export class FrigateEventsCard extends LitElement {
         font-size: 13px;
         z-index: 5;
         pointer-events: none;
+        transition: opacity 0.15s ease;
+      }
+
+      .timeline-player-loading.subtle {
+        background: transparent;
       }
 
       .timeline-spinner {
@@ -4421,26 +4428,6 @@ export class FrigateEventsCard extends LitElement {
         return;
       }
 
-      // If recordings exist ahead, check for gaps and skip empty periods
-      if (this.hass) {
-        try {
-          const clientId = this._config?.frigate_client_id || 'frigate';
-          const recs = await getRecordings(this.hass, clientId, this._timelineCamera, nextStart, nextEnd);
-          if (!recs || recs.length === 0) {
-            // Gap detected: look ahead for future recordings before now
-            const futureRecs = await getRecordings(this.hass, clientId, this._timelineCamera, nextEnd, now);
-            if (Array.isArray(futureRecs) && futureRecs.length > 0) {
-              futureRecs.sort((a, b) => a.start_time - b.start_time);
-              const nextRecStart = futureRecs[0].start_time;
-              nextStart = nextRecStart;
-              nextEnd = Math.min(now, Math.floor(nextRecStart + windowDuration));
-            }
-          }
-        } catch (e) {
-          console.debug('Failed to check recordings ahead during auto-advance:', e);
-        }
-      }
-
       this._timelineStartTs = nextStart;
       this._timelineEndTs = nextEnd;
 
@@ -4448,9 +4435,31 @@ export class FrigateEventsCard extends LitElement {
       if (!container) return;
 
       this._updateTimelineWindowUI();
-      await this._fetchTimelineEvents();
-      this._updateTimelineScrubberEvents();
-      this._loadTimelineVideo(this._timelineStartTs);
+      // Load next video stream immediately and silently in auto-advance mode (parallel, no lag)
+      this._loadTimelineVideo(this._timelineStartTs, true);
+
+      // Fetch event markers and check recordings concurrently in background
+      this._fetchTimelineEvents().then(async () => {
+        this._updateTimelineScrubberEvents();
+        // If this window had a recording gap (0 recordings), look ahead and leap to next available footage
+        if (this._timelineRecordings.length === 0 && this.hass && this._timelineCamera) {
+          try {
+            const clientId = this._config?.frigate_client_id || 'frigate';
+            const futureRecs = await getRecordings(this.hass, clientId, this._timelineCamera, nextEnd, now);
+            if (Array.isArray(futureRecs) && futureRecs.length > 0) {
+              futureRecs.sort((a, b) => a.start_time - b.start_time);
+              const nextRecStart = futureRecs[0].start_time;
+              this._timelineStartTs = nextRecStart;
+              this._timelineEndTs = Math.min(now, Math.floor(nextRecStart + windowDuration));
+              this._updateTimelineWindowUI();
+              this._loadTimelineVideo(this._timelineStartTs, true);
+              this._fetchTimelineEvents().then(() => this._updateTimelineScrubberEvents());
+            }
+          } catch (e) {
+            console.debug('Failed to check recordings ahead:', e);
+          }
+        }
+      });
     } catch (err) {
       console.warn('Failed to auto-advance timeline window:', err);
     } finally {
@@ -4526,6 +4535,10 @@ export class FrigateEventsCard extends LitElement {
   private _removeTimelineModal(): void {
     this._isAdvancingTimeline = false;
     this._clearTimelineSpeedInterval();
+    if (this._timelineLoadingTimeout) {
+      clearTimeout(this._timelineLoadingTimeout);
+      this._timelineLoadingTimeout = undefined;
+    }
     if (this._timelineTimeUpdateRaf) {
       cancelAnimationFrame(this._timelineTimeUpdateRaf);
       this._timelineTimeUpdateRaf = undefined;
@@ -4628,23 +4641,21 @@ export class FrigateEventsCard extends LitElement {
       : (this._timelineStartTs + videoOffset);
   }
 
-  private _loadTimelineVideo(seekTargetTs?: number): void {
+  private _loadTimelineVideo(seekTargetTs?: number, isAutoAdvance = false): void {
     if (!this._timelineContainer) return;
     const video = this._timelineContainer.querySelector('video.timeline-video') as HTMLVideoElement | null;
     if (!video || !this._timelineCamera) return;
 
-    // If transitioning from an active video, preserve last frame to eliminate black flash
-    const freezeEl = this._timelineContainer.querySelector('.timeline-player-freeze') as HTMLElement | null;
-    if (freezeEl && video.videoWidth > 0 && video.videoHeight > 0) {
+    // If transitioning from an active video, capture current frame onto canvas to eliminate any visual gap
+    const freezeCanvas = this._timelineContainer.querySelector('canvas.timeline-player-freeze') as HTMLCanvasElement | null;
+    if (freezeCanvas && video.videoWidth > 0 && video.videoHeight > 0) {
       try {
-        const canvas = document.createElement('canvas');
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        const ctx = canvas.getContext('2d');
+        freezeCanvas.width = video.videoWidth;
+        freezeCanvas.height = video.videoHeight;
+        const ctx = freezeCanvas.getContext('2d');
         if (ctx) {
-          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-          freezeEl.style.backgroundImage = `url(${canvas.toDataURL('image/jpeg', 0.85)})`;
-          freezeEl.style.display = 'block';
+          ctx.drawImage(video, 0, 0, freezeCanvas.width, freezeCanvas.height);
+          freezeCanvas.style.display = 'block';
         }
       } catch (_) {}
     }
@@ -4665,10 +4676,29 @@ export class FrigateEventsCard extends LitElement {
       video.muted = true;
     }
 
+    if (this._timelineLoadingTimeout) {
+      clearTimeout(this._timelineLoadingTimeout);
+      this._timelineLoadingTimeout = undefined;
+    }
+
     const loadingEl = this._timelineContainer.querySelector('.timeline-player-loading') as HTMLElement | null;
     if (loadingEl) {
-      loadingEl.style.display = 'flex';
-      loadingEl.innerHTML = `<div class="timeline-spinner"></div><span>Buffering continuous footage...</span>`;
+      if (!isAutoAdvance) {
+        loadingEl.classList.remove('subtle');
+        loadingEl.style.display = 'flex';
+        loadingEl.innerHTML = `<div class="timeline-spinner"></div><span>Buffering continuous footage...</span>`;
+      } else {
+        // Auto-advancing: keep display silent without dark overlay or text.
+        // Only if Frigate takes > 400ms do we show an unobtrusive spinner.
+        loadingEl.style.display = 'none';
+        loadingEl.classList.add('subtle');
+        this._timelineLoadingTimeout = window.setTimeout(() => {
+          if (loadingEl && this._timelineVideoEl) {
+            loadingEl.innerHTML = `<div class="timeline-spinner" style="width:22px; height:22px; border-width:2px;"></div>`;
+            loadingEl.style.display = 'flex';
+          }
+        }, 400);
+      }
     }
 
     const clientId = this._config?.frigate_client_id || 'frigate';
@@ -4700,10 +4730,16 @@ export class FrigateEventsCard extends LitElement {
     let hasInitialSeeked = false;
     let initialPlayStarted = false;
     const hideLoading = () => {
-      if (loadingEl) loadingEl.style.display = 'none';
-      if (freezeEl) {
-        freezeEl.style.display = 'none';
-        freezeEl.style.backgroundImage = '';
+      if (this._timelineLoadingTimeout) {
+        clearTimeout(this._timelineLoadingTimeout);
+        this._timelineLoadingTimeout = undefined;
+      }
+      if (loadingEl) {
+        loadingEl.style.display = 'none';
+        loadingEl.classList.remove('subtle');
+      }
+      if (freezeCanvas) {
+        freezeCanvas.style.display = 'none';
       }
       if (!hasInitialSeeked && initialOffset >= 0) {
         let offset = initialOffset;
@@ -4720,16 +4756,21 @@ export class FrigateEventsCard extends LitElement {
     };
 
     video.onloadeddata = hideLoading;
-    video.onloadedmetadata = hideLoading;
     video.oncanplay = hideLoading;
     video.onplay = () => {
       this._updateTimelinePlayheadUI();
     };
     video.onplaying = () => {
-      if (loadingEl) loadingEl.style.display = 'none';
-      if (freezeEl) {
-        freezeEl.style.display = 'none';
-        freezeEl.style.backgroundImage = '';
+      if (this._timelineLoadingTimeout) {
+        clearTimeout(this._timelineLoadingTimeout);
+        this._timelineLoadingTimeout = undefined;
+      }
+      if (loadingEl) {
+        loadingEl.style.display = 'none';
+        loadingEl.classList.remove('subtle');
+      }
+      if (freezeCanvas) {
+        freezeCanvas.style.display = 'none';
       }
       this._updateTimelinePlayheadUI();
     };
@@ -4757,9 +4798,15 @@ export class FrigateEventsCard extends LitElement {
       console.warn('Frigate Events Card: HLS failed or unsupported, trying MP4 clip:', mp4Url);
       video.onerror = (e) => {
         this._isAdvancingTimeline = false;
-        if (freezeEl) {
-          freezeEl.style.display = 'none';
-          freezeEl.style.backgroundImage = '';
+        if (this._timelineLoadingTimeout) {
+          clearTimeout(this._timelineLoadingTimeout);
+          this._timelineLoadingTimeout = undefined;
+        }
+        if (freezeCanvas) {
+          freezeCanvas.style.display = 'none';
+        }
+        if (loadingEl) {
+          loadingEl.classList.remove('subtle');
         }
         console.error('Frigate Events Card: MP4 playback failed:', e, mp4Url);
         if (loadingEl) {
@@ -4792,10 +4839,6 @@ export class FrigateEventsCard extends LitElement {
       this._timelineHls = hls;
       hls.loadSource(hlsUrl);
       hls.attachMedia(video);
-
-      hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        hideLoading();
-      });
 
       hls.on(Hls.Events.ERROR, (_event, data) => {
         console.warn('Frigate Events Card: Hls.js error event:', data.type, data.details, data.fatal);
@@ -5060,7 +5103,7 @@ export class FrigateEventsCard extends LitElement {
           <!-- Video Player -->
           <div class="timeline-player-container">
             <video class="timeline-video" playsinline webkit-playsinline></video>
-            <div class="timeline-player-freeze"></div>
+            <canvas class="timeline-player-freeze"></canvas>
             <div class="timeline-player-loading">
               <div class="timeline-spinner"></div>
               <span>Buffering continuous footage...</span>
