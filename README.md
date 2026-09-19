@@ -356,8 +356,8 @@ The most common settings to get you started:
 | `live_view` | boolean | `false` | Show a live WebRTC camera feed above the event gallery. Click to toggle fullscreen view. Continuous peer connection with 24/7 self-healing auto-recovery for network drops and Frigate restarts. |
 | `live_view_entity` | string | none | Camera entity ID for the live feed (e.g. `camera.wyze_camera`). Required when `live_view: true`. |
 | `live_view_aspect_ratio` | string | `16 / 9` | CSS `aspect-ratio` for the live feed container (e.g. `"4 / 3"`). |
-| `live_view_show_mute` | boolean | `true` | Show interactive mute toggle button on hover over the live video feed. |
-| `live_view_mute_position` | string | `top-left` | Corner placement of the mute toggle button (`top-left` or `top-right`). |
+| `show_mute` | boolean | `true` | Show interactive mute toggle button on hover over the live video feed (alias: `live_view_show_mute`). |
+| `live_view_mute_position` | string | `top-right` | Corner placement of the mute toggle button (`top-right` or `top-left`). |
 | `go2rtc_url` | string | none | Optional direct go2rtc API URL (e.g. `http://192.168.1.211:1984`). Directly negotiates WebRTC with go2rtc, bypassing Home Assistant WebSocket requirements. |
 | `go2rtc_stream` | string | none | Optional stream name in go2rtc (defaults to `live_view_entity` name without `camera.`, e.g. `wyze_camera`). |
 

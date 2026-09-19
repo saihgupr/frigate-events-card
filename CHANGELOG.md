@@ -1,8 +1,9 @@
 # Changelog
 
-## [2.4.39] - 2026-09-19
+## [2.4.41] - 2026-09-19
+- Added: Config option `show_mute` (default: `true`, alias `live_view_show_mute`) to control whether the mute button appears on hover.
 - Added: **Live Video Feed Mute Toggle** — Interactive mute toggle icon button displayed on hover over the live WebRTC video feed (`live-view-container`), indicating the current mute state (volume off vs volume high) and toggling audio playback without triggering fullscreen.
-- Added: Config options `live_view_show_mute` (default: `true`) and `live_view_mute_position` (`top-left` default or `top-right`).
+- Added: Config options `live_view_show_mute` (default: `true`) and `live_view_mute_position` (`top-right` default or `top-left`).
 - Added: WebRTC audio transceiver negotiation with automatic video-only fallback for cameras without audio streams.
 
 ## [2.4.30] - 2026-09-17

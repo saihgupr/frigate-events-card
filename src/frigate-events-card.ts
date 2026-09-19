@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.4.39';
+const CARD_VERSION = '2.4.41';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -81,8 +81,9 @@ interface FrigateEventsCardConfig extends LovelaceCardConfig {
   live_view?: boolean;              // default: false
   live_view_entity?: string;        // required if live_view: true — must be camera.*
   live_view_aspect_ratio?: string;  // CSS aspect-ratio value, e.g. '16 / 9' (default)
-  live_view_show_mute?: boolean;    // default: true
-  live_view_mute_position?: 'top-left' | 'top-right'; // default: 'top-left'
+  show_mute?: boolean;              // default: true
+  live_view_show_mute?: boolean;    // default: true (alias for show_mute)
+  live_view_mute_position?: 'top-left' | 'top-right'; // default: 'top-right'
   go2rtc_url?: string;              // Optional direct go2rtc URL (e.g. 'http://192.168.1.211:1984')
   go2rtc_stream?: string;           // Optional stream name in go2rtc (defaults to camera entity basename)
   // Temporary false-positive masking options
@@ -120,8 +121,9 @@ const DEFAULT_CONFIG: Partial<FrigateEventsCardConfig> = {
   video: true,
   video_on_hover: true,
   muted: true,
+  show_mute: true,
   live_view_show_mute: true,
-  live_view_mute_position: 'top-left',
+  live_view_mute_position: 'top-right',
   offset: 0,
   reverse: false,
   video_start_skip_seconds: 0,
@@ -6234,8 +6236,8 @@ export class FrigateEventsCard extends LitElement {
       `;
     }
 
-    const showMuteBtn = this._config?.live_view_show_mute !== false;
-    const mutePosition = this._config?.live_view_mute_position === 'top-right' ? 'top-right' : 'top-left';
+    const showMuteBtn = this._config?.show_mute !== false && this._config?.live_view_show_mute !== false;
+    const mutePosition = this._config?.live_view_mute_position === 'top-left' ? 'top-left' : 'top-right';
 
     return html`
       <div
@@ -6652,6 +6654,7 @@ export class FrigateEventsCard extends LitElement {
       .live-view-mute-btn {
         position: absolute;
         top: 10px;
+        right: 10px;
         z-index: 5;
         width: 34px;
         height: 34px;
@@ -6659,7 +6662,7 @@ export class FrigateEventsCard extends LitElement {
         background: rgba(0, 0, 0, 0.55);
         backdrop-filter: blur(4px);
         -webkit-backdrop-filter: blur(4px);
-        border: 1px solid rgba(255, 255, 255, 0.2);
+        border: none;
         color: #ffffff;
         display: flex;
         align-items: center;
@@ -6673,10 +6676,12 @@ export class FrigateEventsCard extends LitElement {
 
       .live-view-mute-btn.top-left {
         left: 10px;
+        right: auto;
       }
 
       .live-view-mute-btn.top-right {
         right: 10px;
+        left: auto;
       }
 
       .live-view-container:hover .live-view-mute-btn {
