@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.4.41';
+const CARD_VERSION = '2.4.42';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -81,8 +81,8 @@ interface FrigateEventsCardConfig extends LovelaceCardConfig {
   live_view?: boolean;              // default: false
   live_view_entity?: string;        // required if live_view: true — must be camera.*
   live_view_aspect_ratio?: string;  // CSS aspect-ratio value, e.g. '16 / 9' (default)
-  show_mute?: boolean;              // default: true
-  live_view_show_mute?: boolean;    // default: true (alias for show_mute)
+  show_mute?: boolean;              // default: false
+  live_view_show_mute?: boolean;    // default: false (alias for show_mute)
   live_view_mute_position?: 'top-left' | 'top-right'; // default: 'top-right'
   go2rtc_url?: string;              // Optional direct go2rtc URL (e.g. 'http://192.168.1.211:1984')
   go2rtc_stream?: string;           // Optional stream name in go2rtc (defaults to camera entity basename)
@@ -121,8 +121,8 @@ const DEFAULT_CONFIG: Partial<FrigateEventsCardConfig> = {
   video: true,
   video_on_hover: true,
   muted: true,
-  show_mute: true,
-  live_view_show_mute: true,
+  show_mute: false,
+  live_view_show_mute: false,
   live_view_mute_position: 'top-right',
   offset: 0,
   reverse: false,
@@ -6236,7 +6236,7 @@ export class FrigateEventsCard extends LitElement {
       `;
     }
 
-    const showMuteBtn = this._config?.show_mute !== false && this._config?.live_view_show_mute !== false;
+    const showMuteBtn = Boolean(this._config?.show_mute || this._config?.live_view_show_mute);
     const mutePosition = this._config?.live_view_mute_position === 'top-left' ? 'top-left' : 'top-right';
 
     return html`
