@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.4.38';
+const CARD_VERSION = '2.4.39';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -81,6 +81,8 @@ interface FrigateEventsCardConfig extends LovelaceCardConfig {
   live_view?: boolean;              // default: false
   live_view_entity?: string;        // required if live_view: true — must be camera.*
   live_view_aspect_ratio?: string;  // CSS aspect-ratio value, e.g. '16 / 9' (default)
+  live_view_show_mute?: boolean;    // default: true
+  live_view_mute_position?: 'top-left' | 'top-right'; // default: 'top-left'
   go2rtc_url?: string;              // Optional direct go2rtc URL (e.g. 'http://192.168.1.211:1984')
   go2rtc_stream?: string;           // Optional stream name in go2rtc (defaults to camera entity basename)
   // Temporary false-positive masking options
@@ -118,6 +120,8 @@ const DEFAULT_CONFIG: Partial<FrigateEventsCardConfig> = {
   video: true,
   video_on_hover: true,
   muted: true,
+  live_view_show_mute: true,
+  live_view_mute_position: 'top-left',
   offset: 0,
   reverse: false,
   video_start_skip_seconds: 0,
@@ -159,6 +163,7 @@ export class FrigateEventsCard extends LitElement {
   @state() private _error?: string;
   @state() private _hoveredEventId?: string;
   @state() private _liveViewError?: string;   // Set when live feed fails gracefully
+  @state() private _isLiveMuted = true;
   @state() private _maskManagerSelectedCamera = 'all';
   @state() private _localPendingMasks: any[] = [];
 
@@ -258,6 +263,9 @@ export class FrigateEventsCard extends LitElement {
       throw new Error('Invalid configuration');
     }
     this._config = { ...DEFAULT_CONFIG, ...config };
+    if (config.muted !== undefined) {
+      this._isLiveMuted = config.muted !== false;
+    }
   }
 
   public getCardSize(): number {
@@ -498,7 +506,7 @@ export class FrigateEventsCard extends LitElement {
    * This is the same protocol used internally by ha-web-rtc-player, but
    * called directly so we don't depend on HA's internal Lit context providers.
    */
-  private async _startWebRTC(): Promise<void> {
+  private async _startWebRTC(allowAudio = true): Promise<void> {
     if (!this.hass || !this._config?.live_view_entity) return;
     const entity = this._config.live_view_entity;
 
@@ -534,6 +542,7 @@ export class FrigateEventsCard extends LitElement {
       const videoEl = this._liveVideoEl || (this.renderRoot?.querySelector('.live-view-video') as HTMLVideoElement | null);
       if (videoEl) {
         this._liveVideoEl = videoEl;
+        videoEl.muted = this._isLiveMuted;
         if (videoEl.srcObject !== remoteStream) {
           videoEl.srcObject = remoteStream;
           videoEl.play().catch(() => {});
@@ -546,6 +555,7 @@ export class FrigateEventsCard extends LitElement {
         const video = this._liveVideoEl || (this.renderRoot?.querySelector('.live-view-video') as HTMLVideoElement | null);
         if (video) {
           this._liveVideoEl = video;
+          video.muted = this._isLiveMuted;
           if (video.srcObject !== remoteStream) {
             video.srcObject = remoteStream;
           }
@@ -553,11 +563,11 @@ export class FrigateEventsCard extends LitElement {
         }
       };
 
-      // Signal willingness to receive video only.
-      // Audio is intentionally omitted: go2rtc RTSP streams are typically video-only,
-      // and including an audio m-line when the camera has no audio track can cause
-      // HA/go2rtc to reject the SDP offer entirely.
+      // Signal willingness to receive video and audio (if supported)
       pc.addTransceiver('video', { direction: 'recvonly' });
+      if (allowAudio) {
+        pc.addTransceiver('audio', { direction: 'recvonly' });
+      }
 
       // --- SDP offer ---
       const offer = await pc.createOffer();
@@ -616,8 +626,13 @@ export class FrigateEventsCard extends LitElement {
               console.warn(
                 `Frigate Events Card: WebRTC stream error (${event.code}): ${event.message}`
               );
-              this._liveViewError = event.message || 'Camera stream unavailable';
               this._teardownWebRTC();
+              if (allowAudio) {
+                console.info('Frigate Events Card: Retrying WebRTC with video-only...');
+                this._startWebRTC(false);
+                return;
+              }
+              this._liveViewError = event.message || 'Camera stream unavailable';
               break;
           }
         },
@@ -641,13 +656,18 @@ export class FrigateEventsCard extends LitElement {
       this._setupWebRTCMonitoring(pc);
 
     } catch (e: any) {
+      this._teardownWebRTC();
+      if (allowAudio) {
+        console.info('Frigate Events Card: Retrying WebRTC with video-only...');
+        this._startWebRTC(false);
+        return;
+      }
       let msg = e?.message || (typeof e === 'object' ? JSON.stringify(e) : String(e));
       if (e?.code === 'unknown_command' || msg.toLowerCase().includes('unknown command')) {
         msg = 'HA WebRTC protocol (camera/web_rtc_offer) not supported for this entity. Fix WebRTC Camera integration in HA or set go2rtc_url in card config.';
       }
       console.error('Frigate Events Card: Failed to start WebRTC session:', msg);
       this._liveViewError = `Failed to start: ${msg}`;
-      this._teardownWebRTC();
     }
   }
 
@@ -661,6 +681,7 @@ export class FrigateEventsCard extends LitElement {
       const videoEl = this._liveVideoEl || (this.renderRoot?.querySelector('.live-view-video') as HTMLVideoElement | null);
       if (videoEl) {
         this._liveVideoEl = videoEl;
+        videoEl.muted = this._isLiveMuted;
         if (videoEl.srcObject !== remoteStream) {
           videoEl.srcObject = remoteStream;
           videoEl.play().catch(() => {});
@@ -672,6 +693,7 @@ export class FrigateEventsCard extends LitElement {
         const video = this._liveVideoEl || (this.renderRoot?.querySelector('.live-view-video') as HTMLVideoElement | null);
         if (video) {
           this._liveVideoEl = video;
+          video.muted = this._isLiveMuted;
           if (video.srcObject !== remoteStream) {
             video.srcObject = remoteStream;
           }
@@ -680,6 +702,7 @@ export class FrigateEventsCard extends LitElement {
       };
 
       pc.addTransceiver('video', { direction: 'recvonly' });
+      pc.addTransceiver('audio', { direction: 'recvonly' });
 
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
@@ -6172,11 +6195,25 @@ export class FrigateEventsCard extends LitElement {
   private _handleLiveVideoRef = (el: Element | undefined): void => {
     const videoEl = (el as HTMLVideoElement) ?? null;
     this._liveVideoEl = videoEl;
+    if (videoEl) {
+      videoEl.muted = this._isLiveMuted;
+    }
     if (videoEl && this._remoteStream && videoEl.srcObject !== this._remoteStream) {
       videoEl.srcObject = this._remoteStream;
       videoEl.play().catch(() => {});
     }
   };
+
+  private _handleLiveMuteToggle(e: Event): void {
+    e.stopPropagation();
+    this._isLiveMuted = !this._isLiveMuted;
+    if (this._liveVideoEl) {
+      this._liveVideoEl.muted = this._isLiveMuted;
+      if (!this._isLiveMuted && this._liveVideoEl.paused) {
+        this._liveVideoEl.play().catch(() => {});
+      }
+    }
+  }
 
   /**
    * Render the live WebRTC video feed above the event gallery.
@@ -6197,6 +6234,9 @@ export class FrigateEventsCard extends LitElement {
       `;
     }
 
+    const showMuteBtn = this._config?.live_view_show_mute !== false;
+    const mutePosition = this._config?.live_view_mute_position === 'top-right' ? 'top-right' : 'top-left';
+
     return html`
       <div
         class="live-view-container"
@@ -6213,7 +6253,8 @@ export class FrigateEventsCard extends LitElement {
         <video
           class="live-view-video"
           autoplay
-          muted
+          .muted=${this._isLiveMuted}
+          ?muted=${this._isLiveMuted}
           playsinline
           webkit-playsinline
           disablepictureinpicture
@@ -6221,6 +6262,24 @@ export class FrigateEventsCard extends LitElement {
           poster="data:image/png;base64,iVBORw0KGgoAAAANSU5EUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
           ${ref(this._handleLiveVideoRef)}
         ></video>
+        ${showMuteBtn
+          ? html`
+              <button
+                class="live-view-mute-btn ${mutePosition}"
+                title="${this._isLiveMuted ? 'Unmute' : 'Mute'}"
+                aria-label="${this._isLiveMuted ? 'Unmute' : 'Mute'}"
+                @click=${(e: MouseEvent) => this._handleLiveMuteToggle(e)}
+                @pointerdown=${(e: Event) => e.stopPropagation()}
+                @touchstart=${(e: TouchEvent) => e.stopPropagation()}
+                @touchend=${(e: TouchEvent) => e.stopPropagation()}
+              >
+                ${this._isLiveMuted
+                  ? html`<svg viewBox="0 0 24 24"><path d="M3,9H7L12,4V20L7,15H3V9M16.59,12L14,9.41L15.41,8L18,10.59L20.59,8L22,9.41L19.41,12L22,14.59L20.59,16L18,13.41L15.41,16L14,14.59L16.59,12Z"/></svg>`
+                  : html`<svg viewBox="0 0 24 24"><path d="M14,3.23V5.29C16.89,6.15 19,8.83 19,12C19,15.17 16.89,17.84 14,18.7V20.77C18,19.86 21,16.28 21,12C21,7.72 18,4.14 14,3.23M16.5,12C16.5,10.23 15.5,8.71 14,7.97V16.01C15.5,15.29 16.5,13.77 16.5,12M3,9V15H7L12,20V4L7,9H3Z"/></svg>`
+                }
+              </button>
+            `
+          : ''}
       </div>
     `;
   }
@@ -6588,6 +6647,62 @@ export class FrigateEventsCard extends LitElement {
         opacity: 0.7;
         max-width: 80%;
         text-align: center;
+      }
+
+      .live-view-mute-btn {
+        position: absolute;
+        top: 10px;
+        z-index: 5;
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        background: rgba(0, 0, 0, 0.55);
+        backdrop-filter: blur(4px);
+        -webkit-backdrop-filter: blur(4px);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        color: #ffffff;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        padding: 0;
+        opacity: 0;
+        pointer-events: auto;
+        transition: opacity 0.2s ease, background 0.2s ease, transform 0.15s ease;
+      }
+
+      .live-view-mute-btn.top-left {
+        left: 10px;
+      }
+
+      .live-view-mute-btn.top-right {
+        right: 10px;
+      }
+
+      .live-view-container:hover .live-view-mute-btn {
+        opacity: 0.85;
+      }
+
+      .live-view-mute-btn:hover {
+        opacity: 1 !important;
+        background: rgba(0, 0, 0, 0.8);
+        transform: scale(1.08);
+      }
+
+      .live-view-mute-btn:active {
+        transform: scale(0.95);
+      }
+
+      .live-view-mute-btn svg {
+        width: 18px;
+        height: 18px;
+        fill: currentColor;
+      }
+
+      .live-view-container:fullscreen.hide-cursor .live-view-mute-btn,
+      .live-view-container:-webkit-full-screen.hide-cursor .live-view-mute-btn {
+        opacity: 0 !important;
+        pointer-events: none !important;
       }
 
     `;

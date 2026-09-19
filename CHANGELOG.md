@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.4.39] - 2026-09-19
+- Added: **Live Video Feed Mute Toggle** — Interactive mute toggle icon button displayed on hover over the live WebRTC video feed (`live-view-container`), indicating the current mute state (volume off vs volume high) and toggling audio playback without triggering fullscreen.
+- Added: Config options `live_view_show_mute` (default: `true`) and `live_view_mute_position` (`top-left` default or `top-right`).
+- Added: WebRTC audio transceiver negotiation with automatic video-only fallback for cameras without audio streams.
+
 ## [2.4.30] - 2026-09-17
 - Added: **Timeline & Scrubber (Frigate 0.13 VOD)** — Stream continuous video recordings for any time window directly in a dedicated modal player with an interactive visual scrubber track, color-coded event markers, quick jump intervals (`-15m`, `-1h`, `-3h`, `-12h`, `Start of Day`), and variable playback speeds.
 - Changed: Renamed "Continuous Footage Timeline" to **"Timeline"** throughout the interface and context menus.
