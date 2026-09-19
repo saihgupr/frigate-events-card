@@ -356,7 +356,7 @@ The most common settings to get you started:
 | `live_view` | boolean | `false` | Show a live WebRTC camera feed above the event gallery. Click to toggle fullscreen view. Continuous peer connection with 24/7 self-healing auto-recovery for network drops and Frigate restarts. |
 | `live_view_entity` | string | none | Camera entity ID for the live feed (e.g. `camera.wyze_camera`). Required when `live_view: true`. |
 | `live_view_aspect_ratio` | string | `16 / 9` | CSS `aspect-ratio` for the live feed container (e.g. `"4 / 3"`). |
-| `show_mute` | boolean | `false` | Show interactive mute toggle button on hover over the live video feed (alias: `live_view_show_mute`). |
+| `show_mute` | boolean | `false` | Show interactive mute toggle button on hover over the live video feed and timeline player (alias: `live_view_show_mute`). |
 | `live_view_mute_position` | string | `top-right` | Corner placement of the mute toggle button (`top-right` or `top-left`). |
 | `go2rtc_url` | string | none | Optional direct go2rtc API URL (e.g. `http://192.168.1.211:1984`). Directly negotiates WebRTC with go2rtc, bypassing Home Assistant WebSocket requirements. |
 | `go2rtc_stream` | string | none | Optional stream name in go2rtc (defaults to `live_view_entity` name without `camera.`, e.g. `wyze_camera`). |
@@ -385,6 +385,7 @@ The most common settings to get you started:
 | `offset` | number | `0` | Number of recent events to skip/hide from the start of the list. Useful for excluding the newest event if it's already shown in another card. |
 | `daily_clear_time` | string | none | Optional. Time to reset the display daily (24hr format, e.g., "04:00"). If set, events before this time are hidden and shown as grey placeholders. |
 | `timeline_event_seek_offset` | number | `0` | Seconds added/subtracted when seeking to an event in the continuous timeline (e.g. `5` to jump 5s after detection starts, or `-5` for earlier pre-roll). |
+| `timeline_show_mute` | boolean | `true` | Show interactive mute toggle button on hover over the Timeline continuous video player. |
 
 ### Advanced Detail Modal & Debug Settings
 | Option | Type | Default | Description |

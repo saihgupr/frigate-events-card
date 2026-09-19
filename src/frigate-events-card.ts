@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.4.42';
+const CARD_VERSION = '2.4.45';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -93,6 +93,7 @@ interface FrigateEventsCardConfig extends LovelaceCardConfig {
   show_timeline?: boolean;          // default: true
   timeline?: boolean;               // alias for show_timeline: default: true
   timeline_on_click?: boolean;      // default: true (when timeline is on and video is enabled)
+  timeline_show_mute?: boolean;     // default: true
   timeline_default_window_hours?: number; // default: 1
   timeline_event_seek_offset?: number | Record<string, number>;    // default: 0 (seconds added/subtracted, e.g. -26 or { car: -26, person: -10 })
 }
@@ -115,6 +116,7 @@ const DEFAULT_CONFIG: Partial<FrigateEventsCardConfig> = {
   show_timeline: true,
   timeline: true,
   timeline_on_click: true,
+  timeline_show_mute: true,
   timeline_default_window_hours: 1,
   timeline_event_seek_offset: 0,
   title: 'Frigate Events',
@@ -217,6 +219,7 @@ export class FrigateEventsCard extends LitElement {
   private _timelineWindowDurationSec = 3600; // default 1 hour
   private _timelinePlaybackRate = 1;
   private _timelineSpeedInterval?: number;
+  private _isTimelineMuted = true;
   private _timelineEvents: FrigateEvent[] = [];
   private _timelineRecordings: Array<{ start_time: number; end_time: number }> = [];
   private _timelineTimeUpdateRaf?: number;
@@ -2536,6 +2539,59 @@ export class FrigateEventsCard extends LitElement {
         to { transform: rotate(360deg); }
       }
 
+      .timeline-mute-btn {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        z-index: 10;
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        background: rgba(0, 0, 0, 0.55);
+        backdrop-filter: blur(4px);
+        -webkit-backdrop-filter: blur(4px);
+        border: none;
+        color: #ffffff;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        padding: 0;
+        opacity: 0;
+        pointer-events: auto;
+        transition: opacity 0.2s ease, background 0.2s ease, transform 0.15s ease;
+      }
+
+      .timeline-mute-btn.top-left {
+        left: 10px;
+        right: auto;
+      }
+
+      .timeline-mute-btn.top-right {
+        right: 10px;
+        left: auto;
+      }
+
+      .timeline-player-container:hover .timeline-mute-btn {
+        opacity: 0.85;
+      }
+
+      .timeline-mute-btn:hover {
+        opacity: 1 !important;
+        background: rgba(0, 0, 0, 0.8);
+        transform: scale(1.08);
+      }
+
+      .timeline-mute-btn:active {
+        transform: scale(0.95);
+      }
+
+      .timeline-mute-btn svg {
+        width: 18px;
+        height: 18px;
+        fill: currentColor;
+      }
+
       /* Scrubber Track Area */
       .timeline-scrubber-wrapper {
         display: flex;
@@ -4479,6 +4535,7 @@ export class FrigateEventsCard extends LitElement {
     const container = document.createElement('div');
     container.className = 'frigate-events-modal frigate-timeline-modal';
     this._timelineContainer = container;
+    this._isTimelineMuted = this._config?.muted !== false;
 
     this._renderTimelineContent(container);
 
@@ -4523,6 +4580,22 @@ export class FrigateEventsCard extends LitElement {
     if (this._timelineSpeedInterval) {
       clearInterval(this._timelineSpeedInterval);
       this._timelineSpeedInterval = undefined;
+    }
+  }
+
+  private _toggleTimelineMute(): void {
+    this._isTimelineMuted = !this._isTimelineMuted;
+    if (this._timelinePlaybackRate <= 16) {
+      if (this._timelineVideoA) this._timelineVideoA.muted = this._isTimelineMuted;
+      if (this._timelineVideoB) this._timelineVideoB.muted = this._isTimelineMuted;
+    }
+    const muteBtn = this._timelineContainer?.querySelector('[data-action="toggle-timeline-mute"]');
+    if (muteBtn) {
+      muteBtn.setAttribute('title', this._isTimelineMuted ? 'Unmute' : 'Mute');
+      muteBtn.setAttribute('aria-label', this._isTimelineMuted ? 'Unmute' : 'Mute');
+      muteBtn.innerHTML = this._isTimelineMuted
+        ? `<svg viewBox="0 0 24 24"><path d="M3,9H7L12,4V20L7,15H3V9M16.59,12L14,9.41L15.41,8L18,10.59L20.59,8L22,9.41L19.41,12L22,14.59L20.59,16L18,13.41L15.41,16L14,14.59L16.59,12Z"/></svg>`
+        : `<svg viewBox="0 0 24 24"><path d="M14,3.23V5.29C16.89,6.15 19,8.83 19,12C19,15.17 16.89,17.84 14,18.7V20.77C18,19.86 21,16.28 21,12C21,7.72 18,4.14 14,3.23M16.5,12C16.5,10.23 15.5,8.71 14,7.97V16.01C15.5,15.29 16.5,13.77 16.5,12M3,9V15H7L12,20V4L7,9H3Z"/></svg>`;
     }
   }
 
@@ -4674,7 +4747,7 @@ export class FrigateEventsCard extends LitElement {
     if (rate <= 16) {
       this._clearTimelineSpeedInterval();
       video.playbackRate = rate;
-      video.muted = false;
+      video.muted = this._isTimelineMuted;
       if (video.paused) {
         video.play().catch(() => {});
       }
@@ -4886,7 +4959,7 @@ export class FrigateEventsCard extends LitElement {
 
     if (this._timelinePlaybackRate <= 16) {
       video.playbackRate = this._timelinePlaybackRate;
-      video.muted = false;
+      video.muted = this._isTimelineMuted;
     } else {
       video.playbackRate = 1;
       video.muted = true;
@@ -5304,13 +5377,15 @@ export class FrigateEventsCard extends LitElement {
     const dtValue = `${startDate.getFullYear()}-${pad(startDate.getMonth() + 1)}-${pad(startDate.getDate())}T${pad(startDate.getHours())}:${pad(startDate.getMinutes())}`;
 
     const windowMinutes = Math.round(this._timelineWindowDurationSec / 60);
+    const showMuteBtn = this._config?.timeline_show_mute !== false;
+    const mutePosition = this._config?.live_view_mute_position === 'top-left' ? 'top-left' : 'top-right';
 
     container.innerHTML = `
       <div class="frigate-events-modal-content">
         <div class="timeline-modal-header">
           <div class="timeline-modal-header-left">
             <h3 class="timeline-modal-title">
-              <svg viewBox="0 0 24 24"><path d="M12,20A8,8 0 0,0 20,12A8,8 0 0,0 12,4A8,8 0 0,0 4,12A8,8 0 0,0 4,12A8,8 0 0,0 12,20M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,2C6.47,2 2,6.48 2,12A10,10 0 0,1 12,2M12.5,7V12.25L17,14.92L16.25,16.15L11,13V7H12.5Z"/></svg>
+              <svg viewBox="0 0 24 24"><path d="M12,20A8,8 0 0,0 20,12A8,8 0 0,0 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,2C6.47,2 2,6.48 2,12A10,10 0 0,1 12,2M12.5,7V12.25L17,14.92L16.25,16.15L11,13V7H12.5Z"/></svg>
               <span>Timeline</span>
             </h3>
             <span class="timeline-camera-badge">${this._formatCameraName(currentCamera)}</span>
@@ -5366,6 +5441,19 @@ export class FrigateEventsCard extends LitElement {
               <div class="timeline-spinner"></div>
               <span>Buffering continuous footage...</span>
             </div>
+            ${showMuteBtn ? `
+              <button
+                class="timeline-mute-btn ${mutePosition}"
+                data-action="toggle-timeline-mute"
+                title="${this._isTimelineMuted ? 'Unmute' : 'Mute'}"
+                aria-label="${this._isTimelineMuted ? 'Unmute' : 'Mute'}"
+              >
+                ${this._isTimelineMuted
+                  ? `<svg viewBox="0 0 24 24"><path d="M3,9H7L12,4V20L7,15H3V9M16.59,12L14,9.41L15.41,8L18,10.59L20.59,8L22,9.41L19.41,12L22,14.59L20.59,16L18,13.41L15.41,16L14,14.59L16.59,12Z"/></svg>`
+                  : `<svg viewBox="0 0 24 24"><path d="M14,3.23V5.29C16.89,6.15 19,8.83 19,12C19,15.17 16.89,17.84 14,18.7V20.77C18,19.86 21,16.28 21,12C21,7.72 18,4.14 14,3.23M16.5,12C16.5,10.23 15.5,8.71 14,7.97V16.01C15.5,15.29 16.5,13.77 16.5,12M3,9V15H7L12,20V4L7,9H3Z"/></svg>`
+                }
+              </button>
+            ` : ''}
           </div>
 
           <!-- Scrubber Track -->
@@ -5408,7 +5496,18 @@ export class FrigateEventsCard extends LitElement {
     // Attach Event Listeners
     this._timelineVideoA = container.querySelector('video.timeline-video-a');
     this._timelineVideoB = container.querySelector('video.timeline-video-b');
+    if (this._timelineVideoA) this._timelineVideoA.muted = this._isTimelineMuted;
+    if (this._timelineVideoB) this._timelineVideoB.muted = this._isTimelineMuted;
     this._timelineActiveVideo = 'a';
+
+    const muteBtn = container.querySelector('[data-action="toggle-timeline-mute"]');
+    muteBtn?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this._toggleTimelineMute();
+    });
+    muteBtn?.addEventListener('pointerdown', (e) => e.stopPropagation());
+    muteBtn?.addEventListener('touchstart', (e) => e.stopPropagation());
+    muteBtn?.addEventListener('touchend', (e) => e.stopPropagation());
 
     const content = container.querySelector('.frigate-events-modal-content');
     content?.addEventListener('click', (e) => e.stopPropagation());
@@ -5541,6 +5640,7 @@ export class FrigateEventsCard extends LitElement {
     // Video click to play/pause
     const playerContainer = container.querySelector('.timeline-player-container');
     playerContainer?.addEventListener('click', (e) => {
+      if ((e.target as HTMLElement).closest('.timeline-mute-btn')) return;
       e.stopPropagation();
       this._toggleTimelinePlayPause();
     });
@@ -6651,7 +6751,8 @@ export class FrigateEventsCard extends LitElement {
         text-align: center;
       }
 
-      .live-view-mute-btn {
+      .live-view-mute-btn,
+      .timeline-mute-btn {
         position: absolute;
         top: 10px;
         right: 10px;
@@ -6674,31 +6775,37 @@ export class FrigateEventsCard extends LitElement {
         transition: opacity 0.2s ease, background 0.2s ease, transform 0.15s ease;
       }
 
-      .live-view-mute-btn.top-left {
+      .live-view-mute-btn.top-left,
+      .timeline-mute-btn.top-left {
         left: 10px;
         right: auto;
       }
 
-      .live-view-mute-btn.top-right {
+      .live-view-mute-btn.top-right,
+      .timeline-mute-btn.top-right {
         right: 10px;
         left: auto;
       }
 
-      .live-view-container:hover .live-view-mute-btn {
+      .live-view-container:hover .live-view-mute-btn,
+      .timeline-player-container:hover .timeline-mute-btn {
         opacity: 0.85;
       }
 
-      .live-view-mute-btn:hover {
+      .live-view-mute-btn:hover,
+      .timeline-mute-btn:hover {
         opacity: 1 !important;
         background: rgba(0, 0, 0, 0.8);
         transform: scale(1.08);
       }
 
-      .live-view-mute-btn:active {
+      .live-view-mute-btn:active,
+      .timeline-mute-btn:active {
         transform: scale(0.95);
       }
 
-      .live-view-mute-btn svg {
+      .live-view-mute-btn svg,
+      .timeline-mute-btn svg {
         width: 18px;
         height: 18px;
         fill: currentColor;
