@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.4.50';
+const CARD_VERSION = '2.4.51';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -202,6 +202,7 @@ export class FrigateEventsCard extends LitElement {
   private _boundFullscreenHandler?: () => void;
   private _boundFullscreenMouseMoveHandler?: () => void;
   private _cursorHideTimeout?: ReturnType<typeof setTimeout>;
+  private _justExitedFullscreen = false;
 
   // Timeline modal state
   private _timelineContainer?: HTMLDivElement;
@@ -820,20 +821,27 @@ export class FrigateEventsCard extends LitElement {
       this._didLongPress = false;
       return;
     }
+    if (this._justExitedFullscreen) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     const container = e.currentTarget as HTMLElement;
     const videoEl = this._liveVideoEl || container.querySelector('video');
 
     // Check if element or document is currently fullscreen
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const fsDoc = document as any;
-    const isFullscreen = !!(
-      fsDoc.fullscreenElement ||
-      fsDoc.webkitFullscreenElement ||
-      fsDoc.mozFullScreenElement ||
-      fsDoc.msFullscreenElement
-    );
+    const isFullscreen = this._isFullscreen();
 
     if (isFullscreen) {
+      e.preventDefault();
+      e.stopPropagation();
+      this._justExitedFullscreen = true;
+      setTimeout(() => {
+        this._justExitedFullscreen = false;
+      }, 600);
+
       if (document.exitFullscreen) {
         document.exitFullscreen().catch(() => {});
       } else if (fsDoc.webkitExitFullscreen) {
@@ -842,6 +850,12 @@ export class FrigateEventsCard extends LitElement {
         fsDoc.mozCancelFullScreen();
       } else if (fsDoc.msExitFullscreen) {
         fsDoc.msExitFullscreen();
+      } else if ((videoEl as any)?.webkitExitFullscreen) {
+        (videoEl as any).webkitExitFullscreen();
+      }
+
+      if (videoEl && videoEl.paused) {
+        videoEl.play().catch(() => {});
       }
       return;
     }
@@ -948,6 +962,23 @@ export class FrigateEventsCard extends LitElement {
       videoEl?.style.removeProperty('pointer-events');
       document.documentElement.style.removeProperty('cursor');
       document.body.style.removeProperty('cursor');
+
+      if (videoEl) {
+        if (this._remoteStream && videoEl.srcObject !== this._remoteStream) {
+          videoEl.srcObject = this._remoteStream;
+        }
+        if (videoEl.paused) {
+          videoEl.play().catch(() => {});
+        }
+        setTimeout(() => {
+          if (videoEl && this._remoteStream && videoEl.srcObject !== this._remoteStream) {
+            videoEl.srcObject = this._remoteStream;
+          }
+          if (videoEl?.paused) {
+            videoEl.play().catch(() => {});
+          }
+        }, 150);
+      }
     } else {
       videoEl?.classList.add('fullscreen-active');
       videoEl?.style.setProperty('pointer-events', 'auto', 'important');
@@ -6323,6 +6354,11 @@ export class FrigateEventsCard extends LitElement {
         videoEl.addEventListener('mousemove', this._boundFullscreenMouseMoveHandler, { capture: true, passive: true });
         videoEl.addEventListener('pointermove', this._boundFullscreenMouseMoveHandler, { capture: true, passive: true });
       }
+      videoEl.addEventListener('pause', () => {
+        if (this._remoteStream && videoEl.paused) {
+          videoEl.play().catch(() => {});
+        }
+      });
     }
     if (videoEl && this._remoteStream && videoEl.srcObject !== this._remoteStream) {
       videoEl.srcObject = this._remoteStream;
@@ -6384,6 +6420,15 @@ export class FrigateEventsCard extends LitElement {
           disablepictureinpicture
           disableremoteplayback
           poster="data:image/png;base64,iVBORw0KGgoAAAANSU5EUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+          @click=${(e: Event) => {
+            e.preventDefault();
+          }}
+          @pause=${(e: Event) => {
+            const v = e.target as HTMLVideoElement;
+            if (v && this._remoteStream && v.paused) {
+              v.play().catch(() => {});
+            }
+          }}
           ${ref(this._handleLiveVideoRef)}
         ></video>
         ${showMuteBtn
