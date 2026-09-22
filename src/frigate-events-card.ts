@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.4.48';
+const CARD_VERSION = '2.4.50';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -199,6 +199,9 @@ export class FrigateEventsCard extends LitElement {
   private _liveTouchStartX?: number;
   private _liveTouchStartY?: number;
   private _didLongPress = false;
+  private _boundFullscreenHandler?: () => void;
+  private _boundFullscreenMouseMoveHandler?: () => void;
+  private _cursorHideTimeout?: ReturnType<typeof setTimeout>;
 
   // Timeline modal state
   private _timelineContainer?: HTMLDivElement;
@@ -311,6 +314,7 @@ export class FrigateEventsCard extends LitElement {
     this._setupVisibilityHandler();
     this._setupPolling();
     this._setupLiveView();
+    this._setupFullscreenListener();
   }
 
   protected updated(changedProps: PropertyValues): void {
@@ -353,6 +357,9 @@ export class FrigateEventsCard extends LitElement {
       if (!this._intersectionObserver) {
         this._setupLiveView();
       }
+      if (!this._boundFullscreenHandler) {
+        this._setupFullscreenListener();
+      }
     }
   }
 
@@ -374,6 +381,30 @@ export class FrigateEventsCard extends LitElement {
       document.removeEventListener('visibilitychange', this._boundVisibilityHandler);
       this._boundVisibilityHandler = undefined;
     }
+    if (this._boundFullscreenHandler) {
+      document.removeEventListener('fullscreenchange', this._boundFullscreenHandler);
+      document.removeEventListener('webkitfullscreenchange', this._boundFullscreenHandler);
+      this._liveVideoEl?.removeEventListener('webkitbeginfullscreen', this._boundFullscreenHandler);
+      this._liveVideoEl?.removeEventListener('webkitendfullscreen', this._boundFullscreenHandler);
+      this._liveVideoEl?.removeEventListener('fullscreenchange', this._boundFullscreenHandler);
+      this._liveVideoEl?.removeEventListener('webkitfullscreenchange', this._boundFullscreenHandler);
+      this._boundFullscreenHandler = undefined;
+    }
+    if (this._boundFullscreenMouseMoveHandler) {
+      window.removeEventListener('mousemove', this._boundFullscreenMouseMoveHandler, { capture: true } as any);
+      window.removeEventListener('pointermove', this._boundFullscreenMouseMoveHandler, { capture: true } as any);
+      document.removeEventListener('mousemove', this._boundFullscreenMouseMoveHandler, { capture: true } as any);
+      document.removeEventListener('pointermove', this._boundFullscreenMouseMoveHandler, { capture: true } as any);
+      this._liveVideoEl?.removeEventListener('mousemove', this._boundFullscreenMouseMoveHandler, { capture: true } as any);
+      this._liveVideoEl?.removeEventListener('pointermove', this._boundFullscreenMouseMoveHandler, { capture: true } as any);
+      this._boundFullscreenMouseMoveHandler = undefined;
+    }
+    if (this._cursorHideTimeout) {
+      clearTimeout(this._cursorHideTimeout);
+      this._cursorHideTimeout = undefined;
+    }
+    document.documentElement.style.removeProperty('cursor');
+    document.body.style.removeProperty('cursor');
     if (this._touchTimeout) {
       clearTimeout(this._touchTimeout);
       this._touchTimeout = undefined;
@@ -818,6 +849,10 @@ export class FrigateEventsCard extends LitElement {
     if (videoEl) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const v = videoEl as any;
+      videoEl.classList.add('fullscreen-active');
+      videoEl.style.setProperty('pointer-events', 'auto', 'important');
+      this._resetCursorHideTimer(container, videoEl);
+
       if (v.requestFullscreen) {
         v.requestFullscreen().catch(() => {
           if (v.webkitEnterFullscreen) {
@@ -836,6 +871,121 @@ export class FrigateEventsCard extends LitElement {
     } else if (container && container.requestFullscreen) {
       container.requestFullscreen().catch(() => {});
     }
+  }
+
+  /**
+   * Check if live view video or container is currently displayed in fullscreen.
+   */
+  private _isFullscreen(): boolean {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const fsDoc = document as any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const shadowDoc = this.shadowRoot as any;
+    const container = this.renderRoot?.querySelector('.live-view-container') as HTMLElement | null;
+    const videoEl = this._liveVideoEl || container?.querySelector('video');
+    const safeMatches = (el: Element | null | undefined, sel: string): boolean => {
+      try {
+        return !!el?.matches?.(sel);
+      } catch {
+        return false;
+      }
+    };
+    return !!(
+      fsDoc.fullscreenElement ||
+      fsDoc.webkitFullscreenElement ||
+      fsDoc.mozFullScreenElement ||
+      fsDoc.msFullscreenElement ||
+      shadowDoc?.fullscreenElement ||
+      shadowDoc?.webkitFullscreenElement ||
+      (videoEl as any)?.webkitDisplayingFullscreen ||
+      safeMatches(videoEl, ':fullscreen') ||
+      safeMatches(videoEl, ':-webkit-full-screen') ||
+      safeMatches(container, ':fullscreen') ||
+      safeMatches(container, ':-webkit-full-screen')
+    );
+  }
+
+  /**
+   * Listen for document fullscreenchange and mouse movement to auto-hide cursor during fullscreen playback.
+   */
+  private _setupFullscreenListener(): void {
+    if (this._boundFullscreenHandler) return;
+    this._boundFullscreenHandler = () => this._handleFullscreenChange();
+    this._boundFullscreenMouseMoveHandler = () => this._handleFullscreenMouseMove();
+
+    document.addEventListener('fullscreenchange', this._boundFullscreenHandler);
+    document.addEventListener('webkitfullscreenchange', this._boundFullscreenHandler);
+    window.addEventListener('mousemove', this._boundFullscreenMouseMoveHandler, { capture: true, passive: true });
+    window.addEventListener('pointermove', this._boundFullscreenMouseMoveHandler, { capture: true, passive: true });
+    document.addEventListener('mousemove', this._boundFullscreenMouseMoveHandler, { capture: true, passive: true });
+    document.addEventListener('pointermove', this._boundFullscreenMouseMoveHandler, { capture: true, passive: true });
+
+    if (this._liveVideoEl) {
+      this._liveVideoEl.addEventListener('webkitbeginfullscreen', this._boundFullscreenHandler);
+      this._liveVideoEl.addEventListener('webkitendfullscreen', this._boundFullscreenHandler);
+      this._liveVideoEl.addEventListener('fullscreenchange', this._boundFullscreenHandler);
+      this._liveVideoEl.addEventListener('webkitfullscreenchange', this._boundFullscreenHandler);
+      this._liveVideoEl.addEventListener('mousemove', this._boundFullscreenMouseMoveHandler, { capture: true, passive: true });
+      this._liveVideoEl.addEventListener('pointermove', this._boundFullscreenMouseMoveHandler, { capture: true, passive: true });
+    }
+  }
+
+  private _handleFullscreenChange(): void {
+    const isFs = this._isFullscreen();
+    const container = this.renderRoot?.querySelector('.live-view-container') as HTMLElement | null;
+    const videoEl = this._liveVideoEl || container?.querySelector('video');
+
+    if (!isFs) {
+      if (this._cursorHideTimeout) {
+        clearTimeout(this._cursorHideTimeout);
+        this._cursorHideTimeout = undefined;
+      }
+      container?.classList.remove('hide-cursor');
+      videoEl?.classList.remove('hide-cursor');
+      videoEl?.classList.remove('fullscreen-active');
+      container?.style.removeProperty('cursor');
+      videoEl?.style.removeProperty('cursor');
+      videoEl?.style.removeProperty('pointer-events');
+      document.documentElement.style.removeProperty('cursor');
+      document.body.style.removeProperty('cursor');
+    } else {
+      videoEl?.classList.add('fullscreen-active');
+      videoEl?.style.setProperty('pointer-events', 'auto', 'important');
+      this._resetCursorHideTimer(container, videoEl);
+    }
+  }
+
+  private _handleFullscreenMouseMove(): void {
+    if (!this._isFullscreen()) return;
+    const container = this.renderRoot?.querySelector('.live-view-container') as HTMLElement | null;
+    const videoEl = this._liveVideoEl || container?.querySelector('video');
+
+    container?.classList.remove('hide-cursor');
+    videoEl?.classList.remove('hide-cursor');
+    container?.style.removeProperty('cursor');
+    videoEl?.style.removeProperty('cursor');
+    document.documentElement.style.removeProperty('cursor');
+    document.body.style.removeProperty('cursor');
+
+    this._resetCursorHideTimer(container, videoEl);
+  }
+
+  private _resetCursorHideTimer(container?: HTMLElement | null, videoEl?: HTMLVideoElement | null): void {
+    if (this._cursorHideTimeout) {
+      clearTimeout(this._cursorHideTimeout);
+    }
+    this._cursorHideTimeout = setTimeout(() => {
+      if (this._isFullscreen()) {
+        const c = container || (this.renderRoot?.querySelector('.live-view-container') as HTMLElement | null);
+        const v = videoEl || this._liveVideoEl || c?.querySelector('video');
+        c?.classList.add('hide-cursor');
+        v?.classList.add('hide-cursor');
+        c?.style.setProperty('cursor', 'none', 'important');
+        v?.style.setProperty('cursor', 'none', 'important');
+        document.documentElement.style.setProperty('cursor', 'none', 'important');
+        document.body.style.setProperty('cursor', 'none', 'important');
+      }
+    }, 2500);
   }
 
   /**
@@ -6163,6 +6313,16 @@ export class FrigateEventsCard extends LitElement {
     this._liveVideoEl = videoEl;
     if (videoEl) {
       videoEl.muted = this._isLiveMuted;
+      if (this._boundFullscreenHandler) {
+        videoEl.addEventListener('webkitbeginfullscreen', this._boundFullscreenHandler);
+        videoEl.addEventListener('webkitendfullscreen', this._boundFullscreenHandler);
+        videoEl.addEventListener('fullscreenchange', this._boundFullscreenHandler);
+        videoEl.addEventListener('webkitfullscreenchange', this._boundFullscreenHandler);
+      }
+      if (this._boundFullscreenMouseMoveHandler) {
+        videoEl.addEventListener('mousemove', this._boundFullscreenMouseMoveHandler, { capture: true, passive: true });
+        videoEl.addEventListener('pointermove', this._boundFullscreenMouseMoveHandler, { capture: true, passive: true });
+      }
     }
     if (videoEl && this._remoteStream && videoEl.srcObject !== this._remoteStream) {
       videoEl.srcObject = this._remoteStream;
@@ -6538,8 +6698,11 @@ export class FrigateEventsCard extends LitElement {
       .live-view-video {
         width: 100%;
         height: 100%;
-        object-fit: cover;
+        object-fit: contain;
         display: block;
+        background-color: #1c1c1c;
+        transform: translateZ(0);
+        will-change: transform;
         -webkit-touch-callout: none !important;
         -webkit-user-select: none !important;
         user-select: none !important;
@@ -6563,14 +6726,21 @@ export class FrigateEventsCard extends LitElement {
         object-fit: contain;
       }
 
-      .live-view-video {
-        width: 100%;
-        height: 100%;
-        object-fit: contain;
-        display: block;
-        background-color: #1c1c1c;
-        transform: translateZ(0);
-        will-change: transform;
+      .live-view-video.fullscreen-active,
+      .live-view-video:fullscreen,
+      .live-view-video:-webkit-full-screen {
+        pointer-events: auto !important;
+        width: 100vw !important;
+        height: 100vh !important;
+        object-fit: contain !important;
+      }
+
+      .hide-cursor,
+      .hide-cursor *,
+      .live-view-container.hide-cursor,
+      .live-view-video.hide-cursor,
+      video.hide-cursor {
+        cursor: none !important;
       }
 
       /* Hide WebKit / Blink default media controls and play button overlays on TV browsers */
