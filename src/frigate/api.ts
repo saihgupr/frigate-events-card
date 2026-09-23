@@ -28,22 +28,77 @@ export function getEventThumbnailURL(clientId: string, eventId: string): string 
 }
 
 /**
+ * In-memory cache for signed paths to avoid redundant WebSocket calls
+ */
+const signedPathCache = new Map<string, { signed: string; expiresAt: number }>();
+
+/**
+ * Extracts relative path and query string from an absolute or relative URL
+ */
+export function toRelativePath(urlOrPath: string): string {
+    if (!urlOrPath) return '';
+    try {
+        if (urlOrPath.startsWith('http://') || urlOrPath.startsWith('https://')) {
+            const parsed = new URL(urlOrPath);
+            return parsed.pathname + parsed.search;
+        }
+    } catch {
+        // Fall through
+    }
+    return urlOrPath;
+}
+
+/**
+ * Check if a valid signed URL is already cached for the given path
+ */
+export function getCachedSignedPath(path: string): string | null {
+    const cleanPath = toRelativePath(path);
+    if (!cleanPath) return null;
+    const cached = signedPathCache.get(cleanPath);
+    if (cached && cached.expiresAt > Date.now() + 60000) {
+        return cached.signed;
+    }
+    return null;
+}
+
+/**
  * Request Home Assistant to sign a media/API path with an authentication signature (authSig)
  */
 export async function signPath(
     hass: HomeAssistant,
     path: string,
-    expiresSeconds?: number
+    expiresSeconds = 3600
 ): Promise<string> {
+    const cleanPath = toRelativePath(path);
+    if (!cleanPath || !hass?.callWS) return cleanPath || path;
+
+    // If already signed, cache and return as is
+    if (cleanPath.includes('authSig=')) {
+        return cleanPath;
+    }
+
+    const cached = getCachedSignedPath(cleanPath);
+    if (cached) {
+        return cached;
+    }
+
     try {
         const response = await hass.callWS<{ path: string }>({
             type: 'auth/sign_path',
-            path,
-            ...(expiresSeconds ? { expires_ticks: expiresSeconds } : {})
+            path: cleanPath,
+            expires_ticks: expiresSeconds
         });
-        return response?.path || path;
-    } catch {
-        return path;
+        if (response?.path) {
+            signedPathCache.set(cleanPath, {
+                signed: response.path,
+                expiresAt: Date.now() + (expiresSeconds * 1000)
+            });
+            return response.path;
+        }
+        return cleanPath;
+    } catch (err) {
+        console.warn('[frigate-events-card] Failed to sign path:', cleanPath, err);
+        return cleanPath;
     }
 }
 

@@ -6,9 +6,9 @@ import { customElement, property, state } from 'lit/decorators.js';
 import { ref } from 'lit/directives/ref.js';
 import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/types';
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
-import { getEvents, getEventSnapshotURL, getEventThumbnailURL, signPath, subscribeToEvents, getEventClipURL, getEventHlsURL, deleteEvent } from './frigate/api';
+import { getEvents, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, deleteEvent } from './frigate/api';
 
-const CARD_VERSION = '2.4.1';
+const CARD_VERSION = '2.4.2';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -2147,6 +2147,9 @@ export class FrigateEventsCard extends LitElement {
       cacheBust: event.end_time || undefined
     });
     const thumbnailUrl = getEventThumbnailURL(clientId, event.id);
+    const initialSnapshotUrl = getCachedSignedPath(snapshotUrl) || snapshotUrl;
+    const initialThumbnailUrl = getCachedSignedPath(thumbnailUrl) || thumbnailUrl;
+    const modalImgUrl = event.has_snapshot !== false ? initialSnapshotUrl : initialThumbnailUrl;
     const duration = this._formatDuration(event.start_time, event.end_time);
     const zones = this._formatZones(event.zones);
 
@@ -2212,7 +2215,7 @@ export class FrigateEventsCard extends LitElement {
                  <source src="${clipUrl}" type="video/mp4">
                  <source src="${hlsUrl}" type="application/x-mpegURL">
                </video>`
-            : `<img src="${snapshotUrl}" alt="${event.label}" onerror="if(!this.src.includes('thumbnail')){this.src='${thumbnailUrl}';}" />`
+            : `<img src="${modalImgUrl}" alt="${event.label}" />`
           }          ${nextBtnHtml}
           <button class="frigate-events-modal-close" title="Close">
             <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
@@ -2276,6 +2279,31 @@ export class FrigateEventsCard extends LitElement {
       nextBtn?.addEventListener('click', (e) => {
         e.stopPropagation();
         this._navigateToEvent('next');
+      });
+    }
+
+    const modalImg = container.querySelector('.frigate-events-modal-image-container img') as HTMLImageElement;
+    if (modalImg) {
+      modalImg.addEventListener('error', async () => {
+        if (this.hass && !modalImg.src.includes('authSig=')) {
+          try {
+            const signed = await signPath(this.hass, modalImg.src);
+            const rel = toRelativePath(modalImg.src);
+            if (signed && signed !== rel && signed !== modalImg.src) {
+              modalImg.src = signed;
+              return;
+            }
+          } catch {}
+        }
+        if (!modalImg.src.includes('thumbnail')) {
+          let thumb = initialThumbnailUrl;
+          if (this.hass && !thumb.includes('authSig=')) {
+            try {
+              thumb = await signPath(this.hass, thumbnailUrl);
+            } catch {}
+          }
+          modalImg.src = thumb;
+        }
       });
     }
 
@@ -4155,6 +4183,9 @@ export class FrigateEventsCard extends LitElement {
     const hlsUrl = getEventHlsURL(clientId, event.id) + timeParam;
 
     const thumbnailUrl = getEventThumbnailURL(clientId, event.id);
+    const initialSnapshotUrl = getCachedSignedPath(snapshotUrl) || snapshotUrl;
+    const initialThumbnailUrl = getCachedSignedPath(thumbnailUrl) || thumbnailUrl;
+    const initialImgUrl = event.has_snapshot !== false ? initialSnapshotUrl : initialThumbnailUrl;
 
     return html`
       <div class="event"
@@ -4169,25 +4200,39 @@ export class FrigateEventsCard extends LitElement {
         style="position: relative;"
       >
         <img
-          src="${snapshotUrl}"
+          src="${initialImgUrl}"
           alt="${event.label}"
           loading="lazy"
           @error=${async (e: Event) => {
             const img = e.target as HTMLImageElement;
             if (!img) return;
-            if (!img.src.includes('thumbnail')) {
-              img.src = thumbnailUrl;
-              return;
-            }
+
+            // If not signed yet, attempt to sign the failed URL via HA WebSocket
             if (this.hass && !img.src.includes('authSig=')) {
               try {
                 const signed = await signPath(this.hass, img.src);
-                if (signed && signed !== img.src) {
+                const rel = toRelativePath(img.src);
+                if (signed && signed !== rel && signed !== img.src) {
                   img.src = signed;
+                  return;
                 }
               } catch {
                 // Ignore signing errors
               }
+            }
+
+            // If snapshot failed (even after signed or if signing unavailable), fall back to thumbnail
+            if (!img.src.includes('thumbnail')) {
+              let thumb = initialThumbnailUrl;
+              if (this.hass && !thumb.includes('authSig=')) {
+                try {
+                  thumb = await signPath(this.hass, thumbnailUrl);
+                } catch {
+                  // Ignore signing errors
+                }
+              }
+              img.src = thumb;
+              return;
             }
           }}
         />
