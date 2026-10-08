@@ -9,14 +9,12 @@ A simple Lovelace card for displaying recent Frigate detection events in a horiz
 
 ## What's New in v2.5
 
-- **Timeline & Continuous Video Playback (Frigate 0.13+ VOD)**: Stream 24/7 continuous video recordings directly in a dedicated player modal with an interactive scrubber track, color-coded event markers, quick jump intervals (`-15m`, `-1h`, `-3h`, `-12h`, `Start of Day`), and variable playback speeds (up to 16x).
+- **Timeline & Continuous Video Playback (Frigate 0.13+ VOD)**: Stream 24/7 continuous video recordings directly in a dedicated player modal with an interactive scrubber track, color-coded event markers, quick jump intervals (`-15m`, `-1h`, `-3h`, `-12h`, `Start of Day`), and variable playback speeds (up to 4096x).
 - **Click Event to Timeline**: Clicking any event thumbnail in the carousel opens the Timeline centered on the event's start time (`timeline_on_click: true`).
 - **Live Feed & Timeline Audio Mute Controls**: Interactive mute toggle icon button displayed on hover over both the live WebRTC feed (`show_mute`) and the Timeline modal player (`timeline_show_mute`), with WebRTC audio transceiver negotiation.
 - **Smooth Auto-Advance & Gapless Streaming**: Minimized black flashes between video chunks and automatic advance across hour recording boundaries.
 - **Signed Thumbnail URLs & Auth Proxy Caching**: Transparent Home Assistant `auth/sign_path` WebSocket integration with client-side caching to fix 401 Unauthorized thumbnail errors behind auth proxies.
 - **Frigate 0.18+ Temp Mask Compatibility**: Native support for Frigate 0.18+ YAML dictionary configuration formats with robust mask lifecycle and cleanup.
-
-## What's New in v2.4
 
 ## Features
 
