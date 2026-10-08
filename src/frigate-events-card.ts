@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.5.1';
+const CARD_VERSION = '2.5.3';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -3252,7 +3252,9 @@ export class FrigateEventsCard extends LitElement {
         }
       }
 
-      const durationText = durationHours === 1
+      const durationText = durationHours <= 0
+        ? 'infinite (manual removal only)'
+        : durationHours === 1
         ? '1 hour'
         : durationHours < 24
         ? `${durationHours} hours`
@@ -3339,10 +3341,12 @@ export class FrigateEventsCard extends LitElement {
     let activeDurationHours = 24;
     let timeRemainingStr = '';
     if (currentMask) {
-      if (typeof currentMask.duration_hours === 'number' && currentMask.duration_hours > 0) {
+      if (typeof currentMask.duration_hours === 'number') {
         activeDurationHours = currentMask.duration_hours;
       }
-      if (currentMask.expires_at) {
+      if (activeDurationHours <= 0 || !currentMask.expires_at) {
+        timeRemainingStr = '∞';
+      } else if (currentMask.expires_at) {
         const expMs = new Date(currentMask.expires_at).getTime();
         const nowMs = Date.now();
         const diffMs = expMs - nowMs;
@@ -3362,10 +3366,13 @@ export class FrigateEventsCard extends LitElement {
       { hours: 24, label: '24 Hours (1 Day)' },
       { hours: 48, label: '48 Hours (2 Days)' },
       { hours: 168, label: '7 Days' },
+      { hours: -1, label: '∞ Infinity' },
     ];
     const isCustomDuration = isMaskActive && !durationPresets.some(p => Math.abs(p.hours - activeDurationHours) < 0.01);
 
-    const activeDurationText = activeDurationHours === 1
+    const activeDurationText = activeDurationHours <= 0
+      ? '∞'
+      : activeDurationHours === 1
       ? '1h'
       : activeDurationHours === 24
       ? '24h'
@@ -3558,8 +3565,9 @@ export class FrigateEventsCard extends LitElement {
     }
   }
 
-  private _formatMaskRemainingTime(expiresAt?: string): string {
-    if (!expiresAt) return '';
+  private _formatMaskRemainingTime(expiresAt?: string | null, durationHours?: number): string {
+    if (durationHours !== undefined && durationHours <= 0) return '∞';
+    if (!expiresAt) return '∞';
     const expMs = new Date(expiresAt).getTime();
     const nowMs = Date.now();
     const diffMs = expMs - nowMs;
@@ -3767,8 +3775,8 @@ export class FrigateEventsCard extends LitElement {
     container.querySelectorAll('[data-timer-mask-id]').forEach(el => {
       const maskId = el.getAttribute('data-timer-mask-id');
       const mask = maskId ? map.get(maskId) : undefined;
-      if (mask && mask.expires_at) {
-        const text = this._formatMaskRemainingTime(mask.expires_at);
+      if (mask) {
+        const text = this._formatMaskRemainingTime(mask.expires_at, mask.duration_hours);
         const span = el.querySelector('.timer-text');
         if (span) span.textContent = text;
       }
@@ -3941,6 +3949,7 @@ export class FrigateEventsCard extends LitElement {
       { hours: 48, label: '48h' },
       { hours: 72, label: '72h' },
       { hours: 168, label: '7d' },
+      { hours: -1, label: '∞' },
     ];
 
     container.innerHTML = `
@@ -3989,7 +3998,7 @@ export class FrigateEventsCard extends LitElement {
               ${filteredMasks.map((mask: any) => {
                 const currentDurationHours = typeof mask.duration_hours === 'number' ? mask.duration_hours : 24;
                 const isCustom = !durationPresets.some(p => Math.abs(p.hours - currentDurationHours) < 0.01);
-                const remainingText = this._formatMaskRemainingTime(mask.expires_at);
+                const remainingText = this._formatMaskRemainingTime(mask.expires_at, currentDurationHours);
 
                 const clientId = this._config?.frigate_client_id || 'frigate';
                 const maskId = String(mask.mask_id || '');
@@ -4509,7 +4518,9 @@ export class FrigateEventsCard extends LitElement {
           });
         }
       }
-      const durationText = durationHours === 1
+      const durationText = durationHours <= 0
+        ? 'infinite (manual removal only)'
+        : durationHours === 1
         ? '1 hour'
         : durationHours < 24
         ? `${durationHours} hours`

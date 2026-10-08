@@ -1370,9 +1370,12 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         # Cancel any previous timer for this mask
         if mask_id in domain_data["timers"]:
             domain_data["timers"][mask_id]()
+            del domain_data["timers"][mask_id]
+
+        is_infinite = duration_hours <= 0
 
         # Record active mask metadata
-        expires_at = datetime.now(timezone.utc) + timedelta(hours=duration_hours)
+        expires_at = None if is_infinite else (datetime.now(timezone.utc) + timedelta(hours=duration_hours))
         
         # Remove from pending if re-adding
         domain_data["pending_restart_masks"].pop(mask_id, None)
@@ -1381,8 +1384,8 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
             "mask_id": mask_id,
             "camera": camera,
             "polygon": poly_str,
-            "duration_hours": duration_hours,
-            "expires_at": expires_at.isoformat().replace("+00:00", "Z"),
+            "duration_hours": -1 if is_infinite else duration_hours,
+            "expires_at": None if is_infinite else expires_at.isoformat().replace("+00:00", "Z"),
             "event_id": event_id or mask_id,
             "label": label_val,
             "box": box_coords if box_coords else None,
@@ -1391,16 +1394,18 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         }
         _update_state()
 
-        # Schedule automatic expiration
-        async def _expire_callback(_now):
-            _LOGGER.info("Temporary mask %s expired after %s hours, pruning...", mask_id, duration_hours)
-            await async_handle_remove_mask(ServiceCall(DOMAIN, "remove_mask", {"mask_id": mask_id}))
+        # Schedule automatic expiration only if not infinite
+        if not is_infinite:
+            async def _expire_callback(_now):
+                _LOGGER.info("Temporary mask %s expired after %s hours, pruning...", mask_id, duration_hours)
+                await async_handle_remove_mask(ServiceCall(DOMAIN, "remove_mask", {"mask_id": mask_id}))
 
-        duration_seconds = int(duration_hours * 3600)
-        unsub = async_call_later(hass, duration_seconds, _expire_callback)
-        domain_data["timers"][mask_id] = unsub
-
-        _LOGGER.info("Added temporary mask %s for %s (%s hours)", mask_id, camera, duration_hours)
+            duration_seconds = int(duration_hours * 3600)
+            unsub = async_call_later(hass, duration_seconds, _expire_callback)
+            domain_data["timers"][mask_id] = unsub
+            _LOGGER.info("Added temporary mask %s for %s (%s hours)", mask_id, camera, duration_hours)
+        else:
+            _LOGGER.info("Added temporary mask %s for %s (infinite / no auto-expiration)", mask_id, camera)
 
     async def async_handle_remove_mask(call: ServiceCall):
         raw_mask_id = call.data.get("mask_id")
