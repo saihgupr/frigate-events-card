@@ -69,3 +69,17 @@ export interface NativeFrigateEventQuery {
     has_snapshot?: boolean;
     favorites?: boolean;
 }
+
+export interface TimelineWindow {
+    startTime: number;
+    endTime: number;
+    camera: string;
+}
+
+export interface TimelinePlaybackState {
+    isPlaying: boolean;
+    playbackRate: number;
+    currentTime: number;
+    duration: number;
+}
+

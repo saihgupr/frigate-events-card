@@ -29,8 +29,9 @@ A simple Lovelace card for displaying recent Frigate detection events in a horiz
 - **Scrollable Gallery**: Optional horizontal scroll mode with arrow navigation and hidden scrollbar for a clean, native feel.
 - **Customizable Layout**: Reverse the rendering order or offset the timeline to build the exact dashboard you want.
 - **Daily Reset**: Optional automated clearing for a fresh daily view.
+- **Timeline & Scrubber (Frigate 0.13 VOD)**: Stream continuous video recordings for any time window directly in a dedicated modal player. Scrub dynamically across an interactive visual track with color-coded event markers, jump by relative intervals (`-15m`, `-1h`, `-3h`, `-12h`, `Start of Day`), and skim at variable speeds up to 16x. Enabled by default; clicking an event thumbnail opens it directly in the Timeline when video playback is enabled.
 - **Interactive Details Modal**: Deep-dive popup displaying full event information, including AI-generated descriptions (if available), duration, date, camera, zones, and accuracy. Supports interactive previous/next navigation arrows and keyboard hotkeys (ArrowLeft / ArrowRight / Escape).
-- **Right-Click & Long-Press Context Menu**: Right-click (desktop) or long-press (mobile) any event thumbnail to instantly view details, permanently delete events from Frigate, or apply temporary false-positive masks.
+- **Right-Click & Long-Press Context Menu**: Right-click (desktop) or long-press (mobile) any event thumbnail to instantly view details, view the exact moment in continuous timeline, permanently delete events from Frigate, or apply temporary false-positive masks.
 - **Configurable Modal Metadata**: Fine-grained visibility controls to show/hide specific metadata elements (like date, duration, or camera name) in the details popup.
 
 ## Installation
@@ -117,6 +118,13 @@ show_modal_navigation: false
 # Optional: Layout overrides
 reverse: true
 offset: 1
+
+# Optional: Timeline (Frigate 0.13 VOD)
+# Default is on (true). If enabled and video playback is enabled, clicking an event opens the Timeline directly.
+show_timeline: true
+timeline_on_click: true
+timeline_default_window_hours: 1
+timeline_event_seek_offset: 0
 
 # Optional: Reset display daily at a specific time (24hr format)
 daily_clear_time: "04:00"
@@ -214,9 +222,10 @@ Right-clicking (desktop) or long-pressing (touch devices) any event thumbnail op
 
 * **Delete Event**: Permanently deletes the selected event, snapshot, and clip from the Frigate NVR backend directly from your dashboard and immediately removes the thumbnail from your gallery.
 * **View Details**: Opens the full interactive details modal popup with snapshot, video playback, AI description, detection score, and timestamp metrics.
+* **View in Timeline (Frigate 0.13 VOD)**: Instantly opens continuous VOD recording playback centered on the event's exact start time. Scrub forward and backward around the event, visually spot other detections on the color-coded marker track, adjust window spans (15m, 30m, 1h, 2h, 4h), and fast-forward at variable speeds (up to 16x).
 * **Temporary Masking (Optional)**: Dynamically available when the companion `frigate_temp_mask` custom component is installed. Automatically calculates a 10% expanded bounding box around false detections (such as a wheelbarrow, package, or parked vehicle), injects a temporary mask into Frigate, and automatically restarts Frigate's backend process so the mask takes effect immediately.
 * **Change Duration / Remove Mask**: Right-clicking an already masked event allows changing the mask duration on the fly (1h, 4h, 8h, 12h, 24h, 48h, 7d, or Custom hours) or removing the mask.
-* **Live Video Feed Right-Click (Temporary Mask Manager)**: Right-clicking (or long-pressing on touch devices) the live video feed opens the interactive Mask Manager modal directly, displaying all active masks with object snapshots/minimaps, countdown timers, polygon coordinates, per-mask duration adjustments, and individual removal controls.
+* **Live Video Feed Right-Click (Timeline & Mask Manager)**: Right-clicking (or long-pressing on touch devices) the live video feed opens the context menu to launch the **Timeline** for that camera or open the interactive **Mask Manager** modal directly.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/develop/images/snapshots/temp_mask_1.png" width="32%" />
@@ -225,10 +234,10 @@ Right-clicking (desktop) or long-pressing (touch devices) any event thumbnail op
 </p>
 
 > [!NOTE]
-> **Restart Behavior & Pending Restart Awareness**:
+> **Restart Behavior by Frigate Version**:
 > * **Adding or Updating Masks:** Frigate **automatically restarts** its internal detector process (~1–2 seconds) so false alarms stop immediately.
-> * **Removing or Expired (Timed Out) Masks:** The mask is cleaned from `config.yml` on disk **without restarting Frigate** to prevent dropping live video streams or interrupting daytime recordings.
-> * **Pending Restart Tracker:** The Mask Manager automatically tracks removed masks and displays a **Restart Pending** banner and status badge with a 1-click **Restart Frigate** button so you can apply removals immediately whenever convenient.
+> * **Removing Masks on Frigate 0.18+:** The mask is **instantly disabled** via the Frigate API (`PUT /api/camera/{camera}/set/object_mask/{name}`) and cleaned from `config.yml` — **no detector restart required**. Detection stops the moment you click Remove.
+> * **Removing Masks on Frigate 0.13 and earlier:** The mask is cleaned from `config.yml` on disk without restarting Frigate automatically. A **Pending Restart Tracker** in the Mask Manager displays a 1-click **Restart Frigate** button so you can apply the removal whenever convenient.
 
 #### Setting Up Temporary Masking (Optional Companion Integration)
 
@@ -347,6 +356,8 @@ The most common settings to get you started:
 | `live_view` | boolean | `false` | Show a live WebRTC camera feed above the event gallery. Click to toggle fullscreen view. Continuous peer connection with 24/7 self-healing auto-recovery for network drops and Frigate restarts. |
 | `live_view_entity` | string | none | Camera entity ID for the live feed (e.g. `camera.wyze_camera`). Required when `live_view: true`. |
 | `live_view_aspect_ratio` | string | `16 / 9` | CSS `aspect-ratio` for the live feed container (e.g. `"4 / 3"`). |
+| `show_mute` | boolean | `false` | Show interactive mute toggle button on hover over the live video feed and timeline player (alias: `live_view_show_mute`). |
+| `live_view_mute_position` | string | `top-right` | Corner placement of the mute toggle button (`top-right` or `top-left`). |
 | `go2rtc_url` | string | none | Optional direct go2rtc API URL (e.g. `http://192.168.1.211:1984`). Directly negotiates WebRTC with go2rtc, bypassing Home Assistant WebSocket requirements. |
 | `go2rtc_stream` | string | none | Optional stream name in go2rtc (defaults to `live_view_entity` name without `camera.`, e.g. `wyze_camera`). |
 
@@ -373,6 +384,8 @@ The most common settings to get you started:
 | `reverse` | boolean | `false` | Reverses the rendering order of the timeline (events populate right-to-left instead of left-to-right). |
 | `offset` | number | `0` | Number of recent events to skip/hide from the start of the list. Useful for excluding the newest event if it's already shown in another card. |
 | `daily_clear_time` | string | none | Optional. Time to reset the display daily (24hr format, e.g., "04:00"). If set, events before this time are hidden and shown as grey placeholders. |
+| `timeline_event_seek_offset` | number | `0` | Seconds added/subtracted when seeking to an event in the continuous timeline (e.g. `5` to jump 5s after detection starts, or `-5` for earlier pre-roll). |
+| `timeline_show_mute` | boolean | `true` | Show interactive mute toggle button on hover over the Timeline continuous video player. |
 
 ### Advanced Detail Modal & Debug Settings
 | Option | Type | Default | Description |
