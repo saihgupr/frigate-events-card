@@ -948,7 +948,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
             """Return Frigate's per-user reviewed state for a tracked event."""
             event_id = msg.get("event_id")
             if not isinstance(event_id, str) or not re.fullmatch(
-                r"[0-9]+(?:\\.[0-9]+)?-[A-Za-z0-9_-]+", event_id
+                r"[0-9]+(?:\.[0-9]+)?-[A-Za-z0-9_-]+", event_id
             ):
                 connection.send_result(msg["id"], {"has_been_reviewed": None})
                 return
