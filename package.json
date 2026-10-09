@@ -1,12 +1,13 @@
 {
-    "name": "frigate-events-card",
-    "version": "2.4.8",
-    "description": "A simple Lovelace card for displaying recent Frigate events",
+    "name": "frigate-events-plus",
+    "version": "2.5.0",
+    "description": "Frigate Events Plus — a feature-rich Home Assistant Lovelace card for Frigate events",
     "main": "frigate-events-card.js",
     "type": "module",
     "scripts": {
         "build": "rollup -c",
-        "watch": "rollup -c --watch"
+        "watch": "rollup -c --watch",
+        "typecheck": "tsc --noEmit"
     },
     "keywords": [
         "frigate",

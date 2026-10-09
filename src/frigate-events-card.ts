@@ -6,13 +6,15 @@ import { customElement, property, state } from 'lit/decorators.js';
 import { ref } from 'lit/directives/ref.js';
 import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/types';
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
-import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, deleteEvent } from './frigate/api';
+import { getEvents, getEventSnapshotURL, getEventThumbnailURL, subscribeToEvents, getEventClipURL, getEventHlsURL, getEventReviewStatus, deleteEvent } from './frigate/api';
 
 const CARD_VERSION = '2.5.0';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
 const FALLBACK_POLL_INTERVAL = 10000; // 10 seconds
+const REVIEW_STATUS_CACHE_MS = 60_000;
+const MAX_PERSISTED_WATCHED_EVENTS = 500;
 const HOVER_CROP_DEFAULT_SMOOTHING = 1.0; // 0.0 is jerky, 1.0 is smoothest
 const HOVER_CROP_MARGIN_PERCENT = 0.20; // 20% margin on each side of the container
 
@@ -42,6 +44,9 @@ type ObjectPositionPercent = { x: number; y: number };
 interface FrigateEventsCardConfig extends LovelaceCardConfig {
   frigate_client_id?: string;
   frigate_url?: string;
+  auto_hide_reviewed?: boolean;
+  auto_hide_watched?: boolean;
+  auto_hide_storage_key?: string;
   event_count?: number;
   cameras?: string[];
   labels?: string[];
@@ -101,6 +106,8 @@ const DEFAULT_CONFIG: Partial<FrigateEventsCardConfig> = {
   show_modal_navigation: false,
   show_temp_mask: true,
   temp_mask_duration: '24:00:00',
+  auto_hide_reviewed: false,
+  auto_hide_watched: false,
   title: 'Frigate Events',
   video: true,
   video_on_hover: true,
@@ -145,6 +152,10 @@ export class FrigateEventsCard extends LitElement {
   @state() private _maskManagerSelectedCamera = 'all';
   @state() private _localPendingMasks: any[] = [];
 
+  private _watchedEventIds = new Set<string>();
+  private _watchedStorageKey?: string;
+  private _reviewStatusCache = new Map<string, { reviewed: boolean | null; checkedAt: number }>();
+  private _reviewStatusRequests = new Map<string, Promise<boolean | null>>();
   private _unsubscribe?: () => void;
   private _pollInterval?: number;
   private _boundVisibilityHandler?: () => void;
@@ -212,6 +223,8 @@ export class FrigateEventsCard extends LitElement {
       throw new Error('Invalid configuration');
     }
     this._config = { ...DEFAULT_CONFIG, ...config };
+    this._loadWatchedEventIds();
+    this._reviewStatusCache.clear();
   }
 
   public getCardSize(): number {
@@ -852,6 +865,9 @@ export class FrigateEventsCard extends LitElement {
       });
 
       this._events = events.sort((a, b) => (b.start_time || 0) - (a.start_time || 0));
+      if (this._config.auto_hide_reviewed) {
+        void this._refreshReviewStatuses(this._events);
+      }
     } catch (e: any) {
       console.warn('Temporary connection issue loading Frigate events:', e);
       const msg = e?.message || (typeof e === 'object' ? JSON.stringify(e) : String(e));
@@ -2078,6 +2094,110 @@ export class FrigateEventsCard extends LitElement {
     return skipSeconds > 0 ? `#t=${skipSeconds}` : '';
   }
 
+  private _getWatchedStorageKey(): string {
+    const config = this._config;
+    const customKey = config?.auto_hide_storage_key?.trim();
+    const identity = customKey || JSON.stringify({
+      instance: config?.frigate_client_id || 'frigate',
+      cameras: [...(config?.cameras || [])].sort(),
+      labels: [...(config?.labels || [])].sort(),
+      zones: [...(config?.zones || [])].sort(),
+    });
+    return `frigate-events-plus:watched:${encodeURIComponent(identity)}`;
+  }
+
+  private _loadWatchedEventIds(): void {
+    this._watchedStorageKey = this._getWatchedStorageKey();
+    this._watchedEventIds.clear();
+    try {
+      const stored = localStorage.getItem(this._watchedStorageKey);
+      if (!stored) return;
+      const parsed: unknown = JSON.parse(stored);
+      if (Array.isArray(parsed)) {
+        parsed.slice(-MAX_PERSISTED_WATCHED_EVENTS).forEach((id: unknown) => {
+          if (typeof id === 'string' && id.length > 0) this._watchedEventIds.add(id);
+        });
+      }
+    } catch (error) {
+      console.debug('Frigate Events Plus: unable to load watched-event history from local storage.', error);
+    }
+  }
+
+  private _persistWatchedEventIds(): void {
+    if (!this._watchedStorageKey) return;
+    const ids = [...this._watchedEventIds].slice(-MAX_PERSISTED_WATCHED_EVENTS);
+    this._watchedEventIds = new Set(ids);
+    try {
+      localStorage.setItem(this._watchedStorageKey, JSON.stringify(ids));
+    } catch (error) {
+      console.debug('Frigate Events Plus: unable to save watched-event history to local storage.', error);
+    }
+  }
+
+  private _markEventWatched(eventId: string): void {
+    if (!this._config?.auto_hide_watched) return;
+    this._watchedEventIds.add(eventId);
+    this._persistWatchedEventIds();
+    this.requestUpdate();
+  }
+
+  private _shouldHideEvent(event: FrigateEvent): boolean {
+    if (this._config?.auto_hide_watched && this._watchedEventIds.has(event.id)) {
+      return true;
+    }
+    return this._config?.auto_hide_reviewed === true &&
+      this._reviewStatusCache.get(event.id)?.reviewed === true;
+  }
+
+  private async _getCachedReviewStatus(eventId: string): Promise<boolean | null> {
+    const cached = this._reviewStatusCache.get(eventId);
+    if (cached && Date.now() - cached.checkedAt < REVIEW_STATUS_CACHE_MS) {
+      return cached.reviewed;
+    }
+    const inFlight = this._reviewStatusRequests.get(eventId);
+    if (inFlight) return inFlight;
+
+    if (!this.hass || !(
+      this.hass.services?.['frigate_temp_mask'] ||
+      this.hass.states?.['sensor.frigate_active_masks']
+    )) {
+      this._reviewStatusCache.set(eventId, { reviewed: null, checkedAt: Date.now() });
+      return null;
+    }
+
+    const request = getEventReviewStatus(this.hass, eventId)
+      .catch(() => null)
+      .then((reviewed) => {
+        this._reviewStatusCache.set(eventId, { reviewed, checkedAt: Date.now() });
+        return reviewed;
+      })
+      .finally(() => {
+        this._reviewStatusRequests.delete(eventId);
+      });
+    this._reviewStatusRequests.set(eventId, request);
+    return request;
+  }
+
+  private async _refreshReviewStatuses(events: FrigateEvent[]): Promise<void> {
+    const now = Date.now();
+    const needsRefresh = events.filter((event) => {
+      const cached = this._reviewStatusCache.get(event.id);
+      return !cached || now - cached.checkedAt >= REVIEW_STATUS_CACHE_MS;
+    });
+    if (needsRefresh.length === 0) return;
+    await Promise.all(needsRefresh.map((event) => this._getCachedReviewStatus(event.id)));
+    this.requestUpdate();
+  }
+
+  private _getDisplayEvents(): FrigateEvent[] {
+    let visibleEvents = this._events;
+    const resetTimestamp = this._getDailyResetTimestamp();
+    if (resetTimestamp !== null) {
+      visibleEvents = visibleEvents.filter((event) => (event.start_time || 0) > resetTimestamp);
+    }
+    return visibleEvents.filter((event) => !this._shouldHideEvent(event));
+  }
+
   private _getEventsToShow(): FrigateEvent[] {
     if (!this._config) return [];
     const isScroll = !!this._config.scroll;
@@ -2085,11 +2205,7 @@ export class FrigateEventsCard extends LitElement {
     const scrollLimit = this._config.scroll_limit || 20;
     const limit = isScroll ? scrollLimit : visibleCount;
 
-    let visibleEvents = this._events;
-    const resetTimestamp = this._getDailyResetTimestamp();
-    if (resetTimestamp !== null) {
-      visibleEvents = this._events.filter(e => (e.start_time || 0) > resetTimestamp);
-    }
+    const visibleEvents = this._getDisplayEvents();
 
     const offset = this._config.offset || 0;
     const eventsToShow = visibleEvents.slice(offset, offset + limit);
@@ -2252,6 +2368,9 @@ export class FrigateEventsCard extends LitElement {
     const videoEl = container.querySelector('video');
     if (videoEl) {
       videoEl.muted = this._config?.muted !== false;
+      // Only the modal's full clip can mark an event watched. Hover previews never
+      // attach this listener, so merely hovering over a thumbnail does not hide it.
+      videoEl.addEventListener('ended', () => this._markEventWatched(event.id), { once: true });
     }
 
     // Stop propagation on content click
@@ -3996,12 +4115,8 @@ export class FrigateEventsCard extends LitElement {
     const scrollLimit = this._config.scroll_limit || 20;
     const limit = this._config.scroll ? scrollLimit : visibleCount;
 
-    // Filter events based on daily clear time
-    let visibleEvents = this._events;
-    const resetTimestamp = this._getDailyResetTimestamp();
-    if (resetTimestamp !== null) {
-      visibleEvents = this._events.filter(e => (e.start_time || 0) > resetTimestamp);
-    }
+    // Apply daily reset and optional auto-hide filters before counting visible events.
+    const visibleEvents = this._getDisplayEvents();
 
     // Limit to event count and calculate placeholders
     const offset = this._config.offset || 0;

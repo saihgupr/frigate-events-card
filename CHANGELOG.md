@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.5.0] - 2026-10-09
+- Added: Optional gallery filtering for Frigate review status and completed modal playback.
+- Added: Browser-local persistence for completed-playback history; hover previews are not treated as completed playback.
+- Branding: Introduced the Frigate Events Plus project name while retaining the existing card element and JavaScript resource names for compatibility.
+- Maintenance: Repaired merge-conflict markers in `package-lock.json`.
+
 ## [2.4.0] - 2026-09-12
 - Added: Right-click (desktop) and long-press (mobile/touch) context menu with **Delete Event** to permanently remove events, snapshots, and recordings from Frigate directly from the dashboard.
 - Added: Dynamic Temporary False-Positive Masking — turn false alerts (parked vehicles, spiderwebs, shadows) into auto-padded polygon masks with a single click and customizable duration presets (1h to 7d or custom hours).

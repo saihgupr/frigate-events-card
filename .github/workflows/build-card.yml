@@ -1,0 +1,44 @@
+name: Build and validate Frigate Events Plus
+
+on:
+  push:
+    branches:
+      - feature/auto-hide-reviewed-events
+    paths:
+      - "src/**"
+      - "custom_components/**"
+      - "package.json"
+      - "package-lock.json"
+      - "rollup.config.js"
+      - "tsconfig.json"
+      - ".github/workflows/build-card.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out development branch
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Type-check TypeScript
+        run: npm run typecheck
+      - name: Build browser bundle
+        run: npm run build
+      - name: Check companion integration Python syntax
+        run: python -m compileall -q custom_components/frigate_temp_mask
+      - name: Upload generated browser bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: frigate-events-plus-build
+          path: frigate-events-card.js
+          if-no-files-found: error

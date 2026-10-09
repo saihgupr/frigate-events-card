@@ -1,6 +1,8 @@
-# Frigate Events Card
+# Frigate Events Plus
 
-A simple Lovelace card for displaying recent Frigate detection events in a horizontal gallery
+A feature-rich Home Assistant Lovelace card for browsing recent Frigate detection events and clips.
+
+This project evolves the original MIT-licensed Frigate Events Card. The existing `frigate-events-card` custom element and JavaScript resource name are retained for dashboard compatibility; see `LICENSE` for the original copyright notice.
 
 ![Demo](https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/demo.gif)
 ![Screenshot](https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/screenshot_6.png)
