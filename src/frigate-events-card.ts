@@ -2205,7 +2205,25 @@ export class FrigateEventsCard extends LitElement {
     const scrollLimit = this._config.scroll_limit || 20;
     const limit = isScroll ? scrollLimit : visibleCount;
 
-    const visibleEvents = this._getDisplayEvents();
+    let visibleEvents = this._getDisplayEvents();
+
+    // Keep the currently open event in the modal's navigation list even if playback
+    // completion or a review-status refresh removes its thumbnail from the gallery.
+    const selectedEvent = this._selectedEvent;
+    if (
+      selectedEvent &&
+      this._shouldHideEvent(selectedEvent) &&
+      !visibleEvents.some((event) => event.id === selectedEvent.id)
+    ) {
+      const resetTimestamp = this._getDailyResetTimestamp();
+      const stillInWindow = this._events.some((event) => event.id === selectedEvent.id) &&
+        (resetTimestamp === null || (selectedEvent.start_time || 0) > resetTimestamp);
+      if (stillInWindow) {
+        visibleEvents = [...visibleEvents, selectedEvent].sort(
+          (a, b) => (b.start_time || 0) - (a.start_time || 0)
+        );
+      }
+    }
 
     const offset = this._config.offset || 0;
     const eventsToShow = visibleEvents.slice(offset, offset + limit);
