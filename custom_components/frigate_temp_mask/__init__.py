@@ -946,11 +946,18 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         @websocket_api.async_response
         async def websocket_review_status(hass: HomeAssistant, connection, msg):
             """Return Frigate's per-user reviewed state for a tracked event."""
+            event_id = msg.get("event_id")
+            if not isinstance(event_id, str) or not re.fullmatch(
+                r"[0-9]+(?:\\.[0-9]+)?-[A-Za-z0-9_-]+", event_id
+            ):
+                connection.send_result(msg["id"], {"has_been_reviewed": None})
+                return
+
             session = async_get_clientsession(hass)
             base_url = _get_frigate_base_url()
             try:
                 async with session.get(
-                    f"{base_url}/api/review/event/{msg['event_id']}", timeout=5
+                    f"{base_url}/api/review/event/{event_id}", timeout=5
                 ) as resp:
                     if resp.status == 200:
                         payload = await resp.json()

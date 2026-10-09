@@ -15,7 +15,7 @@
         "lovelace",
         "card"
     ],
-    "author": "saihgupr",
+    "author": "Callumhome",
     "license": "MIT",
     "dependencies": {
         "home-assistant-js-websocket": "^9.6.0",
