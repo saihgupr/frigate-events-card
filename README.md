@@ -1,14 +1,17 @@
-# Frigate Events Card
+# Frigate Events Plus
 
-A simple Lovelace card for displaying recent Frigate detection events in a horizontal gallery
+A feature-rich Home Assistant Lovelace card for browsing recent Frigate detection events and clips.
+
+This project evolves the original MIT-licensed Frigate Events Card. The existing `frigate-events-card` custom element and JavaScript resource name are retained for dashboard compatibility; see `LICENSE` for the original copyright notice.
 
 ![Demo](https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/demo.gif)
 ![Screenshot](https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/screenshot_6.png)
 ![Screenshot](https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/screenshot_3.png)
 ![Screenshot](https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/screenshot_4.png)
 
-## What's New in v2.4
+## What's New in v2.5
 
+- **Review and playback gallery controls**: Optionally remove reviewed items or fully watched clips from the gallery without changing Frigate's stored media.
 - **Context Menu & Direct Event Deletion**: Right-click (desktop) or long-press (mobile/touch) any event thumbnail to quickly view details or permanently delete events, snapshots, and video clips from the Frigate NVR backend directly from your dashboard.
 - **Dynamic Temporary False-Positive Masking**: Turn false detections (parked cars, shadows, spiderwebs, outdoor decorations) into auto-padded polygon masks with a single click. Includes customizable duration presets (1h to 7 days or custom hours) with zero-restart mask extension and zero-downtime removals.
 - **Live Feed Mask Manager Modal**: Right-click the live WebRTC camera feed to open the interactive Mask Manager — view active masks with snapshot minimaps, countdown timers, polygon coordinates, and per-mask controls.

@@ -12,6 +12,8 @@ except ImportError:
 from datetime import datetime, timedelta, timezone
 
 from aiohttp import web
+import voluptuous as vol
+from homeassistant.components import websocket_api
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
@@ -933,6 +935,50 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                 if url:
                     return url.rstrip("/")
         return DEFAULT_FRIGATE_URL
+
+    if not domain_data.get("review_ws_registered"):
+        @websocket_api.websocket_command(
+            {
+                vol.Required("type"): f"{DOMAIN}/review_status",
+                vol.Required("event_id"): str,
+            }
+        )
+        @websocket_api.async_response
+        async def websocket_review_status(hass: HomeAssistant, connection, msg):
+            """Return Frigate's per-user reviewed state for a tracked event."""
+            event_id = msg.get("event_id")
+            if not isinstance(event_id, str) or not re.fullmatch(
+                r"[0-9]+(?:\.[0-9]+)?-[A-Za-z0-9_-]+", event_id
+            ):
+                connection.send_result(msg["id"], {"has_been_reviewed": None})
+                return
+
+            session = async_get_clientsession(hass)
+            base_url = _get_frigate_base_url()
+            try:
+                async with session.get(
+                    f"{base_url}/api/review/event/{event_id}", timeout=5
+                ) as resp:
+                    if resp.status == 200:
+                        payload = await resp.json()
+                        reviewed = payload.get("has_been_reviewed")
+                        if isinstance(reviewed, bool):
+                            connection.send_result(
+                                msg["id"], {"has_been_reviewed": reviewed}
+                            )
+                            return
+            except Exception as e:
+                _LOGGER.debug(
+                    "Could not fetch review status for Frigate event %s: %s",
+                    msg["event_id"],
+                    e,
+                )
+            # Unsupported Frigate versions and API failures are non-fatal; the card
+            # treats an unknown state as unreviewed and leaves the thumbnail visible.
+            connection.send_result(msg["id"], {"has_been_reviewed": None})
+
+        websocket_api.async_register_command(hass, websocket_review_status)
+        domain_data["review_ws_registered"] = True
 
     def _update_state():
         active = domain_data.get("active_masks", {})

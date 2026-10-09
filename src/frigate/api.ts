@@ -60,6 +60,26 @@ export function getEventHlsURL(clientId: string, eventId: string): string {
 }
 
 /**
+ * Get the reviewed state for the review item associated with a tracked event.
+ * Returns null when the optional companion integration or Frigate endpoint is unavailable.
+ */
+export async function getEventReviewStatus(
+    hass: HomeAssistant,
+    eventId: string
+): Promise<boolean | null> {
+    try {
+        const payload = await hass.callWS<{ has_been_reviewed?: unknown }>({
+            type: 'frigate_temp_mask/review_status',
+            event_id: eventId,
+        });
+        return typeof payload.has_been_reviewed === 'boolean' ? payload.has_been_reviewed : null;
+    } catch {
+        // Review lookup is optional; keep the card usable when the companion API is unavailable.
+        return null;
+    }
+}
+
+/**
  * Subscribe to real-time Frigate events
  */
 export async function subscribeToEvents(
