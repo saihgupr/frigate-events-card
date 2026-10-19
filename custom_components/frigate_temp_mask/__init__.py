@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.core import HomeAssistant, HomeAssistantError, ServiceCall
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_call_later, async_track_time_interval
 from homeassistant.helpers.typing import ConfigType
@@ -1198,8 +1198,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         raw_event_id = call.data.get("event_id")
         event_id = str(raw_event_id).strip().strip("\"'") if raw_event_id is not None else ""
         if not event_id:
-            _LOGGER.error("event_id is required to add a temporary mask")
-            return
+            raise HomeAssistantError("An event_id is required to add a temporary mask")
         raw_mask_id = call.data.get("mask_id")
         mask_id = str(raw_mask_id).strip().strip("\"'") if raw_mask_id else ""
         if not mask_id:
@@ -1219,8 +1218,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         session = async_get_clientsession(hass)
         base_url = _get_frigate_base_url()
         if not base_url:
-            _LOGGER.error("Frigate integration is not configured; cannot add a temporary mask")
-            return
+            raise HomeAssistantError("Frigate integration is not configured; cannot add a temporary mask")
 
         polygon_arg = call.data.get("polygon", "")
         box_coords = None
@@ -1273,11 +1271,10 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                 camera,
                 mask_id,
             )
-            return
+            raise HomeAssistantError(f"Could not get a valid bounding box for Frigate event {event_id}")
 
         if not camera:
-            _LOGGER.error("A camera is required to add a temporary mask")
-            return
+            raise HomeAssistantError("A camera is required to add a temporary mask")
 
         width, height = 1920, 1080
 
@@ -1295,9 +1292,13 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
             async with session.get(f"{base_url}/api/config/raw", timeout=10) as resp:
                 if resp.status == 200:
                     raw_config = _normalize_raw_config(await resp.text())
+                else:
+                    raise HomeAssistantError(f"Frigate returned status {resp.status} while reading its config")
         except Exception as e:
             _LOGGER.error("Failed to read Frigate config: %s", e)
-            return
+            if isinstance(e, HomeAssistantError):
+                raise
+            raise HomeAssistantError(f"Failed to read Frigate config: {e}") from e
 
         version_tuple, is_dict = _detect_config_version_and_format(raw_config, camera, version_str)
         use_normalized = version_tuple >= (0, 14) or is_dict
@@ -1317,7 +1318,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
             poly_str = _box_to_polygon(box_coords, width, height, padding, normalized=use_normalized)
             if not poly_str:
                 _LOGGER.error("Could not create a temporary mask from invalid box data: %s", box_coords)
-                return
+                raise HomeAssistantError("Could not create a temporary mask from the event bounding box")
 
         tag = f"# TEMP_MASK_{mask_id}"
         if not label_val and event_data and isinstance(event_data, dict):
@@ -1356,7 +1357,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                 domain_data["pending_restart_masks"].clear()
             except Exception as e:
                 _LOGGER.error("Failed to save Frigate config: %s", e)
-                return
+                raise HomeAssistantError(f"Failed to save the temporary mask to Frigate: {e}") from e
 
         # Cancel any previous timer for this mask
         if mask_id in domain_data["timers"]:

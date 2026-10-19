@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.5.5';
+const CARD_VERSION = '2.5.7';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -3202,25 +3202,18 @@ export class FrigateEventsCard extends LitElement {
         return false;
       } else {
         // Add mask
-        this._localPendingMasks = [];
         const durationHours = this._getMaskDurationHours();
-        if (this.hass.callService) {
-          try {
-            await this.hass.callService('frigate_temp_mask', 'add_mask', {
-              camera: event.camera,
-              event_id: event.id,
-              mask_id: maskId,
-              duration_hours: durationHours,
-              label: event.label,
-            });
-          } catch {
-            await this.hass.callService('shell_command', 'frigate_add_temp_mask', {
-              camera: event.camera,
-              event_id: event.id,
-              mask_id: maskId,
-            });
-          }
-        }
+        if (!this.hass.callService) throw new Error('Home Assistant service calls are unavailable');
+        const eventBox = event.data?.box || event.data?.snapshot?.box || event.box;
+        await this.hass.callService('frigate_temp_mask', 'add_mask', {
+          camera: event.camera,
+          event_id: event.id,
+          mask_id: maskId,
+          duration_hours: durationHours,
+          label: event.label,
+          box: eventBox?.join(','),
+        });
+        this._localPendingMasks = [];
         this.dispatchEvent(new CustomEvent('hass-notification', {
           detail: { message: `Temporary mask applied for ${event.camera}` },
           bubbles: true,
@@ -3230,6 +3223,14 @@ export class FrigateEventsCard extends LitElement {
       }
     } catch (err) {
       console.error('Failed to toggle temporary mask:', err);
+      if (!isCurrentlyActive) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.dispatchEvent(new CustomEvent('hass-notification', {
+          detail: { message: `Could not apply temporary mask: ${message}` },
+          bubbles: true,
+          composed: true,
+        }));
+      }
       return isCurrentlyActive;
     }
   }
