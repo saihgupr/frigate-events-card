@@ -270,10 +270,11 @@ def _detect_config_version_and_format(config_text: str, camera: str = "", versio
         if m:
             version_str = m.group(1).strip()
 
-    version_tuple = _parse_frigate_version(version_str) if version_str else (0, 18, 0)
+    version_known = bool(version_str)
+    version_tuple = _parse_frigate_version(version_str) if version_known else (0, 18, 0)
 
     # Frigate 0.18+ always uses dict format
-    if version_tuple >= (0, 18):
+    if version_known and version_tuple >= (0, 18):
         return version_tuple, True
 
     # Check if target camera or any camera already uses dictionary-style masks
@@ -306,9 +307,11 @@ def _detect_config_version_and_format(config_text: str, camera: str = "", versio
 
         if in_camera and in_mask:
             if stripped.startswith("coordinates:"):
-                return version_tuple, True
+                return version_tuple if version_known else (0, 18, 0), True
             if stripped.startswith("-"):
-                return version_tuple, False
+                # When the version endpoint is unavailable, preserve the legacy
+                # pixel-coordinate list format already present in this config.
+                return version_tuple if version_known else (0, 13, 0), False
 
     # Default based on version: 0.18+ dict, earlier list
     is_dict = version_tuple >= (0, 18)
@@ -442,7 +445,14 @@ def _clean_config_masks(config_text: str, mask_id_to_remove: str = "") -> str:
                     if not next_l.strip() or next_l.strip().startswith("#"):
                         continue
                     next_indent = len(next_l) - len(next_l.lstrip(" "))
-                    if next_indent > indent:
+                    # YAML permits sequence items to align with their key:
+                    #   inputs:
+                    #   - path: ...
+                    # Treat that indentationless sequence as a child, or cleanup
+                    # would rewrite `inputs:` to `{}` and leave an invalid `-`.
+                    if next_indent > indent or (
+                        next_indent == indent and next_l.lstrip().startswith("-")
+                    ):
                         has_child = True
                     break
                 if not has_child:
@@ -660,8 +670,31 @@ def _inject_temp_mask(config_text: str, camera: str, polygon: str, mask_id: str,
                 lines.append(f"    - {polygon} # {tag}")
             return "\n".join(lines) + "\n"
 
+    # A camera may be represented as an inline empty mapping (camera: {}). Expand
+    # it before adding child settings; otherwise the following YAML block is invalid.
+    inline_empty_camera = re.match(
+        rf"^(\s*){re.escape(camera)}:\s*\{{\s*\}}(\s*#.*)?$",
+        lines[cam_start],
+    )
+    if inline_empty_camera:
+        lines[cam_start] = f"{inline_empty_camera.group(1)}{camera}:{inline_empty_camera.group(2) or ''}"
+
     cam_lines = lines[cam_start:cam_end]
     cam_ind_str = " " * cam_indent
+
+    def _existing_mask_list_indent(mask_idx: int, mask_indent: int, end_idx: int) -> int | None:
+        """Keep new list entries aligned with existing Frigate 0.13 masks."""
+        for idx in range(mask_idx + 1, end_idx):
+            candidate = lines[idx]
+            stripped_candidate = candidate.strip()
+            if not stripped_candidate or stripped_candidate.startswith("#"):
+                continue
+            candidate_indent = len(candidate) - len(candidate.lstrip(" "))
+            if stripped_candidate.startswith("-") and candidate_indent >= mask_indent:
+                return candidate_indent
+            if candidate_indent <= mask_indent:
+                break
+        return None
 
     objects_rel_idx = -1
     objects_indent = -1
@@ -822,6 +855,9 @@ def _inject_temp_mask(config_text: str, camera: str, polygon: str, mask_id: str,
                         f"{' ' * (m_indent + 2)}coordinates: {polygon}",
                     ]
                 else:
+                    m_indent = _existing_mask_list_indent(
+                        label_mask_idx, label_mask_indent, label_end
+                    ) or m_indent
                     to_insert = [f"{' ' * m_indent}- {polygon} # {tag}"]
                 lines = lines[:insert_idx] + to_insert + lines[insert_idx:]
                 return "\n".join(lines) + "\n"
@@ -895,6 +931,9 @@ def _inject_temp_mask(config_text: str, camera: str, polygon: str, mask_id: str,
                     f"{' ' * (m_indent + 2)}coordinates: {polygon}",
                 ]
             else:
+                m_indent = _existing_mask_list_indent(
+                    obj_mask_abs_idx, obj_mask_indent, obj_abs_end
+                ) or m_indent
                 to_insert = [f"{' ' * m_indent}- {polygon} # {tag}"]
             lines = lines[:obj_mask_abs_idx + 1] + to_insert + lines[obj_mask_abs_idx + 1:]
             return "\n".join(lines) + "\n"
@@ -1352,7 +1391,16 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                     headers={"Content-Type": "text/plain"},
                     timeout=15
                 ) as resp:
-                    resp.raise_for_status()
+                    if resp.status >= 400:
+                        response_text = (await resp.text()).strip()
+                        try:
+                            response_data = json.loads(response_text)
+                            response_text = response_data.get("message", response_text)
+                        except (json.JSONDecodeError, AttributeError):
+                            pass
+                        raise HomeAssistantError(
+                            f"Frigate rejected the temporary mask config (HTTP {resp.status}): {response_text}"
+                        )
 
                 # Restart applied all pending changes
                 domain_data["pending_restart_masks"].clear()
