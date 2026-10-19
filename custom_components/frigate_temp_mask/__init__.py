@@ -18,11 +18,11 @@ from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_call_later, async_track_time_interval
 from homeassistant.helpers.typing import ConfigType
+from homeassistant.helpers.service import async_register_admin_service
 
 DOMAIN = "frigate_temp_mask"
 _LOGGER = logging.getLogger(__name__)
 
-DEFAULT_FRIGATE_URL = "http://192.168.1.211:5000"
 DEFAULT_PADDING = 0.10
 SYNC_INTERVAL_SECONDS = 30
 CONFIG_AUDIT_INTERVAL_SECONDS = 600  # 10 minutes background audit safety net
@@ -68,7 +68,6 @@ class FrigateRecordingSnapshotView(HomeAssistantView):
     url = "/api/frigate_temp_mask/recording_snapshot/{camera}/{timestamp:[.0-9]+}"
     extra_urls = ["/api/frigate_temp_mask/recording_snapshot/{camera}"]
     name = "api:frigate_temp_mask:recording_snapshot"
-    requires_auth = False
 
     def __init__(self, hass: HomeAssistant, get_base_url_fn) -> None:
         self.hass = hass
@@ -77,6 +76,8 @@ class FrigateRecordingSnapshotView(HomeAssistantView):
     async def get(self, request: web.Request, camera: str, timestamp: str = "") -> web.Response:
         session = async_get_clientsession(self.hass)
         base_url = self._get_base_url()
+        if not base_url:
+            return web.Response(status=404)
         ts = timestamp or request.query.get("ts", "")
         if ts:
             clean_ts = ts.split(".")[0]
@@ -107,7 +108,6 @@ class FrigateEventDeleteView(HomeAssistantView):
 
     url = "/api/frigate_temp_mask/events/{event_id}"
     name = "api:frigate_temp_mask:event_delete"
-    requires_auth = False
 
     def __init__(self, hass: HomeAssistant, get_base_url_fn) -> None:
         self.hass = hass
@@ -116,6 +116,8 @@ class FrigateEventDeleteView(HomeAssistantView):
     async def delete(self, request: web.Request, event_id: str) -> web.Response:
         session = async_get_clientsession(self.hass)
         base_url = self._get_base_url()
+        if not base_url:
+            return web.json_response({"success": False, "error": "Frigate integration is not configured"}, status=503)
         try:
             async with session.delete(f"{base_url}/api/events/{event_id}", timeout=10) as resp:
                 if resp.status in (200, 204):
@@ -935,7 +937,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                 url = entry.data.get("url")
                 if url:
                     return url.rstrip("/")
-        return DEFAULT_FRIGATE_URL
+        return ""
 
     async def _async_get_frigate_version() -> tuple[int, ...]:
         """Fetch and cache running Frigate version tuple, e.g. (0, 18, 0)."""
@@ -944,6 +946,8 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
             return cached
         session = async_get_clientsession(hass)
         base_url = _get_frigate_base_url()
+        if not base_url:
+            return (0, 0)
         try:
             async with session.get(f"{base_url}/api/version", timeout=4) as resp:
                 if resp.status == 200:
@@ -962,6 +966,8 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
             return False
         session = async_get_clientsession(hass)
         base_url = _get_frigate_base_url()
+        if not base_url:
+            return False
         try:
             url = f"{base_url}/api/camera/{camera}/set/object_mask/{mask_key}"
             payload = json.dumps({"value": state.upper()})
@@ -1002,6 +1008,9 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         """Synchronize mask state with running Frigate process uptime and active config."""
         session = async_get_clientsession(hass)
         base_url = _get_frigate_base_url()
+        if not base_url:
+            _LOGGER.error("Frigate integration is not configured; cannot synchronize temporary masks")
+            return
         now_dt = datetime.now(timezone.utc)
         now_ts = now_dt.timestamp()
 
@@ -1138,12 +1147,12 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                         box_coords = _polygon_to_box(poly_str)
                         adopted_mask = {
                             "mask_id": disc_id,
-                            "camera": cam_name or "wyze_camera",
+                            "camera": cam_name,
                             "polygon": poly_str,
                             "duration_hours": duration_hrs,
                             "expires_at": expires_dt.isoformat().replace("+00:00", "Z"),
                             "event_id": disc_id,
-                            "label": label_val or "car",
+                            "label": label_val,
                             "box": box_coords,
                             "width": 1920,
                             "height": 1080,
@@ -1175,8 +1184,8 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                         _LOGGER.info(
                             "Adopted orphan temporary mask %s (camera: '%s', label: '%s', expired: %s)",
                             disc_id,
-                            cam_name or "wyze_camera",
-                            label_val or "car",
+                            cam_name,
+                            label_val,
                             is_orphan,
                         )
 
@@ -1188,6 +1197,9 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         camera = (call.data.get("camera") or "").strip()
         raw_event_id = call.data.get("event_id")
         event_id = str(raw_event_id).strip().strip("\"'") if raw_event_id is not None else ""
+        if not event_id:
+            _LOGGER.error("event_id is required to add a temporary mask")
+            return
         raw_mask_id = call.data.get("mask_id")
         mask_id = str(raw_mask_id).strip().strip("\"'") if raw_mask_id else ""
         if not mask_id:
@@ -1206,6 +1218,9 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
 
         session = async_get_clientsession(hass)
         base_url = _get_frigate_base_url()
+        if not base_url:
+            _LOGGER.error("Frigate integration is not configured; cannot add a temporary mask")
+            return
 
         polygon_arg = call.data.get("polygon", "")
         box_coords = None
@@ -1237,30 +1252,6 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                             _LOGGER.error("Frigate event API returned status %s for event_id '%s' at %s/api/events/%s", resp.status, event_id, base_url, event_id)
                 except Exception as e:
                     _LOGGER.error("Error fetching Frigate event %s from %s: %s", event_id, base_url, e)
-            elif not box_coords and not polygon_arg:
-                # Fallback: find the most recent event for camera if event_id was not passed
-                try:
-                    cam_param = f"?camera={camera}&limit=5" if camera else "?limit=5"
-                    async with session.get(f"{base_url}/api/events{cam_param}", timeout=10) as resp:
-                        if resp.status == 200:
-                            evts = await resp.json()
-                            if isinstance(evts, list) and len(evts) > 0:
-                                event_data = evts[0]
-                                event_id = event_data.get("id", "")
-                                box_coords = _get_event_box(event_data)
-                                if not camera:
-                                    camera = event_data.get("camera", "")
-                                if not label_val:
-                                    label_val = event_data.get("label", "") or (event_data.get("data") or {}).get("label", "")
-                                if not mask_id or mask_id == "manual":
-                                    mask_id = event_id.split("-")[0] if "-" in event_id else event_id or "manual"
-                                _LOGGER.info("Using latest Frigate event fallback %s for camera %s", event_id, camera or "unknown")
-                            else:
-                                _LOGGER.warning("No recent Frigate events found for event fallback (camera=%s)", camera or "all")
-                        else:
-                            _LOGGER.error("Frigate events query returned status %s for fallback search", resp.status)
-                except Exception as e:
-                    _LOGGER.error("Error fetching latest Frigate events fallback: %s", e)
 
         poly_str = polygon_arg
         if not box_coords and not poly_str:
@@ -1285,8 +1276,8 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
             return
 
         if not camera:
-            camera = "wyze_camera"
-            _LOGGER.warning("No camera specified or inferred from event; falling back to default camera '%s'", camera)
+            _LOGGER.error("A camera is required to add a temporary mask")
+            return
 
         width, height = 1920, 1080
 
@@ -1408,6 +1399,10 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
             _LOGGER.info("Added temporary mask %s for %s (infinite / no auto-expiration)", mask_id, camera)
 
     async def async_handle_remove_mask(call: ServiceCall):
+        base_url = _get_frigate_base_url()
+        if not base_url:
+            _LOGGER.error("Frigate integration is not configured; cannot remove temporary masks")
+            return
         raw_mask_id = call.data.get("mask_id")
         mask_id = str(raw_mask_id).strip().strip("\"'") if raw_mask_id is not None else ""
         if not mask_id:
@@ -1432,7 +1427,6 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         _update_state()
 
         session = async_get_clientsession(hass)
-        base_url = _get_frigate_base_url()
         safe_mask_id = re.sub(r"[^a-zA-Z0-9_]", "_", mask_id)
         tag = f"TEMP_MASK_{mask_id}"
         dict_key = f"temp_mask_{mask_id}"
@@ -1500,6 +1494,10 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
             _LOGGER.error("Failed to remove mask %s: %s", mask_id, e)
 
     async def async_handle_prune_all(call: ServiceCall):
+        base_url = _get_frigate_base_url()
+        if not base_url:
+            _LOGGER.error("Frigate integration is not configured; cannot prune temporary masks")
+            return
         # Cancel all timers
         for unsub in domain_data["timers"].values():
             unsub()
@@ -1527,8 +1525,6 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                     await _async_set_runtime_mask_state(cam, f"temp_mask_{safe_m}", "OFF")
 
         session = async_get_clientsession(hass)
-        base_url = _get_frigate_base_url()
-
         try:
             async with session.get(f"{base_url}/api/config/raw", timeout=10) as resp:
                 if resp.status == 200:
@@ -1576,6 +1572,9 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
     async def async_handle_restart(call: ServiceCall):
         session = async_get_clientsession(hass)
         base_url = _get_frigate_base_url()
+        if not base_url:
+            _LOGGER.error("Frigate integration is not configured; cannot restart Frigate")
+            return
         try:
             async with session.post(f"{base_url}/api/restart", timeout=10) as resp:
                 _LOGGER.info("Frigate restart triggered via service: %s", resp.status)
@@ -1605,6 +1604,9 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
             return
         session = async_get_clientsession(hass)
         base_url = _get_frigate_base_url()
+        if not base_url:
+            _LOGGER.error("Frigate integration is not configured; cannot delete Frigate events")
+            return
         try:
             async with session.delete(f"{base_url}/api/events/{event_id}", timeout=10) as resp:
                 if resp.status in (200, 204):
@@ -1614,15 +1616,15 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         except Exception as e:
             _LOGGER.error("Failed to delete Frigate event %s: %s", event_id, e)
 
-    hass.services.async_register(DOMAIN, "add_mask", async_handle_add_mask)
-    hass.services.async_register(DOMAIN, "set_duration", async_handle_add_mask)
-    hass.services.async_register(DOMAIN, "remove_mask", async_handle_remove_mask)
-    hass.services.async_register(DOMAIN, "prune_all", async_handle_prune_all)
-    hass.services.async_register(DOMAIN, "restart", async_handle_restart)
-    hass.services.async_register(DOMAIN, "restart_frigate", async_handle_restart)
+    async_register_admin_service(hass, DOMAIN, "add_mask", async_handle_add_mask)
+    async_register_admin_service(hass, DOMAIN, "set_duration", async_handle_add_mask)
+    async_register_admin_service(hass, DOMAIN, "remove_mask", async_handle_remove_mask)
+    async_register_admin_service(hass, DOMAIN, "prune_all", async_handle_prune_all)
+    async_register_admin_service(hass, DOMAIN, "restart", async_handle_restart)
+    async_register_admin_service(hass, DOMAIN, "restart_frigate", async_handle_restart)
     hass.services.async_register(DOMAIN, "sync", async_handle_sync)
     hass.services.async_register(DOMAIN, "dismiss_pending", async_handle_dismiss_pending)
-    hass.services.async_register(DOMAIN, "delete_event", async_handle_delete_event)
+    async_register_admin_service(hass, DOMAIN, "delete_event", async_handle_delete_event)
     domain_data["services_registered"] = True
 
     if not domain_data.get("view_registered"):

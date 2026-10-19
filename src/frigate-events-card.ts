@@ -9,13 +9,17 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.5.3';
+const CARD_VERSION = '2.5.5';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
 const FALLBACK_POLL_INTERVAL = 10000; // 10 seconds
 const HOVER_CROP_DEFAULT_SMOOTHING = 1.0; // 0.0 is jerky, 1.0 is smoothest
 const HOVER_CROP_MARGIN_PERCENT = 0.20; // 20% margin on each side of the container
+
+const escapeHtml = (value: unknown): string => String(value ?? '')
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
 // WebRTC live feed constants
 // Events streamed back from HA's camera/webrtc_offer subscription
@@ -84,7 +88,7 @@ interface FrigateEventsCardConfig extends LovelaceCardConfig {
   show_mute?: boolean;              // default: false
   live_view_show_mute?: boolean;    // default: false (alias for show_mute)
   live_view_mute_position?: 'top-left' | 'top-right'; // default: 'top-right'
-  go2rtc_url?: string;              // Optional direct go2rtc URL (e.g. 'http://192.168.1.211:1984')
+  go2rtc_url?: string;              // Optional direct go2rtc URL
   go2rtc_stream?: string;           // Optional stream name in go2rtc (defaults to camera entity basename)
   // Temporary false-positive masking options
   show_temp_mask?: boolean;         // default: true
@@ -3020,10 +3024,10 @@ export class FrigateEventsCard extends LitElement {
           ${prevBtnHtml}
           ${showVideo
             ? `<video autoplay ${this._config?.muted ? 'muted' : ''} controls playsinline>
-                 <source src="${clipUrl}" type="video/mp4">
-                 <source src="${hlsUrl}" type="application/x-mpegURL">
+                 <source src="${escapeHtml(clipUrl)}" type="video/mp4">
+                 <source src="${escapeHtml(hlsUrl)}" type="application/x-mpegURL">
                </video>`
-            : `<img src="${modalImgUrl}" alt="${event.label}" onerror="if(!this.dataset.fallback){this.dataset.fallback='1';this.src='${initialThumbnailUrl}';}" />`
+            : `<img src="${escapeHtml(modalImgUrl)}" alt="${escapeHtml(event.label)}" />`
           }          ${nextBtnHtml}
           <button class="frigate-events-modal-close" title="Close">
             <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
@@ -3033,11 +3037,11 @@ export class FrigateEventsCard extends LitElement {
           <div class="frigate-events-modal-info-top">
             <div class="frigate-events-modal-info-left">
               <div class="frigate-events-modal-label">
-                ${this._capitalize(event.label)}
+                ${escapeHtml(this._capitalize(event.label))}
               </div>
               ${showCameraName
                 ? `<div class="frigate-events-modal-camera">
-                     ${this._formatCameraName(event.camera)}
+                     ${escapeHtml(this._formatCameraName(event.camera))}
                    </div>`
                 : ''
               }
@@ -3045,9 +3049,9 @@ export class FrigateEventsCard extends LitElement {
             </div>
             
             <div class="frigate-events-modal-info-right">
-              <div class="frigate-events-modal-time">${rightLine1}</div>
-              ${showZones && zones ? `<div class="frigate-events-modal-zones">${zones}</div>` : ''}
-              ${showDuration ? `<div class="frigate-events-modal-duration">${duration}</div>` : ''}
+              <div class="frigate-events-modal-time">${escapeHtml(rightLine1)}</div>
+              ${showZones && zones ? `<div class="frigate-events-modal-zones">${escapeHtml(zones)}</div>` : ''}
+              ${showDuration ? `<div class="frigate-events-modal-duration">${escapeHtml(duration)}</div>` : ''}
               ${this._isTimelineEnabled() ? `
                 <button class="frigate-events-modal-timeline-btn" data-action="open-timeline" title="View in Timeline">
                   <svg viewBox="0 0 24 24"><path d="M12,20A8,8 0 0,0 20,12A8,8 0 0,0 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,2C6.47,2 2,6.48 2,12A10,10 0 0,1 12,2M12.5,7V12.25L17,14.92L16.25,16.15L11,13V7H12.5Z"/></svg>
@@ -3058,7 +3062,7 @@ export class FrigateEventsCard extends LitElement {
           </div>
           ${showDescription && (event.description || event.data?.description)
             ? `<div class="frigate-events-modal-description-row">
-                 <div class="frigate-events-modal-description">${event.description || event.data?.description}</div>
+                 <div class="frigate-events-modal-description">${escapeHtml(event.description || event.data?.description)}</div>
                </div>`
             : ''
           }
@@ -3977,8 +3981,8 @@ export class FrigateEventsCard extends LitElement {
                 const count = activeMasks.filter((m: any) => m.camera === cam).length +
                               pendingMasks.filter((m: any) => m.camera === cam).length;
                 return `
-                  <button class="mask-filter-tab ${filterCamera === cam ? 'active' : ''}" data-camera-filter="${cam}">
-                    ${this._formatCameraName(cam)} (${count})
+                  <button class="mask-filter-tab ${filterCamera === cam ? 'active' : ''}" data-camera-filter="${escapeHtml(cam)}">
+                    ${escapeHtml(this._formatCameraName(cam))} (${count})
                   </button>
                 `;
               }).join('')}
@@ -4011,37 +4015,34 @@ export class FrigateEventsCard extends LitElement {
                   maskId.startsWith(e.id)
                 );
 
-                const objectLabel = (matchedEvent?.label || mask.label || 'Detected Object').toUpperCase();
+                const objectLabel = escapeHtml((matchedEvent?.label || mask.label || 'Detected Object').toUpperCase());
                 const scoreText = matchedEvent?.top_score ? ` (${Math.round(matchedEvent.top_score * 100)}%)` : '';
                 const timeText = matchedEvent?.start_time ? this._formatTime(matchedEvent.start_time) : '';
                 const cameraName = mask.camera || matchedEvent?.camera || '';
                 const rawTs = matchedEvent?.start_time || (eventId.includes('.') ? parseFloat(eventId.split('-')[0]) : 0);
                 const eventTs = rawTs ? Math.floor(rawTs) : 0;
 
-                const frigateBase = this._config?.frigate_url ? this._config.frigate_url.replace(/\/+$/, '') : 'http://192.168.1.211:5000';
-                const directRecordingUrl = (cameraName && eventTs)
+                const frigateBase = this._config?.frigate_url ? this._config.frigate_url.replace(/\/+$/, '') : '';
+                const directRecordingUrl = (frigateBase && cameraName && eventTs)
                   ? `${frigateBase}/api/${encodeURIComponent(cameraName)}/recordings/${eventTs}/snapshot.png`
-                  : '';
-                const haProxyUrl = (cameraName && eventTs)
-                  ? `/api/frigate_temp_mask/recording_snapshot/${encodeURIComponent(cameraName)}/${eventTs}`
                   : '';
                 const fallbackSnapshotUrl = getEventSnapshotURL(clientId, matchedEvent ? matchedEvent.id : eventId, {
                   bbox: false,
                   crop: false
                 });
 
-                const primaryUrl = directRecordingUrl || haProxyUrl || fallbackSnapshotUrl;
+                const primaryUrl = directRecordingUrl || fallbackSnapshotUrl;
 
                 // Compute polygon geometry & minimap coordinates
                 const geo = this._getMaskPreviewGeometry(mask, matchedEvent);
 
                 return `
-                  <div class="mask-card" data-mask-id="${mask.mask_id}">
+                  <div class="mask-card" data-mask-id="${escapeHtml(mask.mask_id)}">
                     <div class="mask-card-main-row">
                       <div class="mask-visual-preview">
                         ${primaryUrl ? `
                           <img
-                            src="${primaryUrl}"
+                            src="${escapeHtml(primaryUrl)}"
                             class="mask-preview-thumb"
                             alt="${objectLabel}"
                             loading="lazy"
@@ -4049,8 +4050,7 @@ export class FrigateEventsCard extends LitElement {
                             data-crop-y="${geo.cropRegion ? geo.cropRegion.y : ''}"
                             data-crop-w="${geo.cropRegion ? geo.cropRegion.w : ''}"
                             data-crop-h="${geo.cropRegion ? geo.cropRegion.h : ''}"
-                            data-ha-proxy="${haProxyUrl}"
-                            data-fallback-url="${fallbackSnapshotUrl}"
+                            data-fallback-url="${escapeHtml(fallbackSnapshotUrl)}"
                             onload="((img) => {
                               var ar = img.naturalWidth / (img.naturalHeight || 1);
                               if (ar < 1.45 && img.dataset.cropX) {
@@ -4074,10 +4074,7 @@ export class FrigateEventsCard extends LitElement {
                               }
                             })(this)"
                             onerror="((img) => {
-                              if (!img.dataset.triedHa && img.dataset.haProxy && img.src !== img.dataset.haProxy) {
-                                img.dataset.triedHa = 'true';
-                                img.src = img.dataset.haProxy;
-                              } else if (!img.dataset.triedFallback && img.dataset.fallbackUrl && img.src !== img.dataset.fallbackUrl) {
+                              if (!img.dataset.triedFallback && img.dataset.fallbackUrl && img.src !== img.dataset.fallbackUrl) {
                                 img.dataset.triedFallback = 'true';
                                 img.src = img.dataset.fallbackUrl;
                               } else {
@@ -4088,7 +4085,7 @@ export class FrigateEventsCard extends LitElement {
                         ` : ''}
                         <div class="mask-preview-minimap">
                           <svg viewBox="0 0 ${geo.viewBoxW} ${geo.viewBoxH}" preserveAspectRatio="none">
-                            ${geo.polyPts ? `<polygon points="${geo.polyPts}" class="minimap-poly" vector-effect="non-scaling-stroke" />` : ''}
+                            ${geo.polyPts ? `<polygon points="${escapeHtml(geo.polyPts)}" class="minimap-poly" vector-effect="non-scaling-stroke" />` : ''}
                           </svg>
                         </div>
                       </div>
@@ -4097,24 +4094,24 @@ export class FrigateEventsCard extends LitElement {
                         <div class="mask-card-header">
                           <div class="mask-card-title-col">
                             <span class="mask-object-pill">${objectLabel}${scoreText}</span>
-                            <span class="mask-camera-pill">${this._formatCameraName(mask.camera || 'Camera')}</span>
-                            <span class="mask-id-pill">#${mask.mask_id}</span>
+                            <span class="mask-camera-pill">${escapeHtml(this._formatCameraName(mask.camera || 'Camera'))}</span>
+                            <span class="mask-id-pill">#${escapeHtml(mask.mask_id)}</span>
                           </div>
-                          <div class="mask-card-time-badge" data-timer-mask-id="${mask.mask_id}">
+                          <div class="mask-card-time-badge" data-timer-mask-id="${escapeHtml(mask.mask_id)}">
                             <svg viewBox="0 0 24 24" style="width: 13px; height: 13px; fill: currentColor;"><path d="M12,20A8,8 0 0,0 20,12A8,8 0 0,0 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,2C6.47,22 2,17.5 2,12A10,10 0 0,1 12,2M12.5,7V12.25L17,14.92L16.25,16.15L11,13 V7H12.5Z"/></svg>
-                            <span class="timer-text">${remainingText}</span>
+                            <span class="timer-text">${escapeHtml(remainingText)}</span>
                           </div>
                         </div>
 
                         <div class="mask-card-details">
                           <div class="mask-detail-row">
                             <span class="detail-label">Location:</span>
-                            <span class="detail-value">${geo.posName} on camera ${geo.maskW > 0 ? `(${Math.round(geo.maskW)} × ${Math.round(geo.maskH)} px)` : ''}</span>
+                            <span class="detail-value">${escapeHtml(geo.posName)} on camera ${geo.maskW > 0 ? `(${Math.round(geo.maskW)} × ${Math.round(geo.maskH)} px)` : ''}</span>
                           </div>
                           ${timeText ? `
                           <div class="mask-detail-row">
                             <span class="detail-label">Detected:</span>
-                            <span class="detail-value">${timeText}</span>
+                            <span class="detail-value">${escapeHtml(timeText)}</span>
                           </div>
                           ` : ''}
                         </div>
@@ -4128,17 +4125,17 @@ export class FrigateEventsCard extends LitElement {
                           ${durationPresets.map(p => {
                             const isSelected = Math.abs(p.hours - currentDurationHours) < 0.01;
                             return `
-                              <button class="mask-duration-chip ${isSelected ? 'active' : ''}" data-action="set-duration" data-mask-id="${mask.mask_id}" data-camera="${mask.camera || ''}" data-hours="${p.hours}" data-poly="${mask.polygon || ''}" data-label="${mask.label || ''}">
+                              <button class="mask-duration-chip ${isSelected ? 'active' : ''}" data-action="set-duration" data-mask-id="${escapeHtml(mask.mask_id)}" data-camera="${escapeHtml(mask.camera || '')}" data-hours="${p.hours}" data-poly="${escapeHtml(mask.polygon || '')}" data-label="${escapeHtml(mask.label || '')}">
                                 ${p.label}
                               </button>
                             `;
                           }).join('')}
-                          <button class="mask-duration-chip ${isCustom ? 'active' : ''}" data-action="custom-duration" data-mask-id="${mask.mask_id}" data-camera="${mask.camera || ''}" data-poly="${mask.polygon || ''}" data-label="${mask.label || ''}">
+                          <button class="mask-duration-chip ${isCustom ? 'active' : ''}" data-action="custom-duration" data-mask-id="${escapeHtml(mask.mask_id)}" data-camera="${escapeHtml(mask.camera || '')}" data-poly="${escapeHtml(mask.polygon || '')}" data-label="${escapeHtml(mask.label || '')}">
                             ${isCustom ? `Custom (${currentDurationHours}h)` : 'Custom...'}
                           </button>
                         </div>
                       </div>
-                      <button class="mask-remove-btn" data-action="remove-mask" data-mask-id="${mask.mask_id}" data-camera="${mask.camera || ''}">
+                      <button class="mask-remove-btn" data-action="remove-mask" data-mask-id="${escapeHtml(mask.mask_id)}" data-camera="${escapeHtml(mask.camera || '')}">
                         <svg viewBox="0 0 24 24" style="width: 14px; height: 14px; fill: currentColor;"><path d="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z"/></svg>
                         <span>Remove</span>
                       </button>
@@ -4165,30 +4162,27 @@ export class FrigateEventsCard extends LitElement {
                   const maskId = String(mask.mask_id || '');
                   const eventId = String(mask.event_id || maskId);
                   const matchedEvent = this._events?.find(e => e.id === eventId || e.id.startsWith(maskId) || maskId.startsWith(e.id));
-                  const objectLabel = (matchedEvent?.label || mask.label || 'Detected Object').toUpperCase();
+                const objectLabel = escapeHtml((matchedEvent?.label || mask.label || 'Detected Object').toUpperCase());
                   
                   const cameraName = mask.camera || matchedEvent?.camera || '';
                   const rawTs = matchedEvent?.start_time || (eventId.includes('.') ? parseFloat(eventId.split('-')[0]) : 0);
                   const eventTs = rawTs ? Math.floor(rawTs) : 0;
 
-                  const frigateBase = this._config?.frigate_url ? this._config.frigate_url.replace(/\/+$/, '') : 'http://192.168.1.211:5000';
-                  const directRecordingUrl = (cameraName && eventTs)
+                  const frigateBase = this._config?.frigate_url ? this._config.frigate_url.replace(/\/+$/, '') : '';
+                  const directRecordingUrl = (frigateBase && cameraName && eventTs)
                     ? `${frigateBase}/api/${encodeURIComponent(cameraName)}/recordings/${eventTs}/snapshot.png`
                     : '';
-                  const haProxyUrl = (cameraName && eventTs)
-                    ? `/api/frigate_temp_mask/recording_snapshot/${encodeURIComponent(cameraName)}/${eventTs}`
-                    : '';
                   const fallbackSnapshotUrl = getEventSnapshotURL(clientId, matchedEvent ? matchedEvent.id : eventId, { bbox: false, crop: false });
-                  const primaryUrl = directRecordingUrl || haProxyUrl || fallbackSnapshotUrl;
+                  const primaryUrl = directRecordingUrl || fallbackSnapshotUrl;
                   const geo = this._getMaskPreviewGeometry(mask, matchedEvent);
 
                   return `
-                    <div class="mask-card pending-restart" data-mask-id="${mask.mask_id}">
+                    <div class="mask-card pending-restart" data-mask-id="${escapeHtml(mask.mask_id)}">
                       <div class="mask-card-main-row">
                         <div class="mask-visual-preview">
                           ${primaryUrl ? `
                             <img
-                              src="${primaryUrl}"
+                              src="${escapeHtml(primaryUrl)}"
                               class="mask-preview-thumb"
                               alt="${objectLabel}"
                               loading="lazy"
@@ -4196,8 +4190,7 @@ export class FrigateEventsCard extends LitElement {
                               data-crop-y="${geo.cropRegion ? geo.cropRegion.y : ''}"
                               data-crop-w="${geo.cropRegion ? geo.cropRegion.w : ''}"
                               data-crop-h="${geo.cropRegion ? geo.cropRegion.h : ''}"
-                              data-ha-proxy="${haProxyUrl}"
-                              data-fallback-url="${fallbackSnapshotUrl}"
+                              data-fallback-url="${escapeHtml(fallbackSnapshotUrl)}"
                               onload="((img) => {
                                 var ar = img.naturalWidth / (img.naturalHeight || 1);
                                 if (ar < 1.45 && img.dataset.cropX) {
@@ -4221,10 +4214,7 @@ export class FrigateEventsCard extends LitElement {
                                 }
                               })(this)"
                               onerror="((img) => {
-                                if (!img.dataset.triedHa && img.dataset.haProxy && img.src !== img.dataset.haProxy) {
-                                  img.dataset.triedHa = 'true';
-                                  img.src = img.dataset.haProxy;
-                                } else if (!img.dataset.triedFallback && img.dataset.fallbackUrl && img.src !== img.dataset.fallbackUrl) {
+                                if (!img.dataset.triedFallback && img.dataset.fallbackUrl && img.src !== img.dataset.fallbackUrl) {
                                   img.dataset.triedFallback = 'true';
                                   img.src = img.dataset.fallbackUrl;
                                 } else {
@@ -4235,7 +4225,7 @@ export class FrigateEventsCard extends LitElement {
                           ` : ''}
                           <div class="mask-preview-minimap">
                             <svg viewBox="0 0 ${geo.viewBoxW} ${geo.viewBoxH}" preserveAspectRatio="none">
-                              ${geo.polyPts ? `<polygon points="${geo.polyPts}" class="minimap-poly" vector-effect="non-scaling-stroke" />` : ''}
+                              ${geo.polyPts ? `<polygon points="${escapeHtml(geo.polyPts)}" class="minimap-poly" vector-effect="non-scaling-stroke" />` : ''}
                             </svg>
                           </div>
                         </div>
@@ -4243,8 +4233,8 @@ export class FrigateEventsCard extends LitElement {
                           <div class="mask-card-header">
                             <div class="mask-card-title-col">
                               <span class="mask-object-pill">${objectLabel}</span>
-                              <span class="mask-camera-pill">${this._formatCameraName(mask.camera || 'Camera')}</span>
-                              <span class="mask-id-pill">#${mask.mask_id}</span>
+                              <span class="mask-camera-pill">${escapeHtml(this._formatCameraName(mask.camera || 'Camera'))}</span>
+                              <span class="mask-id-pill">#${escapeHtml(mask.mask_id)}</span>
                             </div>
                           </div>
                           <div class="mask-card-details">
@@ -4256,7 +4246,7 @@ export class FrigateEventsCard extends LitElement {
                         </div>
                       </div>
                       <div class="mask-card-actions mask-card-pending-actions">
-                        <button class="mask-pending-dismiss-action" data-action="dismiss-pending" data-mask-id="${mask.mask_id}" title="Dismiss">
+                        <button class="mask-pending-dismiss-action" data-action="dismiss-pending" data-mask-id="${escapeHtml(mask.mask_id)}" title="Dismiss">
                           <svg viewBox="0 0 24 24"><path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"/></svg>
                           <span>Dismiss</span>
                         </button>
@@ -4359,19 +4349,10 @@ export class FrigateEventsCard extends LitElement {
 
   private async _executeRestartFrigate(): Promise<void> {
     if (!this.hass) return;
-    this._localPendingMasks = [];
     try {
-      if (this.hass.callService) {
-        try {
-          await this.hass.callService('frigate_temp_mask', 'restart', {});
-        } catch {
-          try {
-            await this.hass.callService('frigate', 'restart', {});
-          } catch {
-            await this.hass.callService('homeassistant', 'restart', {});
-          }
-        }
-      }
+      if (!this.hass.callService) throw new Error('Home Assistant service calls are unavailable');
+      await this.hass.callService('frigate_temp_mask', 'restart', {});
+      this._localPendingMasks = [];
       this.dispatchEvent(new CustomEvent('hass-notification', {
         detail: { message: 'Frigate detector process restarting to apply configuration changes...' },
         bubbles: true,
@@ -4381,6 +4362,11 @@ export class FrigateEventsCard extends LitElement {
       this._removeMaskManagerModal();
     } catch (err) {
       console.error('Failed to restart Frigate:', err);
+      this.dispatchEvent(new CustomEvent('hass-notification', {
+        detail: { message: 'Unable to restart Frigate. Install and configure the Frigate Temporary Mask integration.' },
+        bubbles: true,
+        composed: true,
+      }));
     }
   }
 
@@ -5847,14 +5833,7 @@ export class FrigateEventsCard extends LitElement {
   }
 
   private async _executeDeleteEvent(event: FrigateEvent): Promise<void> {
-    const clientId = this._config?.frigate_client_id || 'frigate';
-    const success = await deleteEvent(
-      clientId,
-      event.id,
-      this._config?.frigate_url,
-      this._config?.go2rtc_url,
-      this.hass
-    );
+    const success = await deleteEvent(event.id, this.hass);
 
     if (success) {
       // Remove from local events array immediately
