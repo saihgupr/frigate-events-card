@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.5.7';
+const CARD_VERSION = '2.5.8';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -3211,7 +3211,7 @@ export class FrigateEventsCard extends LitElement {
           mask_id: maskId,
           duration_hours: durationHours,
           label: event.label,
-          box: eventBox?.join(','),
+          ...(eventBox ? { box: eventBox.join(',') } : {}),
         });
         this._localPendingMasks = [];
         this.dispatchEvent(new CustomEvent('hass-notification', {
@@ -4489,22 +4489,11 @@ export class FrigateEventsCard extends LitElement {
   ): Promise<void> {
     if (!this.hass) return;
     try {
-      if (this.hass.callService) {
-        try {
-          await this.hass.callService('frigate_temp_mask', 'add_mask', {
-            mask_id: maskId,
-            camera: camera,
-            duration_hours: durationHours,
-            polygon: polygon,
-            label: label,
-          });
-        } catch {
-          await this.hass.callService('shell_command', 'frigate_add_temp_mask', {
-            mask_id: maskId,
-            camera: camera,
-          });
-        }
-      }
+      if (!this.hass.callService) throw new Error('Home Assistant service calls are unavailable');
+      await this.hass.callService('frigate_temp_mask', 'set_duration', {
+        mask_id: maskId,
+        duration_hours: durationHours,
+      });
       const durationText = durationHours <= 0
         ? 'infinite (manual removal only)'
         : durationHours === 1

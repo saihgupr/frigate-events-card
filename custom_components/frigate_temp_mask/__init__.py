@@ -12,6 +12,7 @@ except ImportError:
 from datetime import datetime, timedelta, timezone
 
 from aiohttp import web
+import voluptuous as vol
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, HomeAssistantError, ServiceCall
@@ -1494,6 +1495,36 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         except Exception as e:
             _LOGGER.error("Failed to remove mask %s: %s", mask_id, e)
 
+    async def async_handle_set_duration(call: ServiceCall):
+        mask_id = str(call.data.get("mask_id", "")).strip()
+        if not mask_id or mask_id not in domain_data["active_masks"]:
+            raise HomeAssistantError(f"Temporary mask {mask_id or '(missing mask_id)'} is not active")
+        try:
+            duration_hours = float(call.data["duration_hours"])
+        except (KeyError, TypeError, ValueError) as err:
+            raise HomeAssistantError("duration_hours must be a number") from err
+
+        if mask_id in domain_data["timers"]:
+            domain_data["timers"].pop(mask_id)()
+
+        mask = domain_data["active_masks"][mask_id]
+        mask["duration_hours"] = -1 if duration_hours <= 0 else duration_hours
+        mask["expires_at"] = (
+            None
+            if duration_hours <= 0
+            else (datetime.now(timezone.utc) + timedelta(hours=duration_hours)).isoformat().replace("+00:00", "Z")
+        )
+        _update_state()
+
+        if duration_hours > 0:
+            async def _expire_callback(_now):
+                _LOGGER.info("Temporary mask %s expired after %s hours, pruning...", mask_id, duration_hours)
+                await async_handle_remove_mask(ServiceCall(DOMAIN, "remove_mask", {"mask_id": mask_id}))
+
+            domain_data["timers"][mask_id] = async_call_later(
+                hass, max(1, int(duration_hours * 3600)), _expire_callback
+            )
+
     async def async_handle_prune_all(call: ServiceCall):
         base_url = _get_frigate_base_url()
         if not base_url:
@@ -1617,15 +1648,39 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         except Exception as e:
             _LOGGER.error("Failed to delete Frigate event %s: %s", event_id, e)
 
-    async_register_admin_service(hass, DOMAIN, "add_mask", async_handle_add_mask)
-    async_register_admin_service(hass, DOMAIN, "set_duration", async_handle_add_mask)
-    async_register_admin_service(hass, DOMAIN, "remove_mask", async_handle_remove_mask)
-    async_register_admin_service(hass, DOMAIN, "prune_all", async_handle_prune_all)
-    async_register_admin_service(hass, DOMAIN, "restart", async_handle_restart)
-    async_register_admin_service(hass, DOMAIN, "restart_frigate", async_handle_restart)
+    async_register_admin_service(
+        hass, DOMAIN, "add_mask", async_handle_add_mask,
+        schema=vol.Schema({
+            vol.Required("event_id"): str,
+            vol.Optional("camera"): str,
+            vol.Optional("mask_id"): str,
+            vol.Optional("box"): str,
+            vol.Optional("polygon"): str,
+            vol.Optional("label"): str,
+            vol.Optional("duration_hours"): vol.Coerce(float),
+            vol.Optional("padding"): vol.Coerce(float),
+        }, extra=vol.PREVENT_EXTRA),
+    )
+    async_register_admin_service(
+        hass, DOMAIN, "set_duration", async_handle_set_duration,
+        schema=vol.Schema({
+            vol.Required("mask_id"): str,
+            vol.Required("duration_hours"): vol.Coerce(float),
+        }, extra=vol.PREVENT_EXTRA),
+    )
+    async_register_admin_service(
+        hass, DOMAIN, "remove_mask", async_handle_remove_mask,
+        schema=vol.Schema({vol.Required("mask_id"): str}, extra=vol.PREVENT_EXTRA),
+    )
+    async_register_admin_service(hass, DOMAIN, "prune_all", async_handle_prune_all, schema=vol.Schema({}))
+    async_register_admin_service(hass, DOMAIN, "restart", async_handle_restart, schema=vol.Schema({}))
+    async_register_admin_service(hass, DOMAIN, "restart_frigate", async_handle_restart, schema=vol.Schema({}))
     hass.services.async_register(DOMAIN, "sync", async_handle_sync)
     hass.services.async_register(DOMAIN, "dismiss_pending", async_handle_dismiss_pending)
-    async_register_admin_service(hass, DOMAIN, "delete_event", async_handle_delete_event)
+    async_register_admin_service(
+        hass, DOMAIN, "delete_event", async_handle_delete_event,
+        schema=vol.Schema({vol.Required("event_id"): str}, extra=vol.PREVENT_EXTRA),
+    )
     domain_data["services_registered"] = True
 
     if not domain_data.get("view_registered"):
