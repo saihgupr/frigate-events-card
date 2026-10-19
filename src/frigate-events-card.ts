@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.5.15';
+const CARD_VERSION = '2.5.16';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -3038,11 +3038,11 @@ export class FrigateEventsCard extends LitElement {
           <div class="frigate-events-modal-info-top">
             <div class="frigate-events-modal-info-left">
               <div class="frigate-events-modal-label">
-                ${escapeHtml(this._capitalize(event.label))}
+                <span data-event-label></span>
               </div>
               ${showCameraName
                 ? `<div class="frigate-events-modal-camera">
-                     ${escapeHtml(this._formatCameraName(event.camera))}
+                     <span data-event-camera></span>
                    </div>`
                 : ''
               }
@@ -3051,7 +3051,7 @@ export class FrigateEventsCard extends LitElement {
             
             <div class="frigate-events-modal-info-right">
               <div class="frigate-events-modal-time">${escapeHtml(rightLine1)}</div>
-              ${showZones && zones ? `<div class="frigate-events-modal-zones">${escapeHtml(zones)}</div>` : ''}
+              ${showZones && zones ? `<div class="frigate-events-modal-zones"><span data-event-zones></span></div>` : ''}
               ${showDuration ? `<div class="frigate-events-modal-duration">${escapeHtml(duration)}</div>` : ''}
               ${this._isTimelineEnabled() ? `
                 <button class="frigate-events-modal-timeline-btn" data-action="open-timeline" title="View in Timeline">
@@ -3063,13 +3063,21 @@ export class FrigateEventsCard extends LitElement {
           </div>
           ${showDescription && (event.description || event.data?.description)
             ? `<div class="frigate-events-modal-description-row">
-                 <div class="frigate-events-modal-description">${escapeHtml(event.description || event.data?.description)}</div>
+                 <div class="frigate-events-modal-description" data-event-description></div>
                </div>`
             : ''
           }
         </div>
       </div>
     `;
+
+    container.querySelector<HTMLElement>('[data-event-label]')!.textContent = this._capitalize(event.label);
+    const cameraText = container.querySelector<HTMLElement>('[data-event-camera]');
+    if (cameraText) cameraText.textContent = this._formatCameraName(event.camera);
+    const zonesText = container.querySelector<HTMLElement>('[data-event-zones]');
+    if (zonesText) zonesText.textContent = zones;
+    const descriptionText = container.querySelector<HTMLElement>('[data-event-description]');
+    if (descriptionText) descriptionText.textContent = event.description || event.data?.description || '';
 
     // Ensure video muted state is programmatically set to handle browser autoplay policies
     const videoEl = container.querySelector('video');
@@ -3983,7 +3991,7 @@ export class FrigateEventsCard extends LitElement {
                               pendingMasks.filter((m: any) => m.camera === cam).length;
                 return `
                   <button class="mask-filter-tab ${filterCamera === cam ? 'active' : ''}" data-camera-filter="${escapeHtml(cam)}">
-                    ${escapeHtml(this._formatCameraName(cam))} (${count})
+                    <span data-safe-text="${escapeHtml(this._formatCameraName(cam))}"></span> (${count})
                   </button>
                 `;
               }).join('')}
@@ -4094,9 +4102,9 @@ export class FrigateEventsCard extends LitElement {
                       <div class="mask-card-info">
                         <div class="mask-card-header">
                           <div class="mask-card-title-col">
-                            <span class="mask-object-pill">${objectLabel}${scoreText}</span>
-                            <span class="mask-camera-pill">${escapeHtml(this._formatCameraName(mask.camera || 'Camera'))}</span>
-                            <span class="mask-id-pill">#${escapeHtml(mask.mask_id)}</span>
+                            <span class="mask-object-pill"><span data-safe-text="${objectLabel}"></span>${scoreText}</span>
+                            <span class="mask-camera-pill" data-safe-text="${escapeHtml(this._formatCameraName(mask.camera || 'Camera'))}"></span>
+                            <span class="mask-id-pill">#<span data-safe-text="${escapeHtml(mask.mask_id)}"></span></span>
                           </div>
                           <div class="mask-card-time-badge" data-timer-mask-id="${escapeHtml(mask.mask_id)}">
                             <svg viewBox="0 0 24 24" style="width: 13px; height: 13px; fill: currentColor;"><path d="M12,20A8,8 0 0,0 20,12A8,8 0 0,0 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,2C6.47,22 2,17.5 2,12A10,10 0 0,1 12,2M12.5,7V12.25L17,14.92L16.25,16.15L11,13 V7H12.5Z"/></svg>
@@ -4107,7 +4115,7 @@ export class FrigateEventsCard extends LitElement {
                         <div class="mask-card-details">
                           <div class="mask-detail-row">
                             <span class="detail-label">Location:</span>
-                            <span class="detail-value">${escapeHtml(geo.posName)} on camera ${geo.maskW > 0 ? `(${Math.round(geo.maskW)} × ${Math.round(geo.maskH)} px)` : ''}</span>
+                            <span class="detail-value"><span data-safe-text="${escapeHtml(geo.posName)}"></span> on camera ${geo.maskW > 0 ? `(${Math.round(geo.maskW)} × ${Math.round(geo.maskH)} px)` : ''}</span>
                           </div>
                           ${timeText ? `
                           <div class="mask-detail-row">
@@ -4233,9 +4241,9 @@ export class FrigateEventsCard extends LitElement {
                         <div class="mask-card-info">
                           <div class="mask-card-header">
                             <div class="mask-card-title-col">
-                              <span class="mask-object-pill">${objectLabel}</span>
-                              <span class="mask-camera-pill">${escapeHtml(this._formatCameraName(mask.camera || 'Camera'))}</span>
-                              <span class="mask-id-pill">#${escapeHtml(mask.mask_id)}</span>
+                              <span class="mask-object-pill"><span data-safe-text="${objectLabel}"></span></span>
+                              <span class="mask-camera-pill" data-safe-text="${escapeHtml(this._formatCameraName(mask.camera || 'Camera'))}"></span>
+                              <span class="mask-id-pill">#<span data-safe-text="${escapeHtml(mask.mask_id)}"></span></span>
                             </div>
                           </div>
                           <div class="mask-card-details">
@@ -4261,6 +4269,11 @@ export class FrigateEventsCard extends LitElement {
         </div>
       </div>
     `;
+
+    container.querySelectorAll<HTMLElement>('[data-safe-text]').forEach((element) => {
+      element.textContent = element.getAttribute('data-safe-text') || '';
+      element.removeAttribute('data-safe-text');
+    });
 
     // Attach listeners
     const content = container.querySelector('.mask-manager-content');
