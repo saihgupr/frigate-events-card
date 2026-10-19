@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.5.0] - 2026-10-08
+- Added: **Timeline & Continuous Playback (Frigate 0.13+ VOD)** — Stream continuous video recordings directly in a dedicated player with an interactive visual scrubber track, color-coded event markers, quick jump intervals (`-15m`, `-1h`, `-3h`, `-12h`, `Start of Day`), and variable playback speeds (up to 8x/16x).
+- Added: **Click to Timeline Navigation** — Clicking an event thumbnail opens directly into the Timeline centered on the event's start time (`timeline_on_click: true`).
+- Added: **Timeline Auto-Advance & Gapless Playback** — Reduced black flashes between clips and auto-advances smoothly across hour recording chunks.
+- Added: **Audio Mute Controls** — Hover mute toggle button in both the live WebRTC camera feed and Timeline modal player (`show_mute`, `timeline_show_mute`), with WebRTC audio transceiver negotiation.
+- Fixed: **Authenticated Thumbnail URLs** — Added Home Assistant `auth/sign_path` integration with client-side caching to resolve 401 Unauthorized errors for thumbnails and snapshots behind auth proxies.
+- Added: **Dynamic Temporary False-Positive Masking v18+ Compatibility** — Support for Frigate 0.18+ dictionary configuration formats and robust mask lifecycle management.
+
 ## [2.4.0] - 2026-09-12
 - Added: Right-click (desktop) and long-press (mobile/touch) context menu with **Delete Event** to permanently remove events, snapshots, and recordings from Frigate directly from the dashboard.
 - Added: Dynamic Temporary False-Positive Masking — turn false alerts (parked vehicles, spiderwebs, shadows) into auto-padded polygon masks with a single click and customizable duration presets (1h to 7d or custom hours).
