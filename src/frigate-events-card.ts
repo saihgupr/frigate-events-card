@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.5.13';
+const CARD_VERSION = '2.5.15';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -182,6 +182,7 @@ export class FrigateEventsCard extends LitElement {
   private _modalContainer?: HTMLDivElement;
   private _maskManagerContainer?: HTMLDivElement;
   private _maskManagerTimer?: ReturnType<typeof setInterval>;
+  private _maskDurationOverrides = new Map<string, number>();
   private _hoverVideoCropPositions = new WeakMap<HTMLVideoElement, ObjectPositionPercent>();
   private static _stylesInjected = false;
 
@@ -3256,6 +3257,7 @@ export class FrigateEventsCard extends LitElement {
           });
         }
       }
+      this._maskDurationOverrides.set(String(maskId), durationHours <= 0 ? -1 : durationHours);
 
       const durationText = durationHours <= 0
         ? 'infinite (manual removal only)'
@@ -3346,9 +3348,7 @@ export class FrigateEventsCard extends LitElement {
     let activeDurationHours = 24;
     let timeRemainingStr = '';
     if (currentMask) {
-      if (typeof currentMask.duration_hours === 'number') {
-        activeDurationHours = currentMask.duration_hours;
-      }
+      activeDurationHours = this._getCurrentMaskDurationHours(currentMask);
       if (activeDurationHours <= 0 || !currentMask.expires_at) {
         timeRemainingStr = '∞';
       } else if (currentMask.expires_at) {
@@ -4001,7 +4001,7 @@ export class FrigateEventsCard extends LitElement {
           ${filteredMasks.length > 0 ? `
             <div class="mask-cards-list">
               ${filteredMasks.map((mask: any) => {
-                const currentDurationHours = typeof mask.duration_hours === 'number' ? mask.duration_hours : 24;
+                const currentDurationHours = this._getCurrentMaskDurationHours(mask);
                 const isCustom = !durationPresets.some(p => Math.abs(p.hours - currentDurationHours) < 0.01);
                 const remainingText = this._formatMaskRemainingTime(mask.expires_at, currentDurationHours);
 
@@ -4420,6 +4420,7 @@ export class FrigateEventsCard extends LitElement {
           });
         }
       }
+      this._maskDurationOverrides.delete(String(maskId));
 
       // Post-call: re-check supports_dynamic_toggle. The backend fetches and caches
       // the Frigate version during remove_mask, so the sensor may now report true
@@ -4494,6 +4495,7 @@ export class FrigateEventsCard extends LitElement {
         mask_id: maskId,
         duration_hours: durationHours,
       });
+      this._maskDurationOverrides.set(String(maskId), durationHours <= 0 ? -1 : durationHours);
       const durationText = durationHours <= 0
         ? 'infinite (manual removal only)'
         : durationHours === 1
@@ -4522,6 +4524,18 @@ export class FrigateEventsCard extends LitElement {
     } catch (err) {
       console.error('Failed to update mask duration:', err);
     }
+  }
+
+  private _getCurrentMaskDurationHours(mask: any): number {
+    const maskId = String(mask.mask_id ?? '');
+    const stateDuration = typeof mask.duration_hours === 'number' ? mask.duration_hours : 24;
+    const override = this._maskDurationOverrides.get(maskId);
+    if (override === undefined) return stateDuration;
+    if (stateDuration === override) {
+      this._maskDurationOverrides.delete(maskId);
+      return stateDuration;
+    }
+    return override;
   }
 
   /* ─────────────────────────────────────────────────────────────

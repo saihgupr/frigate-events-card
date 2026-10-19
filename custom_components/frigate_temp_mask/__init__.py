@@ -1035,7 +1035,9 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
             {
                 "friendly_name": "Frigate Active Temporary Masks",
                 "icon": "mdi:vector-square-remove",
-                "masks": list(active.values()),
+                # Publish fresh dictionaries so Home Assistant sees attribute
+                # changes even when a mask record was updated in place.
+                "masks": [dict(mask) for mask in active.values()],
                 "pending_restart_masks": list(pending.values()),
                 "restart_pending": pending_count > 0,
                 "pending_count": pending_count,
@@ -1555,13 +1557,14 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         if mask_id in domain_data["timers"]:
             domain_data["timers"].pop(mask_id)()
 
-        mask = domain_data["active_masks"][mask_id]
-        mask["duration_hours"] = -1 if duration_hours <= 0 else duration_hours
-        mask["expires_at"] = (
+        updated_mask = dict(domain_data["active_masks"][mask_id])
+        updated_mask["duration_hours"] = -1 if duration_hours <= 0 else duration_hours
+        updated_mask["expires_at"] = (
             None
             if duration_hours <= 0
             else (datetime.now(timezone.utc) + timedelta(hours=duration_hours)).isoformat().replace("+00:00", "Z")
         )
+        domain_data["active_masks"][mask_id] = updated_mask
         _update_state()
 
         if duration_hours > 0:
