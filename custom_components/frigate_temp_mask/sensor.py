@@ -27,9 +27,8 @@ async def async_setup_entry(
 class FrigateActiveMasksSensor(SensorEntity):
     """Expose active temporary masks as a manageable config-entry entity."""
 
-    _attr_has_entity_name = True
-    _attr_name = "Active Masks"
-    _attr_suggested_object_id = "frigate_active_masks"
+    # Keep the historical sensor.frigate_active_masks entity ID used by the card.
+    _attr_name = "Frigate Active Masks"
     _attr_icon = "mdi:vector-square-remove"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
