@@ -17,11 +17,11 @@ async def async_setup_entry(
 ) -> None:
     """Set up the active temporary masks sensor."""
     entity = FrigateActiveMasksSensor(entry)
-    hass.data[DOMAIN]["mask_sensor"] = entity
-    async_add_entities([entity])
     pending_state = hass.data[DOMAIN].pop("pending_sensor_state", None)
     if pending_state:
-        entity.update_state(*pending_state)
+        entity._attr_native_value, entity._attr_extra_state_attributes = pending_state
+    hass.data[DOMAIN]["mask_sensor"] = entity
+    async_add_entities([entity])
 
 
 class FrigateActiveMasksSensor(SensorEntity):
@@ -29,6 +29,7 @@ class FrigateActiveMasksSensor(SensorEntity):
 
     _attr_has_entity_name = True
     _attr_name = "Active Masks"
+    _attr_suggested_object_id = "frigate_active_masks"
     _attr_icon = "mdi:vector-square-remove"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
@@ -58,4 +59,5 @@ class FrigateActiveMasksSensor(SensorEntity):
         """Publish the latest mask count and attributes."""
         self._attr_native_value = state
         self._attr_extra_state_attributes = attributes
-        self.async_write_ha_state()
+        if self.hass is not None:
+            self.async_write_ha_state()
