@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.5.16';
+const CARD_VERSION = '2.5.21';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -235,6 +235,7 @@ export class FrigateEventsCard extends LitElement {
   private _timelineLoadingTimeout?: number;
   private _timelineAdvanceTimeout?: number;
   private _timelineSlotTransitionTimeout?: number;
+  private _timelineWindowRequestId = 0;
 
 
   /**
@@ -4768,8 +4769,9 @@ export class FrigateEventsCard extends LitElement {
         return;
       }
 
-      this._timelineStartTs = nextStart;
-      this._timelineEndTs = nextEnd;
+    this._timelineStartTs = nextStart;
+    this._timelineEndTs = nextEnd;
+    const requestId = ++this._timelineWindowRequestId;
 
       const container = this._timelineContainer;
       if (!container) return;
@@ -4780,12 +4782,22 @@ export class FrigateEventsCard extends LitElement {
 
       // Fetch event markers and check recordings concurrently in background
       this._fetchTimelineEvents().then(async () => {
+        // A later window may already be playing while this request was in flight.
+        // Ignore stale results so they cannot change its recordings or window.
+        if (requestId !== this._timelineWindowRequestId ||
+            this._timelineStartTs !== nextStart || this._timelineEndTs !== nextEnd) {
+          return;
+        }
         this._updateTimelineScrubberEvents();
         // If this window had a recording gap (0 recordings), look ahead and leap to next available footage
         if (this._timelineRecordings.length === 0 && this.hass && this._timelineCamera) {
           try {
             const clientId = this._config?.frigate_client_id || 'frigate';
             const futureRecs = await getRecordings(this.hass, clientId, this._timelineCamera, nextEnd, now);
+            if (requestId !== this._timelineWindowRequestId ||
+                this._timelineStartTs !== nextStart || this._timelineEndTs !== nextEnd) {
+              return;
+            }
             if (Array.isArray(futureRecs) && futureRecs.length > 0) {
               futureRecs.sort((a, b) => a.start_time - b.start_time);
               const nextRecStart = futureRecs[0].start_time;
@@ -4934,21 +4946,26 @@ export class FrigateEventsCard extends LitElement {
 
   private async _fetchTimelineEvents(): Promise<void> {
     if (!this.hass || !this._timelineCamera) return;
+    const camera = this._timelineCamera;
+    const startTs = this._timelineStartTs;
+    const endTs = this._timelineEndTs;
     try {
       const clientId = this._config?.frigate_client_id || 'frigate';
       const [events, recordings] = await Promise.all([
         getEvents(this.hass, {
           instance_id: clientId,
-          cameras: [this._timelineCamera],
-          after: this._timelineStartTs,
-          before: this._timelineEndTs,
+          cameras: [camera],
+          after: startTs,
+          before: endTs,
           limit: 100,
         }),
-        getRecordings(this.hass, clientId, this._timelineCamera, this._timelineStartTs, this._timelineEndTs).catch(() => []),
+        getRecordings(this.hass, clientId, camera, startTs, endTs).catch(() => []),
       ]);
+      if (camera !== this._timelineCamera || startTs !== this._timelineStartTs || endTs !== this._timelineEndTs) return;
       this._timelineEvents = Array.isArray(events) ? events : [];
       this._timelineRecordings = Array.isArray(recordings) ? recordings.sort((a, b) => a.start_time - b.start_time) : [];
     } catch (e) {
+      if (camera !== this._timelineCamera || startTs !== this._timelineStartTs || endTs !== this._timelineEndTs) return;
       console.warn('Failed to fetch events for timeline window:', e);
       this._timelineEvents = [];
       this._timelineRecordings = [];
@@ -5000,6 +5017,7 @@ export class FrigateEventsCard extends LitElement {
 
   private _loadTimelineVideo(seekTargetTs?: number, isAutoAdvance = false): void {
     if (!this._timelineContainer || !this._timelineCamera) return;
+    if (!isAutoAdvance) this._timelineWindowRequestId++;
 
     // In auto-advance, load the incoming footage into the standby video slot
     const slot = isAutoAdvance
@@ -5227,7 +5245,7 @@ export class FrigateEventsCard extends LitElement {
           loadingEl.innerHTML = `
             <div style="display:flex; flex-direction:column; align-items:center; gap:8px; text-align:center; padding:16px;">
               <span>No continuous footage stream available for this time window.</span>
-              <span style="font-size:11px; opacity:0.6;">Tested URLs: <a href="${hlsUrl}" target="_blank" style="color:var(--primary-color, #03a9f4);">HLS</a> | <a href="${mp4Url}" target="_blank" style="color:var(--primary-color, #03a9f4);">MP4</a></span>
+              <span style="font-size:11px; opacity:0.6;">Tested URLs: <a href="${escapeHtml(hlsUrl)}" target="_blank" style="color:var(--primary-color, #03a9f4);">HLS</a> | <a href="${escapeHtml(mp4Url)}" target="_blank" style="color:var(--primary-color, #03a9f4);">MP4</a></span>
             </div>
           `;
         }
@@ -5354,16 +5372,16 @@ export class FrigateEventsCard extends LitElement {
       const startPct = Math.max(0, Math.min(100, ((start - this._timelineStartTs) / windowDuration) * 100));
       const endPct = Math.max(0, Math.min(100, ((end - this._timelineStartTs) / windowDuration) * 100));
       const widthPct = Math.max(0.6, endPct - startPct);
-      const labelClass = (ev.label || 'event').toLowerCase();
+      const labelClass = escapeHtml((ev.label || 'event').toLowerCase());
       const timeStr = this._formatTime(start);
       const title = `${(ev.label || 'Event').toUpperCase()} at ${timeStr}`;
 
       return `
         <div
           class="timeline-event-marker ${labelClass}"
-          data-event-id="${ev.id}"
+          data-event-id="${escapeHtml(ev.id)}"
           data-event-start="${start}"
-          title="${title}"
+          title="${escapeHtml(title)}"
           style="left: ${startPct}%; width: ${widthPct}%;"
         ></div>
       `;
@@ -5474,7 +5492,7 @@ export class FrigateEventsCard extends LitElement {
               <svg viewBox="0 0 24 24"><path d="M12,20A8,8 0 0,0 20,12A8,8 0 0,0 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,2C6.47,2 2,6.48 2,12A10,10 0 0,1 12,2M12.5,7V12.25L17,14.92L16.25,16.15L11,13V7H12.5Z"/></svg>
               <span>Timeline</span>
             </h3>
-            <span class="timeline-camera-badge">${this._formatCameraName(currentCamera)}</span>
+            <span class="timeline-camera-badge" data-safe-text="${escapeHtml(this._formatCameraName(currentCamera))}"></span>
           </div>
           <button class="frigate-events-modal-close" data-action="close" title="Close">
             <svg viewBox="0 0 24 24"><path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"/></svg>
@@ -5485,8 +5503,8 @@ export class FrigateEventsCard extends LitElement {
           ${availableCameras.length > 1 ? `
             <div class="timeline-camera-tabs">
               ${availableCameras.map(cam => `
-                <button class="timeline-camera-tab ${cam === currentCamera ? 'active' : ''}" data-camera="${cam}">
-                  ${this._formatCameraName(cam)}
+                <button class="timeline-camera-tab ${cam === currentCamera ? 'active' : ''}" data-camera="${escapeHtml(cam)}">
+                  <span data-safe-text="${escapeHtml(this._formatCameraName(cam))}"></span>
                 </button>
               `).join('')}
             </div>
@@ -5578,6 +5596,11 @@ export class FrigateEventsCard extends LitElement {
         </div>
       </div>
     `;
+
+    container.querySelectorAll<HTMLElement>('[data-safe-text]').forEach((element) => {
+      element.textContent = element.getAttribute('data-safe-text') || '';
+      element.removeAttribute('data-safe-text');
+    });
 
     // Attach Event Listeners
     this._timelineVideoA = container.querySelector('video.timeline-video-a');
