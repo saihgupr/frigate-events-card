@@ -11,9 +11,7 @@ except ImportError:
     yaml = None
 from datetime import datetime, timedelta, timezone
 
-from aiohttp import web
 import voluptuous as vol
-from homeassistant.components.http import HomeAssistantView
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, HomeAssistantError, ServiceCall
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -22,6 +20,7 @@ from homeassistant.helpers.typing import ConfigType
 from homeassistant.helpers.service import async_register_admin_service
 
 DOMAIN = "frigate_temp_mask"
+PLATFORMS = ["sensor"]
 _LOGGER = logging.getLogger(__name__)
 
 DEFAULT_PADDING = 0.10
@@ -61,79 +60,6 @@ def _get_event_box(event_data: object) -> list[float] | None:
                 return box
 
     return _coerce_frigate_box(event_data.get("box"))
-
-
-class FrigateRecordingSnapshotView(HomeAssistantView):
-    """View to proxy uncropped recording snapshot frames from Frigate."""
-
-    url = "/api/frigate_temp_mask/recording_snapshot/{camera}/{timestamp:[.0-9]+}"
-    extra_urls = ["/api/frigate_temp_mask/recording_snapshot/{camera}"]
-    name = "api:frigate_temp_mask:recording_snapshot"
-
-    def __init__(self, hass: HomeAssistant, get_base_url_fn) -> None:
-        self.hass = hass
-        self._get_base_url = get_base_url_fn
-
-    async def get(self, request: web.Request, camera: str, timestamp: str = "") -> web.Response:
-        session = async_get_clientsession(self.hass)
-        base_url = self._get_base_url()
-        if not base_url:
-            return web.Response(status=404)
-        ts = timestamp or request.query.get("ts", "")
-        if ts:
-            clean_ts = ts.split(".")[0]
-            frigate_url = f"{base_url}/api/{camera}/recordings/{clean_ts}/snapshot.png"
-            try:
-                async with session.get(frigate_url, timeout=10) as resp:
-                    if resp.status == 200:
-                        data = await resp.read()
-                        return web.Response(body=data, content_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
-            except Exception as e:
-                _LOGGER.debug("Error fetching recording snapshot from Frigate: %s", e)
-
-        # Fallback to latest camera detect frame
-        try:
-            latest_url = f"{base_url}/api/{camera}/latest.jpg"
-            async with session.get(latest_url, timeout=10) as resp:
-                if resp.status == 200:
-                    data = await resp.read()
-                    return web.Response(body=data, content_type="image/jpeg", headers={"Cache-Control": "public, max-age=60"})
-        except Exception as e:
-            _LOGGER.error("Error fetching latest camera snapshot for %s: %s", camera, e)
-
-        return web.Response(status=404)
-
-
-class FrigateEventDeleteView(HomeAssistantView):
-    """View to proxy DELETE event requests to Frigate."""
-
-    url = "/api/frigate_temp_mask/events/{event_id}"
-    name = "api:frigate_temp_mask:event_delete"
-
-    def __init__(self, hass: HomeAssistant, get_base_url_fn) -> None:
-        self.hass = hass
-        self._get_base_url = get_base_url_fn
-
-    async def delete(self, request: web.Request, event_id: str) -> web.Response:
-        session = async_get_clientsession(self.hass)
-        base_url = self._get_base_url()
-        if not base_url:
-            return web.json_response({"success": False, "error": "Frigate integration is not configured"}, status=503)
-        try:
-            async with session.delete(f"{base_url}/api/events/{event_id}", timeout=10) as resp:
-                if resp.status in (200, 204):
-                    return web.json_response({"success": True, "event_id": event_id})
-                return web.json_response(
-                    {"success": False, "error": f"Frigate returned status {resp.status}"},
-                    status=resp.status,
-                )
-        except Exception as e:
-            _LOGGER.error("Error deleting Frigate event %s: %s", event_id, e)
-            return web.json_response({"success": False, "error": str(e)}, status=500)
-
-    async def post(self, request: web.Request, event_id: str) -> web.Response:
-        """Allow POST as an alternate method for environments blocking DELETE."""
-        return await self.delete(request, event_id)
 
 
 def _parse_iso_to_timestamp(iso_str: str | None) -> float | None:
@@ -965,6 +891,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
     domain_data.setdefault("services_registered", False)
     domain_data.setdefault("unsub_sync", None)
     domain_data.setdefault("last_config_audit_ts", 0.0)
+    domain_data.setdefault("mask_sensor", None)
     # Optimistic default: assume modern Frigate (0.18+) so supports_dynamic_toggle starts
     # as true. The real version is fetched on the first sync and will override this.
     domain_data.setdefault("frigate_version", (0, 18, 0))
@@ -1029,12 +956,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         f_ver = domain_data.get("frigate_version")
         ver_str = ".".join(str(x) for x in f_ver) if f_ver else "unknown"
         supports_dyn = f_ver >= (0, 18) if f_ver else False
-        hass.states.async_set(
-            "sensor.frigate_active_masks",
-            str(count),
-            {
-                "friendly_name": "Frigate Active Temporary Masks",
-                "icon": "mdi:vector-square-remove",
+        attributes = {
                 # Publish fresh dictionaries so Home Assistant sees attribute
                 # changes even when a mask record was updated in place.
                 "masks": [dict(mask) for mask in active.values()],
@@ -1043,8 +965,12 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                 "pending_count": pending_count,
                 "frigate_version": ver_str,
                 "supports_dynamic_toggle": supports_dyn,
-            }
-        )
+        }
+        sensor = domain_data.get("mask_sensor")
+        if sensor:
+            sensor.update_state(str(count), attributes)
+        else:
+            domain_data["pending_sensor_state"] = (str(count), attributes)
 
     async def _async_sync_frigate_state(force_config_audit: bool = False) -> None:
         """Synchronize mask state with running Frigate process uptime and active config."""
@@ -1734,17 +1660,6 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
     )
     domain_data["services_registered"] = True
 
-    if not domain_data.get("view_registered"):
-        try:
-            hass.http.register_view(FrigateRecordingSnapshotView(hass, _get_frigate_base_url))
-        except Exception:
-            pass
-        try:
-            hass.http.register_view(FrigateEventDeleteView(hass, _get_frigate_base_url))
-        except Exception:
-            pass
-        domain_data["view_registered"] = True
-
     # Periodic background synchronization
     if not domain_data.get("unsub_sync"):
         async def _periodic_sync_cb(_now):
@@ -1778,12 +1693,15 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Frigate Temporary Mask from a config entry."""
     await _async_setup_core(hass)
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
+    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if DOMAIN in hass.data:
+        hass.data[DOMAIN]["mask_sensor"] = None
         unsub = hass.data[DOMAIN].get("unsub_sync")
         if unsub:
             unsub()
@@ -1791,4 +1709,4 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         for timer_unsub in hass.data[DOMAIN].get("timers", {}).values():
             timer_unsub()
         hass.data[DOMAIN]["timers"].clear()
-    return True
+    return unload_ok
