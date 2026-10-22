@@ -433,6 +433,17 @@ The most common settings to get you started:
   go2rtc_url: http://192.168.1.211:1984
   ```
   *(Note: If your Home Assistant dashboard is loaded over HTTPS, browsers may block an HTTP `go2rtc_url` due to Mixed Content security rules. In that case, use Home Assistant's native WebRTC mode without `go2rtc_url` or put go2rtc behind HTTPS).*
+- **Signaling succeeds but the video stays dark/unavailable after upgrading Frigate**: Frigate 0.18+ may have go2rtc advertise an address that browser clients cannot reach. Configure a reachable WebRTC candidate under the top-level `go2rtc:` section, using the Frigate host's LAN IP and the WebRTC port exposed to clients (default `8555`):
+  ```yaml
+  go2rtc:
+    webrtc:
+      candidates:
+        - 192.168.1.211:8555
+    streams:
+      front_door:
+        - rtsp://...
+  ```
+  Replace the example IP with the address your browser clients use to reach the Frigate host. Ensure the WebRTC UDP port (default `8555`) is published by Docker and allowed through the host/network firewall. After applying the change, check the `/api/webrtc` response SDP: it should include the reachable candidate address. This can resolve cases where `/api/webrtc` returns `200 OK` but the browser never receives video.
 
 ## Contributing
 
