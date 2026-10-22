@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.5.22';
+const CARD_VERSION = '2.5.23';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -301,8 +301,8 @@ export class FrigateEventsCard extends LitElement {
         if (this.hass && !this._unsubscribe) {
           this._subscribeToEvents();
         }
-        const oldMasks = oldHass?.states?.['sensor.frigate_active_masks'];
-        const newMasks = this.hass?.states?.['sensor.frigate_active_masks'];
+        const oldMasks = this._getTemporaryMaskSensor(oldHass?.states);
+        const newMasks = this._getTemporaryMaskSensor(this.hass?.states);
         if (oldMasks !== newMasks) {
           if (this._maskManagerContainer) {
             this._renderMaskManagerContent(this._maskManagerContainer);
@@ -313,6 +313,18 @@ export class FrigateEventsCard extends LitElement {
       }
     }
     return true;
+  }
+
+  /** Resolve the integration sensor by its stable unique-id suffix. HA may prefix
+   * the suggested object id with the integration/config-entry name. */
+  private _getTemporaryMaskSensor(states: HomeAssistant['states'] | undefined): any {
+    if (!states) return undefined;
+    if (states['sensor.frigate_active_masks']) return states['sensor.frigate_active_masks'];
+    const matches = Object.entries(states).filter(([entityId, state]: [string, any]) =>
+      entityId.startsWith('sensor.') && entityId.endsWith('_frigate_active_masks') &&
+      Array.isArray(state?.attributes?.masks)
+    );
+    return matches.length === 1 ? matches[0][1] : undefined;
   }
 
   protected async firstUpdated(): Promise<void> {
@@ -3181,7 +3193,7 @@ export class FrigateEventsCard extends LitElement {
   private async _executeTempMaskToggle(event: FrigateEvent): Promise<boolean> {
     if (!this.hass) return false;
     const maskId = event.id.includes('-') ? event.id.split('-')[0] : event.id;
-    const activeMasks = (this.hass.states?.['sensor.frigate_active_masks']?.attributes?.masks as any[]) || [];
+    const activeMasks = (this._getTemporaryMaskSensor(this.hass.states)?.attributes?.masks as any[]) || [];
     const isCurrentlyActive: boolean = Boolean(
       Array.isArray(activeMasks) && activeMasks.some((m: any) => m.mask_id === maskId)
     );
@@ -3350,7 +3362,7 @@ export class FrigateEventsCard extends LitElement {
     this._injectModalStyles();
 
     const maskId = event.id.includes('-') ? event.id.split('-')[0] : event.id;
-    const activeMasks = (this.hass?.states?.['sensor.frigate_active_masks']?.attributes?.masks as any[]) || [];
+    const activeMasks = (this._getTemporaryMaskSensor(this.hass?.states)?.attributes?.masks as any[]) || [];
     const currentMask = Array.isArray(activeMasks) ? activeMasks.find((m: any) => m.mask_id === maskId || m.event_id === event.id || String(m.mask_id) === String(maskId)) : undefined;
     const isMaskActive: boolean = Boolean(currentMask);
 
@@ -3398,7 +3410,7 @@ export class FrigateEventsCard extends LitElement {
 
     const hasTempMaskIntegration = !!(
       this._config?.show_temp_mask !== false &&
-      (this.hass?.services?.['frigate_temp_mask'] || this.hass?.services?.['shell_command']?.['frigate_add_temp_mask'] || this.hass?.states?.['sensor.frigate_active_masks'])
+      (this.hass?.services?.['frigate_temp_mask'] || this.hass?.services?.['shell_command']?.['frigate_add_temp_mask'] || this._getTemporaryMaskSensor(this.hass?.states))
     );
 
     const menu = document.createElement('div');
@@ -3605,7 +3617,7 @@ export class FrigateEventsCard extends LitElement {
     const liveCam = this._config?.camera || (this._getAvailableCameras()[0] || '');
     const hasTempMaskIntegration = !!(
       this._config?.show_temp_mask !== false &&
-      (this.hass?.services?.['frigate_temp_mask'] || this.hass?.services?.['shell_command']?.['frigate_add_temp_mask'] || this.hass?.states?.['sensor.frigate_active_masks'])
+      (this.hass?.services?.['frigate_temp_mask'] || this.hass?.services?.['shell_command']?.['frigate_add_temp_mask'] || this._getTemporaryMaskSensor(this.hass?.states))
     );
 
     const menu = document.createElement('div');
@@ -3781,7 +3793,7 @@ export class FrigateEventsCard extends LitElement {
   }
 
   private _updateMaskManagerTimers(container: HTMLElement): void {
-    const activeMasks = (this.hass?.states?.['sensor.frigate_active_masks']?.attributes?.masks as any[]) || [];
+    const activeMasks = (this._getTemporaryMaskSensor(this.hass?.states)?.attributes?.masks as any[]) || [];
     if (!Array.isArray(activeMasks)) return;
     const map = new Map<string, any>();
     activeMasks.forEach(m => map.set(m.mask_id, m));
@@ -3920,14 +3932,14 @@ export class FrigateEventsCard extends LitElement {
   }
 
   private _renderMaskManagerContent(container: HTMLElement): void {
-    const rawMasks = (this.hass?.states?.['sensor.frigate_active_masks']?.attributes?.masks as any[]) || [];
+    const rawMasks = (this._getTemporaryMaskSensor(this.hass?.states)?.attributes?.masks as any[]) || [];
     const activeMasks = Array.isArray(rawMasks) ? rawMasks : [];
     const totalCount = activeMasks.length;
 
-    const rawPending = (this.hass?.states?.['sensor.frigate_active_masks']?.attributes?.pending_restart_masks as any[]) || [];
+    const rawPending = (this._getTemporaryMaskSensor(this.hass?.states)?.attributes?.pending_restart_masks as any[]) || [];
     const backendPending = Array.isArray(rawPending) ? rawPending : [];
 
-    const sensorAttrs = this.hass?.states?.['sensor.frigate_active_masks']?.attributes;
+    const sensorAttrs = this._getTemporaryMaskSensor(this.hass?.states)?.attributes;
     const supportsDynamic = sensorAttrs?.supports_dynamic_toggle === true;
 
     // Combine local pending and backend pending
@@ -4408,7 +4420,7 @@ export class FrigateEventsCard extends LitElement {
   private async _executeRemoveMask(maskId: string, camera?: string): Promise<void> {
     if (!this.hass) return;
     try {
-      const sensorAttrs = this.hass?.states?.['sensor.frigate_active_masks']?.attributes;
+      const sensorAttrs = this._getTemporaryMaskSensor(this.hass?.states)?.attributes;
       const activeMasks = (sensorAttrs?.masks as any[]) || [];
       const supportsDynamic = sensorAttrs?.supports_dynamic_toggle === true;
       const existing = activeMasks.find((m: any) => String(m.mask_id) === String(maskId));
@@ -4439,7 +4451,7 @@ export class FrigateEventsCard extends LitElement {
       // Post-call: re-check supports_dynamic_toggle. The backend fetches and caches
       // the Frigate version during remove_mask, so the sensor may now report true
       // even if it was false at click time. Clear the pending entry if so.
-      const postAttrs = this.hass?.states?.['sensor.frigate_active_masks']?.attributes;
+      const postAttrs = this._getTemporaryMaskSensor(this.hass?.states)?.attributes;
       if (postAttrs?.supports_dynamic_toggle === true) {
         this._localPendingMasks = this._localPendingMasks.filter(m => String(m.mask_id) !== String(maskId));
       }
@@ -4457,7 +4469,7 @@ export class FrigateEventsCard extends LitElement {
         // Second pass: by 600ms HA state has definitely propagated.
         // If supports_dynamic_toggle is true (0.18+), ensure no pending entry lingers.
         setTimeout(() => {
-          const lateAttrs = this.hass?.states?.['sensor.frigate_active_masks']?.attributes;
+          const lateAttrs = this._getTemporaryMaskSensor(this.hass?.states)?.attributes;
           if (lateAttrs?.supports_dynamic_toggle === true) {
             this._localPendingMasks = this._localPendingMasks.filter(m => String(m.mask_id) !== String(maskId));
             if (this._maskManagerContainer) this._renderMaskManagerContent(this._maskManagerContainer);
@@ -6304,7 +6316,7 @@ export class FrigateEventsCard extends LitElement {
 
     let renderedEvents = eventsToShow.map(event => this._renderEvent(event));
     const hasTempMask = !!(this._config?.show_temp_mask !== false &&
-      (this.hass?.services?.['frigate_temp_mask'] || this.hass?.states?.['sensor.frigate_active_masks']));
+      (this.hass?.services?.['frigate_temp_mask'] || this._getTemporaryMaskSensor(this.hass?.states)));
     const hasTimeline = this._isTimelineEnabled();
     let renderedPlaceholders = Array(placeholderCount).fill(0).map(() =>
       html`<div
