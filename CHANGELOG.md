@@ -1,6 +1,7 @@
 # Changelog
 
 ## [2.5.0] - 2026-10-08
+- Fixed: Expired temporary masks are now removed when Frigate reconnects after being offline, including masks discovered in its configuration.
 - Added: **Timeline & Continuous Playback (Frigate 0.13+ VOD)** — Stream continuous video recordings directly in a dedicated player with an interactive visual scrubber track, color-coded event markers, quick jump intervals (`-15m`, `-1h`, `-3h`, `-12h`, `Start of Day`), and variable playback speeds (up to 8x/16x).
 - Added: **Click to Timeline Navigation** — Clicking an event thumbnail opens directly into the Timeline centered on the event's start time (`timeline_on_click: true`).
 - Added: **Timeline Auto-Advance & Gapless Playback** — Reduced black flashes between clips and auto-advances smoothly across hour recording chunks.

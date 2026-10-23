@@ -1090,6 +1090,22 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                                 existing["label"] = label_val
                             if not existing.get("polygon") and poly_str:
                                 existing["polygon"] = poly_str
+                            # A tracked finite-duration mask may have expired while
+                            # Frigate was offline. The earlier expiration pass
+                            # could not remove it until Frigate came back up.
+                            exp_ts = _parse_iso_to_timestamp(existing.get("expires_at"))
+                            if (
+                                not existing.get("is_orphan")
+                                and exp_ts is not None
+                                and exp_ts <= now_ts
+                            ):
+                                _LOGGER.info(
+                                    "Tracked temporary mask %s expired while Frigate was unavailable, pruning...",
+                                    disc_id,
+                                )
+                                await async_handle_remove_mask(
+                                    ServiceCall(DOMAIN, "remove_mask", {"mask_id": disc_id})
+                                )
                             continue
 
                         # Discovered mask not yet tracked in active_masks
@@ -1102,10 +1118,17 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                             remaining_seconds = expires_dt.timestamp() - now_ts
                             duration_hrs = 24.0
                             if remaining_seconds <= 0:
-                                # Mask creation is older than 24h: adopt as orphan with expired timestamp
-                                # so it displays as 'Expired' in the UI with full remove/extend controls.
-                                is_orphan = True
-                                remaining_seconds = 0
+                                # Event-derived mask IDs encode creation time. If
+                                # older than the default lifetime, it expired
+                                # while HA/Frigate was offline; remove it now.
+                                _LOGGER.info(
+                                    "Discovered temporary mask %s is older than its default 24-hour lifetime, pruning...",
+                                    disc_id,
+                                )
+                                await async_handle_remove_mask(
+                                    ServiceCall(DOMAIN, "remove_mask", {"mask_id": disc_id})
+                                )
+                                continue
                         else:
                             duration_hrs = 24.0
                             expires_dt = now_dt + timedelta(hours=duration_hrs)
