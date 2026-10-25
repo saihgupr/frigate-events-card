@@ -1,20 +1,22 @@
 # Frigate Events Card
 
-A simple Lovelace card for displaying recent Frigate detection events in a horizontal gallery
+An all-in-one Lovelace card for Frigate: recent detection gallery, WebRTC live view, continuous timeline playback, and temporary false-positive masking.
+
+**Available directly in HACS** — search for **Frigate Events Card** under Frontend.
 
 ![Demo](https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/demo.gif)
 ![Screenshot](https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/screenshot_6.png)
 ![Screenshot](https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/screenshot_3.png)
 ![Screenshot](https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/screenshot_4.png)
 
-## What's New in v2.5
+## What's New in v2.6
 
-- **Timeline & Continuous Video Playback (Frigate 0.13+ VOD)**: Stream 24/7 continuous video recordings directly in a dedicated player modal with an interactive scrubber track, color-coded event markers, quick jump intervals (`-15m`, `-1h`, `-3h`, `-12h`, `Start of Day`), and variable playback speeds (up to 4096x).
-- **Click Event to Timeline**: Clicking any event thumbnail in the carousel opens the Timeline centered on the event's start time (`timeline_on_click: true`).
-- **Live Feed & Timeline Audio Mute Controls**: Interactive mute toggle icon button displayed on hover over both the live WebRTC feed (`show_mute`) and the Timeline modal player (`timeline_show_mute`), with WebRTC audio transceiver negotiation.
-- **Smooth Auto-Advance & Gapless Streaming**: Minimized black flashes between video chunks and automatic advance across hour recording boundaries.
-- **Signed Thumbnail URLs & Auth Proxy Caching**: Transparent Home Assistant `auth/sign_path` WebSocket integration with client-side caching to fix 401 Unauthorized thumbnail errors behind auth proxies.
-- **Frigate 0.18+ Temp Mask Compatibility**: Native support for Frigate 0.18+ YAML dictionary configuration formats with robust mask lifecycle and cleanup.
+- **Temporary Mask Manager overhaul**: Live camera snapshots with mask polygon overlays, accurate countdowns, per-mask duration changes, instant removal, and reliable cleanup of expired or orphaned masks — including after Frigate reconnects from an outage.
+- **Active Masks sensor**: New `sensor.frigate_active_masks` diagnostic entity exposing the active mask count, mask details, pending-restart state, and detected Frigate version for dashboards and automations.
+- **Frigate 0.18+ mask compatibility**: Robust support for dictionary-format object masks, automatic adoption of masks found in Frigate's config, and safer mask retention across restarts.
+- **Timeline & continuous playback**: Integrated VOD timeline with an interactive scrubber, color-coded event markers, quick jumps, up to 16x playback, click-to-timeline navigation, and mute controls.
+- **Security hardening**: Event deletion now goes through the admin-only `frigate_temp_mask.delete_event` service, proxy views require authentication, hard-coded Frigate URL/camera fallbacks were removed, and event/mask details render via `textContent` to prevent HTML injection.
+- **Signed snapshot fix**: `auth/sign_path` requests now use the correct `expires` parameter, so signed thumbnails and camera previews load reliably behind authenticated reverse proxies.
 
 ## Features
 
@@ -39,7 +41,7 @@ A simple Lovelace card for displaying recent Frigate detection events in a horiz
 
 ### HACS (Recommended)
 
-This card is available directly in [HACS](https://hacs.xyz/) (Home Assistant Community Store).
+This card is available directly in [HACS](https://hacs.xyz/) (Home Assistant Community Store) — no custom repository required.
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=saihgupr&repository=frigate-events-card&category=plugin)
 

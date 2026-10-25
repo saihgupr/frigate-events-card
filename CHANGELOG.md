@@ -1,9 +1,15 @@
 # Changelog
 
-## [2.5.32] - 2026-10-25
-- Improved: Temporary mask previews now use a fresh camera snapshot captured when the Mask Manager opens (with the mask polygon overlaid) instead of the event snapshot, making it easy to see exactly what is currently being masked. Falls back to the event snapshot when no camera entity is available.
+## [2.6.0] - 2026-10-25
+- Added: **Active Masks sensor** — `sensor.frigate_active_masks` diagnostic entity exposing the active mask count, mask details, pending-restart state, and detected Frigate version for dashboards and automations.
+- Added: **Live mask previews** — the Mask Manager captures a fresh camera snapshot when opened and overlays each mask polygon, so you can see exactly what is currently being masked. Falls back to the event snapshot when no camera entity is available.
+- Improved: **Temporary mask lifecycle** — expired and orphaned masks are now cleaned up reliably, including masks discovered after Frigate reconnects from an outage. Masks are retained across restarts, and per-mask duration changes apply without restarting Frigate.
 - Improved: Thinner, cleaner mask polygon outlines in the Mask Manager previews.
+- Improved: Timeline and Mask Manager integration is more resilient when opened from the live feed or an event's context menu.
 - Fixed: `auth/sign_path` WebSocket calls now use the correct `expires` parameter (previously `expires_ticks` was rejected by Home Assistant), so signed snapshots and camera previews load reliably instead of showing the fallback background.
+- Fixed: Temporary mask save, config, and duration errors, including the admin service input schema and Frigate 0.13/0.14/0.18 configuration formats.
+- Security: Event deletion now goes through the admin-only `frigate_temp_mask.delete_event` service, `frigate_temp_mask` proxy views require authentication, hard-coded Frigate URL and camera fallbacks were removed, and event/mask details are rendered with `textContent` to prevent HTML injection.
+- Note: Update the companion `custom_components/frigate_temp_mask` integration and restart Home Assistant to enable the new sensor and admin-only event deletion.
 
 ## [2.5.0] - 2026-10-08
 - Fixed: Expired temporary masks are now removed when Frigate reconnects after being offline, including masks discovered in its configuration.
