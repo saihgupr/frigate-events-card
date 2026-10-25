@@ -1,5 +1,8 @@
 # Changelog
 
+## [2.6.1] - 2026-10-25
+- Fixed: **Timeline continuous playback on iOS Safari and the HA Companion App** — VOD HLS playlists and MP4 fallbacks are now signed with `authSig` before loading, so the Frigate integration's segment proxy no longer returns 401 Unauthorized. This also fixes timeline playback behind Nabu Casa/authenticated proxies on all browsers.
+
 ## [2.6.0] - 2026-10-25
 - Added: **Active Masks sensor** — `sensor.frigate_active_masks` diagnostic entity exposing the active mask count, mask details, pending-restart state, and detected Frigate version for dashboards and automations.
 - Added: **Live mask previews** — the Mask Manager captures a fresh camera snapshot when opened and overlays each mask polygon, so you can see exactly what is currently being masked. Falls back to the event snapshot when no camera entity is available.

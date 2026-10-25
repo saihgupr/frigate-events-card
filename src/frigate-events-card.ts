@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.6.0';
+const CARD_VERSION = '2.6.1';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -5320,70 +5320,101 @@ export class FrigateEventsCard extends LitElement {
 
     console.log('Frigate Events Card: VOD requested:', { slot, hlsUrl, mp4Url, start: this._timelineStartTs, end: this._timelineEndTs });
 
-    const fallbackToMp4 = () => {
-      console.warn('Frigate Events Card: HLS failed or unsupported, trying MP4 clip:', mp4Url);
-      video.onerror = (e) => {
-        this._isAdvancingTimeline = false;
-        if (this._timelineLoadingTimeout) {
-          clearTimeout(this._timelineLoadingTimeout);
-          this._timelineLoadingTimeout = undefined;
+    // Signed paths (authSig) are required by the Frigate integration's VOD views.
+    // hls.js can send a Bearer header, but native HLS (iOS Safari / HA companion app)
+    // and direct <video> MP4 fallbacks cannot, so sign the URLs up front.
+    // Only sign HA-proxied URLs; a direct Frigate URL must not be rewritten to a relative path.
+    const requestId = this._timelineWindowRequestId;
+    const windowStart = this._timelineStartTs;
+    const windowEnd = this._timelineEndTs;
+    const isStale = () =>
+      requestId !== this._timelineWindowRequestId ||
+      windowStart !== this._timelineStartTs ||
+      windowEnd !== this._timelineEndTs;
+
+    const startStream = async () => {
+      let signedHlsUrl = hlsUrl;
+      let signedMp4Url = mp4Url;
+      const hass = this.hass;
+      if (hass && !frigateUrl) {
+        try {
+          [signedHlsUrl, signedMp4Url] = await Promise.all([
+            signPath(hass, hlsUrl),
+            signPath(hass, mp4Url),
+          ]);
+        } catch (e) {
+          console.warn('Frigate Events Card: Failed to sign VOD URLs:', e);
         }
-        if (loadingEl) {
-          loadingEl.classList.remove('subtle');
-        }
-        console.error('Frigate Events Card: MP4 playback failed:', e, mp4Url);
-        if (loadingEl) {
-          loadingEl.innerHTML = `
-            <div style="display:flex; flex-direction:column; align-items:center; gap:8px; text-align:center; padding:16px;">
-              <span>No continuous footage stream available for this time window.</span>
-              <span style="font-size:11px; opacity:0.6;">Tested URLs: <a href="${escapeHtml(hlsUrl)}" target="_blank" style="color:var(--primary-color, #03a9f4);">HLS</a> | <a href="${escapeHtml(mp4Url)}" target="_blank" style="color:var(--primary-color, #03a9f4);">MP4</a></span>
-            </div>
-          `;
-        }
+      }
+      if (isStale()) return;
+
+      const fallbackToMp4 = () => {
+        console.warn('Frigate Events Card: HLS failed or unsupported, trying MP4 clip:', signedMp4Url);
+        video.onerror = (e) => {
+          this._isAdvancingTimeline = false;
+          if (this._timelineLoadingTimeout) {
+            clearTimeout(this._timelineLoadingTimeout);
+            this._timelineLoadingTimeout = undefined;
+          }
+          if (loadingEl) {
+            loadingEl.classList.remove('subtle');
+          }
+          console.error('Frigate Events Card: MP4 playback failed:', e, signedMp4Url);
+          if (loadingEl) {
+            loadingEl.innerHTML = `
+              <div style="display:flex; flex-direction:column; align-items:center; gap:8px; text-align:center; padding:16px;">
+                <span>No continuous footage stream available for this time window.</span>
+                <span style="font-size:11px; opacity:0.6;">Tested URLs: <a href="${escapeHtml(signedHlsUrl)}" target="_blank" style="color:var(--primary-color, #03a9f4);">HLS</a> | <a href="${escapeHtml(signedMp4Url)}" target="_blank" style="color:var(--primary-color, #03a9f4);">MP4</a></span>
+              </div>
+            `;
+          }
+        };
+        video.src = signedMp4Url;
+        video.load();
       };
-      video.src = mp4Url;
-      video.load();
+
+      // If Hls.js is supported (Chrome, Edge, Firefox, modern browsers)
+      if (Hls.isSupported()) {
+        const token = (this.hass as any)?.auth?.data?.access_token;
+        const hls = new Hls({
+          startPosition: initialOffset >= 0 ? initialOffset : -1,
+          enableWorker: true,
+          lowLatencyMode: false,
+          xhrSetup: (xhr: XMLHttpRequest, url: string) => {
+            if (token && !url.includes('authSig=')) {
+              xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+            }
+          },
+        });
+        if (slot === 'a') {
+          this._timelineHlsA = hls;
+        } else {
+          this._timelineHlsB = hls;
+        }
+        hls.loadSource(signedHlsUrl);
+        hls.attachMedia(video);
+
+        hls.on(Hls.Events.ERROR, (_event, data) => {
+          console.warn('Frigate Events Card: Hls.js error event:', data.type, data.details, data.fatal);
+          if (data.fatal) {
+            hls.destroy();
+            if (slot === 'a') this._timelineHlsA = null;
+            else this._timelineHlsB = null;
+            fallbackToMp4();
+          }
+        });
+      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        video.onerror = () => {
+          fallbackToMp4();
+        };
+        video.src = signedHlsUrl;
+        video.load();
+      } else {
+        fallbackToMp4();
+      }
     };
 
-    // If Hls.js is supported (Chrome, Edge, Firefox, modern browsers)
-    if (Hls.isSupported()) {
-      const token = (this.hass as any)?.auth?.data?.access_token;
-      const hls = new Hls({
-        startPosition: initialOffset >= 0 ? initialOffset : -1,
-        enableWorker: true,
-        lowLatencyMode: false,
-        xhrSetup: (xhr: XMLHttpRequest, url: string) => {
-          if (token && !url.includes('authSig=')) {
-            xhr.setRequestHeader('Authorization', `Bearer ${token}`);
-          }
-        },
-      });
-      if (slot === 'a') {
-        this._timelineHlsA = hls;
-      } else {
-        this._timelineHlsB = hls;
-      }
-      hls.loadSource(hlsUrl);
-      hls.attachMedia(video);
-
-      hls.on(Hls.Events.ERROR, (_event, data) => {
-        console.warn('Frigate Events Card: Hls.js error event:', data.type, data.details, data.fatal);
-        if (data.fatal) {
-          hls.destroy();
-          if (slot === 'a') this._timelineHlsA = null;
-          else this._timelineHlsB = null;
-          fallbackToMp4();
-        }
-      });
-    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-      video.onerror = () => {
-        fallbackToMp4();
-      };
-      video.src = hlsUrl;
-      video.load();
-    } else {
-      fallbackToMp4();
-    }
+    void startStream();
 
     this._startTimelineTimeUpdates();
   }
