@@ -219,6 +219,32 @@ go2rtc_url: http://192.168.1.211:1984
 ```
 </details>
 
+### Timeline & Continuous Playback
+
+The Timeline modal plays continuous recordings from Frigate 0.13+ VOD, so you can review footage around an event instead of being limited to the event clip itself. Click any event thumbnail (with `timeline_on_click: true`) or use the live feed's right-click menu to open it.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/develop/images/snapshots/timeline-2.jpeg" width="100%" alt="Timeline player with event markers and playback controls" />
+</p>
+
+- **Interactive scrubber**: Drag anywhere on the track to seek. The current time is shown above the playhead, with the window start and end times on either side.
+- **Event markers**: Color-coded markers highlight detections across the selected window, making it easy to jump between moments.
+- **Quick jumps**: Choose `Now`, `-15m`, `-1h`, `-3h`, `-12h`, or `Start of Day` to reposition the timeline instantly.
+- **Window size**: Switch between `15m`, `30m`, `1h`, `2h`, and `3h` recording windows.
+- **Fine controls**: Nudge playback with `-5m`, `-1m`, `-30s`, `+30s`, `+1m`, and `+5m` buttons.
+- **Variable speed**: Use the `-`/`+` controls to play from `0.25x` up to `16x`, with gapless auto-advance across recording chunks.
+
+```yaml
+# Timeline is enabled by default
+show_timeline: true
+timeline_on_click: true
+timeline_default_window_hours: 1
+timeline_event_seek_offset: 0
+timeline_show_mute: true
+```
+
+> **Note:** Timeline playback requires the Frigate integration and access to Frigate's VOD recordings. Streams are signed automatically, so HLS playback works on iOS Safari, the Home Assistant Companion App, and authenticated reverse proxies.
+
 ### Context Menu & Event Management
 
 Right-clicking (desktop) or long-pressing (touch devices) any event thumbnail opens an interactive context menu with quick management actions:
