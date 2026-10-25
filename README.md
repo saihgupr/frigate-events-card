@@ -226,6 +226,7 @@ Right-clicking (desktop) or long-pressing (touch devices) any event thumbnail op
 * **View in Timeline (Frigate 0.13 VOD)**: Instantly opens continuous VOD recording playback centered on the event's exact start time. Scrub forward and backward around the event, visually spot other detections on the color-coded marker track, adjust window spans (15m, 30m, 1h, 2h, 4h), and fast-forward at variable speeds (up to 16x).
 * **Temporary Masking (Optional)**: Dynamically available when the companion `frigate_temp_mask` custom component is installed. Automatically calculates a 10% expanded bounding box around false detections (such as a wheelbarrow, package, or parked vehicle), injects a temporary mask into Frigate, and automatically restarts Frigate's backend process so the mask takes effect immediately.
 * **Change Duration / Remove Mask**: Right-clicking an already masked event allows changing the mask duration on the fly (1h, 4h, 8h, 12h, 24h, 48h, 7d, or Custom hours) or removing the mask.
+* **Live Mask Previews**: The Mask Manager captures a fresh camera snapshot when opened and overlays each mask polygon, so you can see exactly what is currently being masked.
 * **Live Video Feed Right-Click (Timeline & Mask Manager)**: Right-clicking (or long-pressing on touch devices) the live video feed opens the context menu to launch the **Timeline** for that camera or open the interactive **Mask Manager** modal directly.
 
 <p align="center">

@@ -87,7 +87,7 @@ export async function signPath(
         const response = await hass.callWS<{ path: string }>({
             type: 'auth/sign_path',
             path: cleanPath,
-            expires_ticks: expiresSeconds
+            expires: expiresSeconds
         });
         if (response?.path) {
             signedPathCache.set(cleanPath, {

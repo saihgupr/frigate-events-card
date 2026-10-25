@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.5.27';
+const CARD_VERSION = '2.5.31';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -182,6 +182,9 @@ export class FrigateEventsCard extends LitElement {
   private _modalContainer?: HTMLDivElement;
   private _maskManagerContainer?: HTMLDivElement;
   private _maskManagerTimer?: ReturnType<typeof setInterval>;
+  private _maskManagerSnapshotUrls = new Map<string, string>();
+  private _maskManagerEventSnapshotUrls = new Map<string, string>();
+  private _maskManagerSnapshotToken = 0;
   private _maskDurationOverrides = new Map<string, number>();
   private _hoverVideoCropPositions = new WeakMap<HTMLVideoElement, ObjectPositionPercent>();
   private static _stylesInjected = false;
@@ -3746,6 +3749,7 @@ export class FrigateEventsCard extends LitElement {
 
     if (this._maskManagerContainer) {
       this._renderMaskManagerContent(this._maskManagerContainer);
+      void this._refreshMaskManagerSnapshots();
       return;
     }
 
@@ -3754,6 +3758,7 @@ export class FrigateEventsCard extends LitElement {
     this._maskManagerContainer = container;
 
     this._renderMaskManagerContent(container);
+    void this._refreshMaskManagerSnapshots();
 
     container.addEventListener('click', (e) => {
       if (e.target === container) {
@@ -3779,6 +3784,120 @@ export class FrigateEventsCard extends LitElement {
     }, 1000);
 
     document.body.appendChild(container);
+  }
+
+  private _findCameraEntityId(cameraName: string): string | null {
+    const states = this.hass?.states;
+    if (!states || !cameraName) return null;
+
+    const normalize = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const target = normalize(cameraName);
+    if (!target) return null;
+
+    const liveEntity = this._config?.live_view_entity;
+    if (liveEntity && liveEntity.startsWith('camera.') && states[liveEntity]) {
+      const liveObjectId = normalize(liveEntity.slice('camera.'.length));
+      if (liveObjectId === target || liveObjectId.endsWith(target) || target.endsWith(liveObjectId)) {
+        return liveEntity;
+      }
+    }
+
+    const cameraIds = Object.keys(states).filter((id) => id.startsWith('camera.'));
+    let suffixMatch: string | null = null;
+    let fuzzyMatch: string | null = null;
+
+    for (const id of cameraIds) {
+      const objectId = normalize(id.slice('camera.'.length));
+      const attrs = states[id]?.attributes || {};
+      const attrNames = ['camera_name', 'frigate_camera_name', 'friendly_name']
+        .map((key) => attrs[key])
+        .filter((value): value is string => typeof value === 'string')
+        .map(normalize);
+
+      if (objectId === target || attrNames.includes(target)) {
+        return id;
+      }
+      if (!suffixMatch && (objectId.endsWith(target) || attrNames.some((name) => name.endsWith(target)))) {
+        suffixMatch = id;
+      }
+      if (!fuzzyMatch && (objectId.includes(target) || attrNames.some((name) => name.includes(target)))) {
+        fuzzyMatch = id;
+      }
+    }
+
+    return suffixMatch || fuzzyMatch;
+  }
+
+  private async _refreshMaskManagerSnapshots(): Promise<void> {
+    const sensor = this._getTemporaryMaskSensor(this.hass?.states);
+    const activeMasks = Array.isArray(sensor?.attributes?.masks) ? sensor.attributes.masks : [];
+    const pendingMasks = Array.isArray(sensor?.attributes?.pending_restart_masks) ? sensor.attributes.pending_restart_masks : [];
+    const cameras = Array.from(new Set(
+      [...activeMasks, ...pendingMasks]
+        .map((mask: any) => mask?.camera)
+        .filter((camera: unknown): camera is string => typeof camera === 'string' && camera.length > 0)
+    ));
+    if (cameras.length === 0) return;
+
+    const token = ++this._maskManagerSnapshotToken;
+    const cacheBust = Date.now();
+    const results = await Promise.all(cameras.map(async (camera) => {
+      let url = '';
+      const entityId = this._findCameraEntityId(camera);
+
+      if (entityId && this.hass) {
+        const proxyPath = `/api/camera_proxy/${entityId}?t=${cacheBust}`;
+        try {
+          url = await signPath(this.hass, proxyPath);
+        } catch {
+          url = proxyPath;
+        }
+      }
+
+      if (!url && this._config?.frigate_url) {
+        const base = this._config.frigate_url.replace(/\/+$/, '');
+        url = `${base}/api/${encodeURIComponent(camera)}/latest.jpg?t=${cacheBust}`;
+      }
+
+      return [camera, url] as const;
+    }));
+
+    const clientId = this._config?.frigate_client_id || 'frigate';
+    const eventSnapshotResults = await Promise.all([...activeMasks, ...pendingMasks].map(async (mask: any) => {
+      const maskId = String(mask?.mask_id || '');
+      const eventId = String(mask?.event_id || maskId);
+      if (!maskId || !eventId) return null;
+
+      const snapshotPath = getEventSnapshotURL(clientId, eventId, { bbox: false, crop: false });
+      let signedPath = snapshotPath;
+      if (this.hass) {
+        try {
+          signedPath = await signPath(this.hass, snapshotPath);
+        } catch {
+          signedPath = snapshotPath;
+        }
+      }
+      return [maskId, signedPath] as const;
+    }));
+
+    if (token !== this._maskManagerSnapshotToken) return;
+
+    results.forEach(([camera, url]) => {
+      if (url) {
+        this._maskManagerSnapshotUrls.set(camera, url);
+      } else {
+        this._maskManagerSnapshotUrls.delete(camera);
+      }
+    });
+
+    this._maskManagerEventSnapshotUrls.clear();
+    eventSnapshotResults.forEach((result) => {
+      if (result) this._maskManagerEventSnapshotUrls.set(result[0], result[1]);
+    });
+
+    if (this._maskManagerContainer) {
+      this._renderMaskManagerContent(this._maskManagerContainer);
+    }
   }
 
   private _removeMaskManagerModal(): void {
@@ -4053,7 +4172,13 @@ export class FrigateEventsCard extends LitElement {
                   crop: false
                 });
 
-                const primaryUrl = directRecordingUrl || fallbackSnapshotUrl;
+                const eventSnapshotUrl = this._maskManagerEventSnapshotUrls.get(String(mask.mask_id)) || fallbackSnapshotUrl;
+                const primaryUrl = eventSnapshotUrl || directRecordingUrl;
+                const liveSnapshotUrl = cameraName ? (this._maskManagerSnapshotUrls.get(cameraName) || '') : '';
+                const displayUrl = liveSnapshotUrl || primaryUrl;
+                const imageFallbackUrl = liveSnapshotUrl
+                  ? primaryUrl
+                  : (directRecordingUrl && directRecordingUrl !== primaryUrl ? directRecordingUrl : '');
 
                 // Compute polygon geometry & minimap coordinates
                 const geo = this._getMaskPreviewGeometry(mask, matchedEvent);
@@ -4062,41 +4187,15 @@ export class FrigateEventsCard extends LitElement {
                   <div class="mask-card" data-mask-id="${escapeHtml(mask.mask_id)}">
                     <div class="mask-card-main-row">
                       <div class="mask-visual-preview">
-                        ${primaryUrl ? `
+                        ${displayUrl ? `
                           <img
-                            src="${escapeHtml(primaryUrl)}"
+                            src="${escapeHtml(displayUrl)}"
                             class="mask-preview-thumb"
                             alt="${objectLabel}"
                             loading="lazy"
-                            data-crop-x="${geo.cropRegion ? geo.cropRegion.x : ''}"
-                            data-crop-y="${geo.cropRegion ? geo.cropRegion.y : ''}"
-                            data-crop-w="${geo.cropRegion ? geo.cropRegion.w : ''}"
-                            data-crop-h="${geo.cropRegion ? geo.cropRegion.h : ''}"
-                            data-fallback-url="${escapeHtml(fallbackSnapshotUrl)}"
-                            onload="((img) => {
-                              var ar = img.naturalWidth / (img.naturalHeight || 1);
-                              if (ar < 1.45 && img.dataset.cropX) {
-                                var x = Math.max(0, Math.min(100, parseFloat(img.dataset.cropX) * 100));
-                                var y = Math.max(0, Math.min(100, parseFloat(img.dataset.cropY) * 100));
-                                var w = Math.max(12, Math.min(100 - x, parseFloat(img.dataset.cropW) * 100));
-                                var h = Math.max(12, Math.min(100 - y, parseFloat(img.dataset.cropH) * 100));
-                                img.style.left = x + '%';
-                                img.style.top = y + '%';
-                                img.style.width = w + '%';
-                                img.style.height = h + '%';
-                                img.style.borderRadius = '3px';
-                                img.style.boxShadow = '0 0 6px rgba(0,0,0,0.7)';
-                              } else {
-                                img.style.left = '0';
-                                img.style.top = '0';
-                                img.style.width = '100%';
-                                img.style.height = '100%';
-                                img.style.borderRadius = '0';
-                                img.style.boxShadow = 'none';
-                              }
-                            })(this)"
+                            data-fallback-url="${escapeHtml(imageFallbackUrl)}"
                             onerror="((img) => {
-                              if (!img.dataset.triedFallback && img.dataset.fallbackUrl && img.src !== img.dataset.fallbackUrl) {
+                              if (!img.dataset.triedFallback && img.dataset.fallbackUrl) {
                                 img.dataset.triedFallback = 'true';
                                 img.src = img.dataset.fallbackUrl;
                               } else {
@@ -4106,7 +4205,7 @@ export class FrigateEventsCard extends LitElement {
                           />
                         ` : ''}
                         <div class="mask-preview-minimap">
-                          <svg viewBox="0 0 ${geo.viewBoxW} ${geo.viewBoxH}" preserveAspectRatio="none">
+                          <svg viewBox="0 0 ${geo.viewBoxW} ${geo.viewBoxH}" preserveAspectRatio="xMidYMid slice">
                             ${geo.polyPts ? `<polygon points="${escapeHtml(geo.polyPts)}" class="minimap-poly" vector-effect="non-scaling-stroke" />` : ''}
                           </svg>
                         </div>
@@ -4195,48 +4294,28 @@ export class FrigateEventsCard extends LitElement {
                     ? `${frigateBase}/api/${encodeURIComponent(cameraName)}/recordings/${eventTs}/snapshot.png`
                     : '';
                   const fallbackSnapshotUrl = getEventSnapshotURL(clientId, matchedEvent ? matchedEvent.id : eventId, { bbox: false, crop: false });
-                  const primaryUrl = directRecordingUrl || fallbackSnapshotUrl;
+                  const eventSnapshotUrl = this._maskManagerEventSnapshotUrls.get(String(mask.mask_id)) || fallbackSnapshotUrl;
+                  const primaryUrl = eventSnapshotUrl || directRecordingUrl;
+                  const liveSnapshotUrl = cameraName ? (this._maskManagerSnapshotUrls.get(cameraName) || '') : '';
+                  const displayUrl = liveSnapshotUrl || primaryUrl;
+                  const imageFallbackUrl = liveSnapshotUrl
+                    ? primaryUrl
+                    : (directRecordingUrl && directRecordingUrl !== primaryUrl ? directRecordingUrl : '');
                   const geo = this._getMaskPreviewGeometry(mask, matchedEvent);
 
                   return `
                     <div class="mask-card pending-restart" data-mask-id="${escapeHtml(mask.mask_id)}">
                       <div class="mask-card-main-row">
                         <div class="mask-visual-preview">
-                          ${primaryUrl ? `
+                          ${displayUrl ? `
                             <img
-                              src="${escapeHtml(primaryUrl)}"
+                              src="${escapeHtml(displayUrl)}"
                               class="mask-preview-thumb"
                               alt="${objectLabel}"
                               loading="lazy"
-                              data-crop-x="${geo.cropRegion ? geo.cropRegion.x : ''}"
-                              data-crop-y="${geo.cropRegion ? geo.cropRegion.y : ''}"
-                              data-crop-w="${geo.cropRegion ? geo.cropRegion.w : ''}"
-                              data-crop-h="${geo.cropRegion ? geo.cropRegion.h : ''}"
-                              data-fallback-url="${escapeHtml(fallbackSnapshotUrl)}"
-                              onload="((img) => {
-                                var ar = img.naturalWidth / (img.naturalHeight || 1);
-                                if (ar < 1.45 && img.dataset.cropX) {
-                                  var x = Math.max(0, Math.min(100, parseFloat(img.dataset.cropX) * 100));
-                                  var y = Math.max(0, Math.min(100, parseFloat(img.dataset.cropY) * 100));
-                                  var w = Math.max(12, Math.min(100 - x, parseFloat(img.dataset.cropW) * 100));
-                                  var h = Math.max(12, Math.min(100 - y, parseFloat(img.dataset.cropH) * 100));
-                                  img.style.left = x + '%';
-                                  img.style.top = y + '%';
-                                  img.style.width = w + '%';
-                                  img.style.height = h + '%';
-                                  img.style.borderRadius = '3px';
-                                  img.style.boxShadow = '0 0 6px rgba(0,0,0,0.7)';
-                                } else {
-                                  img.style.left = '0';
-                                  img.style.top = '0';
-                                  img.style.width = '100%';
-                                  img.style.height = '100%';
-                                  img.style.borderRadius = '0';
-                                  img.style.boxShadow = 'none';
-                                }
-                              })(this)"
+                              data-fallback-url="${escapeHtml(imageFallbackUrl)}"
                               onerror="((img) => {
-                                if (!img.dataset.triedFallback && img.dataset.fallbackUrl && img.src !== img.dataset.fallbackUrl) {
+                                if (!img.dataset.triedFallback && img.dataset.fallbackUrl) {
                                   img.dataset.triedFallback = 'true';
                                   img.src = img.dataset.fallbackUrl;
                                 } else {
@@ -4246,7 +4325,7 @@ export class FrigateEventsCard extends LitElement {
                             />
                           ` : ''}
                           <div class="mask-preview-minimap">
-                            <svg viewBox="0 0 ${geo.viewBoxW} ${geo.viewBoxH}" preserveAspectRatio="none">
+                            <svg viewBox="0 0 ${geo.viewBoxW} ${geo.viewBoxH}" preserveAspectRatio="xMidYMid slice">
                               ${geo.polyPts ? `<polygon points="${escapeHtml(geo.polyPts)}" class="minimap-poly" vector-effect="non-scaling-stroke" />` : ''}
                             </svg>
                           </div>

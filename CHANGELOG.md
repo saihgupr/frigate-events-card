@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.5.31] - 2026-10-25
+- Improved: Temporary mask previews now use a fresh camera snapshot captured when the Mask Manager opens (with the mask polygon overlaid) instead of the event snapshot, making it easy to see exactly what is currently being masked. Falls back to the event snapshot when no camera entity is available.
+- Fixed: `auth/sign_path` WebSocket calls now use the correct `expires` parameter (previously `expires_ticks` was rejected by Home Assistant), so signed snapshots and camera previews load reliably instead of showing the fallback background.
+
 ## [2.5.0] - 2026-10-08
 - Fixed: Expired temporary masks are now removed when Frigate reconnects after being offline, including masks discovered in its configuration.
 - Added: **Timeline & Continuous Playback (Frigate 0.13+ VOD)** — Stream continuous video recordings directly in a dedicated player with an interactive visual scrubber track, color-coded event markers, quick jump intervals (`-15m`, `-1h`, `-3h`, `-12h`, `Start of Day`), and variable playback speeds (up to 8x/16x).
