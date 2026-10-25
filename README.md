@@ -5,9 +5,9 @@ An all-in-one Lovelace card for Frigate: recent detection gallery, WebRTC live v
 **Available directly in HACS** — search for **Frigate Events Card** under Frontend.
 
 ![Demo](images/snapshots/demo.gif)
-![Screenshot](images/snapshots/screenshot_6.png)
+![Screenshot](images/snapshots/timeline-2.jpeg)
 ![Screenshot](images/snapshots/screenshot_3.png)
-![Screenshot](images/snapshots/screenshot_4.png)
+![Screenshot](images/snapshots/temp-mask-1.png)
 
 <details>
 <summary><strong>Contents</strong></summary>
