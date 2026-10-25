@@ -1,7 +1,8 @@
 # Changelog
 
-## [2.5.31] - 2026-10-25
+## [2.5.32] - 2026-10-25
 - Improved: Temporary mask previews now use a fresh camera snapshot captured when the Mask Manager opens (with the mask polygon overlaid) instead of the event snapshot, making it easy to see exactly what is currently being masked. Falls back to the event snapshot when no camera entity is available.
+- Improved: Thinner, cleaner mask polygon outlines in the Mask Manager previews.
 - Fixed: `auth/sign_path` WebSocket calls now use the correct `expires` parameter (previously `expires_ticks` was rejected by Home Assistant), so signed snapshots and camera previews load reliably instead of showing the fallback background.
 
 ## [2.5.0] - 2026-10-08

@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.5.31';
+const CARD_VERSION = '2.5.32';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -1936,9 +1936,9 @@ export class FrigateEventsCard extends LitElement {
       .minimap-poly {
         fill: rgba(59, 130, 246, 0.45);
         stroke: #60a5fa;
-        stroke-width: 2.5px;
+        stroke-width: 1px;
         vector-effect: non-scaling-stroke;
-        filter: drop-shadow(0 0 3px rgba(59, 130, 246, 0.8));
+        filter: drop-shadow(0 0 1px rgba(59, 130, 246, 0.8));
       }
 
       .mask-card.pending-restart .minimap-poly {
