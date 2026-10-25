@@ -4,17 +4,36 @@ An all-in-one Lovelace card for Frigate: recent detection gallery, WebRTC live v
 
 **Available directly in HACS** — search for **Frigate Events Card** under Frontend.
 
-![Demo](https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/demo.gif)
-![Screenshot](https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/screenshot_6.png)
-![Screenshot](https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/screenshot_3.png)
-![Screenshot](https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/screenshot_4.png)
+![Demo](images/snapshots/demo.gif)
+![Screenshot](images/snapshots/screenshot_6.png)
+![Screenshot](images/snapshots/screenshot_3.png)
+![Screenshot](images/snapshots/screenshot_4.png)
+
+<details>
+<summary><strong>Contents</strong></summary>
+
+- [What's New](#whats-new-in-v26)
+- [Features](#features)
+- [Installation](#installation)
+- [Usage](#usage)
+  - [Examples](#examples)
+  - [Timeline & Continuous Playback](#timeline--continuous-playback)
+  - [Context Menu & Event Management](#context-menu--event-management)
+  - [Temporary Masking (Optional)](#temporary-masking-optional)
+- [Configuration Options](#configuration-options)
+- [Requirements](#requirements)
+- [Troubleshooting](#troubleshooting)
+- [Contributing](#contributing)
+- [Support & Feedback](#support--feedback)
+
+</details>
 
 ## What's New in v2.6
 
 - **Temporary Mask Manager overhaul**: Live camera snapshots with mask polygon overlays, accurate countdowns, per-mask duration changes, instant removal, and reliable cleanup of expired or orphaned masks — including after Frigate reconnects from an outage.
 - **Active Masks sensor**: New `sensor.frigate_active_masks` diagnostic entity exposing the active mask count, mask details, pending-restart state, and detected Frigate version for dashboards and automations.
 - **Frigate 0.18+ mask compatibility**: Robust support for dictionary-format object masks, automatic adoption of masks found in Frigate's config, and safer mask retention across restarts.
-- **Timeline & continuous playback**: Integrated VOD timeline with an interactive scrubber, color-coded event markers, quick jumps, up to 16x playback, click-to-timeline navigation, and mute controls.
+- **Timeline & continuous playback**: Integrated VOD timeline with an interactive scrubber, color-coded event markers, quick jumps, variable playback speeds, click-to-timeline navigation, and mute controls.
 - **Security hardening**: Event deletion now goes through the admin-only `frigate_temp_mask.delete_event` service, proxy views require authentication, hard-coded Frigate URL/camera fallbacks were removed, and event/mask details render via `textContent` to prevent HTML injection.
 - **Signed snapshot fix**: `auth/sign_path` requests now use the correct `expires` parameter, so signed thumbnails and camera previews load reliably behind authenticated reverse proxies.
 
@@ -30,9 +49,9 @@ An all-in-one Lovelace card for Frigate: recent detection gallery, WebRTC live v
 - **Hover Previews**: Instantly play video clips when hovering over any event, with smooth auto-tracking that pans and follows the detected object throughout the clip.
 - **Live Camera Feed**: Optional WebRTC live feed above the event gallery — click to open fullscreen, true continuous peer connection, zero-flash re-renders, Smart TV browser optimizations, and 24/7 self-healing auto-reconnect for network drops and Frigate restarts.
 - **Scrollable Gallery**: Optional horizontal scroll mode with arrow navigation and hidden scrollbar for a clean, native feel.
-- **Customizable Layout**: Reverse the rendering order or offset the timeline to build the exact dashboard you want.
+- **Customizable Layout**: Reverse the rendering order or offset events to build the exact dashboard you want.
 - **Daily Reset**: Optional automated clearing for a fresh daily view.
-- **Timeline & Scrubber (Frigate 0.13 VOD)**: Stream continuous video recordings for any time window directly in a dedicated modal player. Scrub dynamically across an interactive visual track with color-coded event markers, jump by relative intervals (`-15m`, `-1h`, `-3h`, `-12h`, `Start of Day`), and skim at variable speeds up to 16x. Enabled by default; clicking an event thumbnail opens it directly in the Timeline when video playback is enabled.
+- **Timeline & Continuous Playback**: Browse continuous Frigate VOD recordings in a dedicated player with an interactive scrubber, color-coded event markers, quick jumps, and variable playback speeds up to 4096x. [Learn more](#timeline--continuous-playback).
 - **Interactive Details Modal**: Deep-dive popup displaying full event information, including AI-generated descriptions (if available), duration, date, camera, zones, and accuracy. Supports interactive previous/next navigation arrows and keyboard hotkeys (ArrowLeft / ArrowRight / Escape).
 - **Right-Click & Long-Press Context Menu**: Right-click (desktop) or long-press (mobile) any event thumbnail to instantly view details, view the exact moment in continuous timeline, permanently delete events from Frigate, or apply temporary false-positive masks.
 - **Configurable Modal Metadata**: Fine-grained visibility controls to show/hide specific metadata elements (like date, duration, or camera name) in the details popup.
@@ -63,6 +82,17 @@ This card is available directly in [HACS](https://hacs.xyz/) (Home Assistant Com
 4. Add the card to your dashboard
 
 ## Usage
+
+A minimal card configuration:
+
+```yaml
+type: custom:frigate-events-card
+frigate_client_id: frigate
+event_count: 5
+```
+
+<details>
+<summary><strong>Full Configuration Example</strong> (Click to expand)</summary>
 
 ```yaml
 type: custom:frigate-events-card
@@ -123,7 +153,6 @@ reverse: true
 offset: 1
 
 # Optional: Timeline (Frigate 0.13 VOD)
-# Default is on (true). If enabled and video playback is enabled, clicking an event opens the Timeline directly.
 show_timeline: true
 timeline_on_click: true
 timeline_default_window_hours: 1
@@ -136,7 +165,11 @@ daily_clear_time: "04:00"
 debug: true
 ```
 
-### Example: Scrollable Timeline
+</details>
+
+### Examples
+
+#### Scrollable Gallery
 
 This example creates a horizontally scrollable gallery showing 6 thumbnails at a time, loading up to 40 total events.
 
@@ -149,7 +182,7 @@ scroll_limit: 40
 video_on_hover: true
 ```
 
-### Example: Live Camera Feed
+#### Live Camera Feed
 
 This example adds a live WebRTC camera feed above the event gallery. The card supports two WebRTC streaming modes:
 
@@ -158,7 +191,7 @@ This example adds a live WebRTC camera feed above the event gallery. The card su
 
 > **Requirements:** Dashboard must be served over **HTTPS** (or `localhost`).
 
-#### Mode 1: Home Assistant Native WebRTC
+##### Mode 1: Home Assistant Native WebRTC
 ```yaml
 type: custom:frigate-events-card
 frigate_client_id: frigate
@@ -168,7 +201,7 @@ live_view_entity: camera.wyze_camera
 video_on_hover: true
 ```
 
-#### Mode 2: Direct go2rtc WebRTC (Recommended for Local TVs / Wall Tablets)
+##### Mode 2: Direct go2rtc WebRTC (Recommended for Local TVs / Wall Tablets)
 ```yaml
 type: custom:frigate-events-card
 frigate_client_id: frigate
@@ -224,7 +257,7 @@ go2rtc_url: http://192.168.1.211:1984
 The Timeline modal plays continuous recordings from Frigate 0.13+ VOD, so you can review footage around an event instead of being limited to the event clip itself. Click any event thumbnail (with `timeline_on_click: true`) or use the live feed's right-click menu to open it.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/develop/images/snapshots/timeline-2.jpeg" width="100%" alt="Timeline player with event markers and playback controls" />
+  <img src="images/snapshots/timeline-2.jpeg" width="100%" alt="Timeline player with event markers and playback controls" />
 </p>
 
 - **Interactive scrubber**: Drag anywhere on the track to seek. The current time is shown above the playhead, with the window start and end times on either side.
@@ -232,52 +265,50 @@ The Timeline modal plays continuous recordings from Frigate 0.13+ VOD, so you ca
 - **Quick jumps**: Choose `Now`, `-15m`, `-1h`, `-3h`, `-12h`, or `Start of Day` to reposition the timeline instantly.
 - **Window size**: Switch between `15m`, `30m`, `1h`, `2h`, and `3h` recording windows.
 - **Fine controls**: Nudge playback with `-5m`, `-1m`, `-30s`, `+30s`, `+1m`, and `+5m` buttons.
-- **Variable speed**: Use the `-`/`+` controls to play from `0.25x` up to `16x`, with gapless auto-advance across recording chunks.
-
-```yaml
-# Timeline is enabled by default
-show_timeline: true
-timeline_on_click: true
-timeline_default_window_hours: 1
-timeline_event_seek_offset: 0
-timeline_show_mute: true
-```
+- **Variable speed**: Use the `-`/`+` controls to step from `0.5x` up to `4096x` (speeds above `16x` use frame stepping), with gapless auto-advance across recording chunks.
 
 > **Note:** Timeline playback requires the Frigate integration and access to Frigate's VOD recordings. Streams are signed automatically, so HLS playback works on iOS Safari, the Home Assistant Companion App, and authenticated reverse proxies.
 
+See [Advanced Layout & Timeline Settings](#advanced-layout--timeline-settings) for all timeline options.
+
 ### Context Menu & Event Management
 
-Right-clicking (desktop) or long-pressing (touch devices) any event thumbnail opens an interactive context menu with quick management actions:
+Right-clicking (desktop) or long-pressing (touch devices) any event thumbnail opens a context menu with these actions:
 
-* **Delete Event**: Permanently deletes the selected event, snapshot, and clip from the Frigate NVR backend directly from your dashboard and immediately removes the thumbnail from your gallery.
-* **View Details**: Opens the full interactive details modal popup with snapshot, video playback, AI description, detection score, and timestamp metrics.
-* **View in Timeline (Frigate 0.13 VOD)**: Instantly opens continuous VOD recording playback centered on the event's exact start time. Scrub forward and backward around the event, visually spot other detections on the color-coded marker track, adjust window spans (15m, 30m, 1h, 2h, 4h), and fast-forward at variable speeds (up to 16x).
-* **Temporary Masking (Optional)**: Dynamically available when the companion `frigate_temp_mask` custom component is installed. Automatically calculates a 10% expanded bounding box around false detections (such as a wheelbarrow, package, or parked vehicle), injects a temporary mask into Frigate, and automatically restarts Frigate's backend process so the mask takes effect immediately.
-* **Change Duration / Remove Mask**: Right-clicking an already masked event allows changing the mask duration on the fly (1h, 4h, 8h, 12h, 24h, 48h, 7d, or Custom hours) or removing the mask.
-* **Live Mask Previews**: The Mask Manager captures a fresh camera snapshot when opened and overlays each mask polygon, so you can see exactly what is currently being masked.
-* **Live Video Feed Right-Click (Timeline & Mask Manager)**: Right-clicking (or long-pressing on touch devices) the live video feed opens the context menu to launch the **Timeline** for that camera or open the interactive **Mask Manager** modal directly.
+* **View Details**: Opens the interactive details modal with snapshot, video, AI description, detection score, and timestamp metrics.
+* **View in Timeline**: Opens continuous playback at the event's start time. See [Timeline & Continuous Playback](#timeline--continuous-playback).
+* **Delete Event**: Permanently deletes the event, snapshot, and clip from Frigate and removes the thumbnail immediately.
+* **Temporary Masking (Optional)**: Add or remove a false-positive mask when the [companion integration](#temporary-masking-optional) is installed.
+
+Right-clicking the live feed exposes the same context menu, with direct shortcuts for **Timeline** and **Mask Manager**.
+
+### Temporary Masking (Optional)
+
+The card works standalone. The `frigate_temp_mask` companion integration enables temporary masks for recurring false detections such as a parked car, package, or wheelbarrow. Masks use a 10% expanded bounding box around the detection, are written to Frigate's config, and can be changed or removed later.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/develop/images/snapshots/temp_mask_1.png" width="32%" />
-  <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/develop/images/snapshots/temp_mask_4.png" width="32%" />
-  <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/develop/images/snapshots/temp_mask_3.png" width="32%" />
+  <img src="images/snapshots/temp_mask_1.png" width="32%" />
+  <img src="images/snapshots/temp_mask_4.png" width="32%" />
+  <img src="images/snapshots/temp_mask_3.png" width="32%" />
 </p>
 
-> [!NOTE]
-> **Restart Behavior by Frigate Version**:
-> * **Adding or Updating Masks:** Frigate **automatically restarts** its internal detector process (~1–2 seconds) so false alarms stop immediately.
-> * **Removing Masks on Frigate 0.18+:** The mask is **instantly disabled** via the Frigate API (`PUT /api/camera/{camera}/set/object_mask/{name}`) and cleaned from `config.yml` — **no detector restart required**. Detection stops the moment you click Remove.
-> * **Removing Masks on Frigate 0.13 and earlier:** The mask is cleaned from `config.yml` on disk without restarting Frigate automatically. A **Pending Restart Tracker** in the Mask Manager displays a 1-click **Restart Frigate** button so you can apply the removal whenever convenient.
+* **Flexible durations**: Set a mask for 1h, 4h, 8h, 12h, 24h, 48h, 7d, or custom hours.
+* **Live previews**: The Mask Manager captures a fresh camera snapshot and overlays each active mask polygon.
+* **Instant removal**: Remove a mask from the context menu without waiting for a detector restart on Frigate 0.18+.
 
-#### Setting Up Temporary Masking (Optional Companion Integration)
-
-The card works completely standalone out of the box. If you would like to enable the **Temporary Mask** feature:
+#### Setup
 
 1. Copy the `custom_components/frigate_temp_mask` integration into your Home Assistant `/config/custom_components/` directory (or use `deploy.sh`).
 2. Add `frigate_temp_mask:` to your `/config/configuration.yaml`.
 3. Restart Home Assistant (or reload YAML).
 
-The card will automatically detect the integration and display the **Temporary Mask**, **Change Duration**, and **Remove Mask** options in the right-click context menu, as well as the Live Video Feed Mask Manager.
+The card automatically detects the integration and adds **Temporary Mask**, **Change Duration**, and **Remove Mask** to the context menu.
+
+> [!NOTE]
+> **Restart Behavior by Frigate Version**:
+> * **Adding or Updating Masks:** Frigate **automatically restarts** its internal detector process (~1–2 seconds) so false alarms stop immediately.
+> * **Removing Masks on Frigate 0.18+:** The mask is **instantly disabled** via the Frigate API (`PUT /api/camera/{camera}/set/object_mask/{name}`) and cleaned from `config.yml` — **no detector restart required**.
+> * **Removing Masks on Frigate 0.13 and earlier:** The mask is cleaned from `config.yml` without restarting Frigate. The **Pending Restart Tracker** in the Mask Manager provides a 1-click **Restart Frigate** button.
 
 <details>
 <summary><strong>Integration Services Reference</strong> (Click to expand)</summary>
@@ -296,26 +327,25 @@ The `frigate_temp_mask` integration exposes the following services under Home As
 
 </details>
 
-#### 1-Click Actionable Notification Blueprint (iOS & Android)
+<details>
+<summary><strong>Mobile Notification Blueprint (iOS & Android)</strong> (Click to expand)</summary>
 
-You can attach **Temporary Mask** action buttons directly to your Home Assistant Frigate mobile push notifications. When tapped from your phone lock screen or smartwatch, Home Assistant automatically calculates the expanded polygon mask, injects it into Frigate, and restarts the detector to stop repeated false alarms immediately without opening the dashboard.
+Attach **Temporary Mask** action buttons directly to Frigate mobile notifications. Tapping an action calculates the expanded polygon mask, injects it into Frigate, and restarts the detector without opening the dashboard.
 
 [![Open your Home Assistant instance and show the blueprint import dialog with a specific blueprint pre-filled.](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fsaihgupr%2Ffrigate-events-card%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Ffrigate_temp_mask_notification.yaml)
 
 > [!TIP]
 > **Ways to Import the Blueprint:**
-> 
-> * **Option A (1-Click Badge above):** Click the **Open Home Assistant** badge above to automatically import the blueprint into your Home Assistant instance.
-> * **Option B (Import by URL):** In Home Assistant, navigate to **Settings > Automations & Scenes > Blueprints > Import Blueprint** and paste:
+>
+> * **Option A (1-Click Badge above):** Click the **Open Home Assistant** badge above.
+> * **Option B (Import by URL):** In Home Assistant, go to **Settings > Automations & Scenes > Blueprints > Import Blueprint** and paste:
 >   ```text
 >   https://github.com/saihgupr/frigate-events-card/blob/main/blueprints/automation/frigate_temp_mask_notification.yaml
 >   ```
-> * **Option C (Manual File Copy):** Copy [`blueprints/automation/frigate_temp_mask_notification.yaml`](file:///Users/chrislapointe/Projects/CurrentProjects/frigate-events-card/blueprints/automation/frigate_temp_mask_notification.yaml) to your Home Assistant `/config/blueprints/automation/` directory.
+> * **Option C (Manual File Copy):** Copy [`blueprints/automation/frigate_temp_mask_notification.yaml`](https://github.com/saihgupr/frigate-events-card/blob/main/blueprints/automation/frigate_temp_mask_notification.yaml) to your Home Assistant `/config/blueprints/automation/` directory.
 
 <details>
-<summary><strong>Manual YAML Automation Example (iOS & Android)</strong> (Click to expand)</summary>
-
-If you prefer defining your automations manually in YAML:
+<summary><strong>Manual YAML Automation Example</strong></summary>
 
 **1. Sending the Notification with Mask Actions:**
 ```yaml
@@ -364,7 +394,7 @@ action:
 ```
 
 </details>
-
+</details>
 
 ## Configuration Options
 
@@ -386,7 +416,7 @@ The most common settings to get you started:
 | `live_view` | boolean | `false` | Show a live WebRTC camera feed above the event gallery. Click to toggle fullscreen view. Continuous peer connection with 24/7 self-healing auto-recovery for network drops and Frigate restarts. |
 | `live_view_entity` | string | none | Camera entity ID for the live feed (e.g. `camera.wyze_camera`). Required when `live_view: true`. |
 | `live_view_aspect_ratio` | string | `16 / 9` | CSS `aspect-ratio` for the live feed container (e.g. `"4 / 3"`). |
-| `show_mute` | boolean | `false` | Show interactive mute toggle button on hover over the live video feed and timeline player (alias: `live_view_show_mute`). |
+| `show_mute` | boolean | `false` | Show the mute toggle on hover over the live video feed (alias: `live_view_show_mute`). |
 | `live_view_mute_position` | string | `top-right` | Corner placement of the mute toggle button (`top-right` or `top-left`). |
 | `go2rtc_url` | string | none | Optional direct go2rtc API URL (e.g. `http://192.168.1.211:1984`). Directly negotiates WebRTC with go2rtc, bypassing Home Assistant WebSocket requirements. |
 | `go2rtc_stream` | string | none | Optional stream name in go2rtc (defaults to `live_view_entity` name without `camera.`, e.g. `wyze_camera`). |
@@ -410,12 +440,15 @@ The most common settings to get you started:
 | `grid_columns` | number | none | Number of columns in `grid` layout. If not set, defaults to auto-responsive wrapping (`repeat(auto-fill, minmax(120px, 1fr))`). |
 | `grid_max_height` | string | `400px` | Maximum height of the grid container (e.g. `500px`) when vertical scrolling is enabled (`scroll: true`). |
 | `show_scroll_arrows` | boolean | `false` | Show previous/next navigation arrows over the scrollable gallery. Only applies when `scroll` is enabled in `row` layout. |
-| `scroll_limit` | number | `20` | Total number of events to load in the scrollable timeline. |
-| `reverse` | boolean | `false` | Reverses the rendering order of the timeline (events populate right-to-left instead of left-to-right). |
+| `scroll_limit` | number | `20` | Total number of events to load in the scrollable gallery. |
+| `reverse` | boolean | `false` | Reverses the rendering order of events (right-to-left instead of left-to-right). |
 | `offset` | number | `0` | Number of recent events to skip/hide from the start of the list. Useful for excluding the newest event if it's already shown in another card. |
 | `daily_clear_time` | string | none | Optional. Time to reset the display daily (24hr format, e.g., "04:00"). If set, events before this time are hidden and shown as grey placeholders. |
-| `timeline_event_seek_offset` | number | `0` | Seconds added/subtracted when seeking to an event in the continuous timeline (e.g. `5` to jump 5s after detection starts, or `-5` for earlier pre-roll). |
-| `timeline_show_mute` | boolean | `true` | Show interactive mute toggle button on hover over the Timeline continuous video player. |
+| `show_timeline` | boolean | `true` | Enable the continuous playback Timeline modal. |
+| `timeline_on_click` | boolean | `true` | Open the Timeline directly when clicking an event thumbnail (requires `video` and `show_timeline`). |
+| `timeline_default_window_hours` | number | `1` | Default recording window shown when the Timeline opens. |
+| `timeline_event_seek_offset` | number \| map | `0` | Seconds added/subtracted when seeking to an event in the Timeline (e.g. `5` or `-5`). Supports per-label/zone map. |
+| `timeline_show_mute` | boolean | `true` | Show the mute toggle button on hover over the Timeline video player. |
 
 ### Advanced Detail Modal & Debug Settings
 | Option | Type | Default | Description |
@@ -432,7 +465,6 @@ The most common settings to get you started:
 
 </details>
 
-
 ## Requirements
 
 - Home Assistant with [Frigate Integration](https://github.com/blakeblackshear/frigate-hass-integration) installed
@@ -441,7 +473,11 @@ The most common settings to get you started:
 
 ## Troubleshooting
 
-### No events appearing in the card
+Click an issue to expand the fix.
+
+<details>
+<summary><strong>No events appearing in the card</strong></summary>
+
 - **Snapshots must be enabled**: The card queries Frigate for detection events that include snapshots. Ensure your Frigate `config.yml` has snapshots enabled globally or per camera:
   ```yaml
   cameras:
@@ -450,19 +486,23 @@ The most common settings to get you started:
       snapshots:
         enabled: true
   ```
-- **Check `frigate_client_id`**: If you have multiple Frigate instances or changed the default integration name, set `frigate_client_id` in the card config to match your instance ID (default: `frigate`).
+- **Check `frigate_client_id`**: If you have multiple Frigate instances or changed the default integration name, set `frigate_client_id` to match your instance ID (default: `frigate`).
 
-### "Live feed unavailable" or WebRTC stream fails
-- **HTTPS Required**: Browsers strictly enforce that WebRTC (`RTCPeerConnection`) is only available in secure contexts (**HTTPS** or `localhost`). Accessing Home Assistant over plain HTTP (e.g., `http://192.168.1.xxx:8123`) will prevent WebRTC from connecting.
-- **Camera Entity Format**: Ensure `live_view_entity` is the full Home Assistant entity ID (e.g. `camera.front_door`), not just `front_door`.
-- **Frigate on a Remote Server / Unraid Docker**: If Frigate runs in a separate container or host (such as Unraid), you can configure `go2rtc_url` for a direct connection:
+</details>
+
+<details>
+<summary><strong>"Live feed unavailable" or WebRTC stream fails</strong></summary>
+
+- **HTTPS Required**: Browsers only allow WebRTC (`RTCPeerConnection`) in secure contexts (**HTTPS** or `localhost`). Plain HTTP (e.g., `http://192.168.1.xxx:8123`) prevents WebRTC from connecting.
+- **Camera Entity Format**: Ensure `live_view_entity` is the full entity ID (e.g. `camera.front_door`), not just `front_door`.
+- **Frigate on a Remote Server / Unraid Docker**: Configure `go2rtc_url` for a direct connection:
   ```yaml
   live_view: true
   live_view_entity: camera.front_door
   go2rtc_url: http://192.168.1.211:1984
   ```
-  *(Note: If your Home Assistant dashboard is loaded over HTTPS, browsers may block an HTTP `go2rtc_url` due to Mixed Content security rules. In that case, use Home Assistant's native WebRTC mode without `go2rtc_url` or put go2rtc behind HTTPS).*
-- **Signaling succeeds but the video stays dark/unavailable after upgrading Frigate**: Frigate 0.18+ may have go2rtc advertise an address that browser clients cannot reach. Configure a reachable WebRTC candidate under the top-level `go2rtc:` section, using the Frigate host's LAN IP and the WebRTC port exposed to clients (default `8555`):
+  *(If Home Assistant is loaded over HTTPS, browsers may block an HTTP `go2rtc_url` as mixed content. Use native WebRTC mode without `go2rtc_url`, or put go2rtc behind HTTPS).*
+- **Signaling succeeds but video stays dark after upgrading Frigate**: Frigate 0.18+ may advertise a WebRTC address that browser clients cannot reach. Configure a reachable candidate under the top-level `go2rtc:` section:
   ```yaml
   go2rtc:
     webrtc:
@@ -472,7 +512,9 @@ The most common settings to get you started:
       front_door:
         - rtsp://...
   ```
-  Replace the example IP with the address your browser clients use to reach the Frigate host. Ensure the WebRTC UDP port (default `8555`) is published by Docker and allowed through the host/network firewall. After applying the change, check the `/api/webrtc` response SDP: it should include the reachable candidate address. This can resolve cases where `/api/webrtc` returns `200 OK` but the browser never receives video.
+  Use the Frigate host's LAN IP and the WebRTC port exposed to clients (default `8555`). Ensure the UDP port is published by Docker and allowed through the firewall. The `/api/webrtc` SDP response should then include the reachable candidate address.
+
+</details>
 
 ## Contributing
 
