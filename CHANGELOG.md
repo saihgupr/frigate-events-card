@@ -1,5 +1,8 @@
 # Changelog
 
+## [2.6.2] - 2026-10-26
+- Changed: Timeline window presets now offer 24h instead of 2h, making longer playback ranges easier to select.
+
 ## [2.6.1] - 2026-10-25
 - Fixed: **Timeline continuous playback on iOS Safari and the HA Companion App** — VOD HLS playlists and MP4 fallbacks are now signed with `authSig` before loading, so the Frigate integration's segment proxy no longer returns 401 Unauthorized. This also fixes timeline playback behind Nabu Casa/authenticated proxies on all browsers.
 
