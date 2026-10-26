@@ -9,13 +9,19 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.6.2';
+const CARD_VERSION = '2.6.5';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
 const FALLBACK_POLL_INTERVAL = 10000; // 10 seconds
 const HOVER_CROP_DEFAULT_SMOOTHING = 1.0; // 0.0 is jerky, 1.0 is smoothest
 const HOVER_CROP_MARGIN_PERCENT = 0.20; // 20% margin on each side of the container
+
+// Frigate's nginx-vod-module is compiled with a hard limit of 1080 clips per
+// playlist. Each clip is a recording segment (~10s), so a single VOD request
+// with more than ~3h of footage returns HTTP 503. Keep each VOD chunk well
+// below that limit and page through recordings for larger timeline windows.
+const TIMELINE_VOD_MAX_CLIPS = 900;
 
 const escapeHtml = (value: unknown): string => String(value ?? '')
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -226,6 +232,10 @@ export class FrigateEventsCard extends LitElement {
   private _timelineCamera?: string;
   private _timelineStartTs = 0;
   private _timelineEndTs = 0;
+  // The VOD stream only covers a chunk of the visible timeline window so that
+  // long windows (e.g. 24h) never exceed Frigate's nginx-vod clip limit.
+  private _timelineVodStartTs = 0;
+  private _timelineVodEndTs = 0;
   private _timelineWindowDurationSec = 3600; // default 1 hour
   private _timelinePlaybackRate = 1;
   private _timelineSpeedInterval?: number;
@@ -4785,13 +4795,11 @@ export class FrigateEventsCard extends LitElement {
       ? Math.max(0, v.duration - 0.5)
       : duration;
 
-    // If play is triggered while sitting at the end of the window, roll into the next block
-    if (v.currentTime >= maxSeek) {
-      const now = Math.floor(Date.now() / 1000);
-      if (this._timelineEndTs < now) {
-        this._advanceToNextTimelineWindow();
-        return;
-      }
+    // If play is triggered while sitting at the end of the loaded VOD chunk,
+    // page to the next chunk (or next window) instead of doing nothing.
+    if (v.currentTime >= maxSeek && v.paused) {
+      this._advanceToNextTimelineWindow();
+      return;
     }
 
     if (this._timelinePlaybackRate > 16) {
@@ -4814,16 +4822,6 @@ export class FrigateEventsCard extends LitElement {
     if (this._isAdvancingTimeline || !this._timelineContainer || !this._timelineCamera) return;
 
     const now = Math.floor(Date.now() / 1000);
-    // If we've reached or passed real-time, stop playback
-    if (this._timelineEndTs >= now) {
-      this._clearTimelineSpeedInterval();
-      if (this._timelineVideoEl) {
-        this._timelineVideoEl.pause();
-      }
-      this._updateTimelinePlayheadUI();
-      return;
-    }
-
     this._isAdvancingTimeline = true;
     this._clearTimelineSpeedInterval();
 
@@ -4838,74 +4836,118 @@ export class FrigateEventsCard extends LitElement {
       }
     }, 8000);
 
+    const clearAdvance = () => {
+      this._isAdvancingTimeline = false;
+      if (this._timelineAdvanceTimeout) {
+        clearTimeout(this._timelineAdvanceTimeout);
+        this._timelineAdvanceTimeout = undefined;
+      }
+    };
+    const stopAdvance = () => {
+      clearAdvance();
+      if (this._timelineVideoEl) {
+        this._timelineVideoEl.pause();
+      }
+      this._updateTimelinePlayheadUI();
+    };
+
     try {
-      const windowDuration = this._timelineWindowDurationSec || (this._timelineEndTs - this._timelineStartTs) || 3600;
-      let nextStart = this._timelineEndTs;
-      let nextEnd = nextStart + windowDuration;
-      if (nextEnd > now) {
-        nextEnd = now;
+      // Page within the visible window first. Long windows (e.g. 24h) are split
+      // into VOD chunks, so there may be more footage without moving the window.
+      if (this._timelineVodEndTs > 0 && this._timelineVodEndTs < this._timelineEndTs) {
+        const nextRec = this._timelineRecordings.find(
+          rec => rec.end_time > this._timelineVodEndTs + 0.5 && rec.start_time >= this._timelineVodEndTs - 0.5
+        );
+        if (nextRec) {
+          this._loadTimelineVideo(Math.max(this._timelineVodStartTs, nextRec.start_time), true);
+          return;
+        }
       }
 
-      // Stop if less than 5 seconds remaining up to real-time now
-      if (nextEnd - nextStart < 5) {
-        this._isAdvancingTimeline = false;
-        if (this._timelineAdvanceTimeout) {
-          clearTimeout(this._timelineAdvanceTimeout);
-          this._timelineAdvanceTimeout = undefined;
-        }
-        if (this._timelineVideoEl) {
-          this._timelineVideoEl.pause();
-        }
-        this._updateTimelinePlayheadUI();
+      // No more footage in this window; stop once we reach real-time.
+      if (this._timelineEndTs >= now) {
+        stopAdvance();
         return;
       }
 
-    this._timelineStartTs = nextStart;
-    this._timelineEndTs = nextEnd;
-    const requestId = ++this._timelineWindowRequestId;
+      const windowDuration = this._timelineWindowDurationSec || (this._timelineEndTs - this._timelineStartTs) || 3600;
+      const nextStart = this._timelineEndTs;
+      const nextEnd = Math.min(now, nextStart + windowDuration);
+
+      // Stop if less than 5 seconds remaining up to real-time now
+      if (nextEnd - nextStart < 5) {
+        stopAdvance();
+        return;
+      }
+
+      this._timelineStartTs = nextStart;
+      this._timelineEndTs = nextEnd;
+      this._timelineVodStartTs = 0;
+      this._timelineVodEndTs = 0;
+      const requestId = ++this._timelineWindowRequestId;
 
       const container = this._timelineContainer;
-      if (!container) return;
+      if (!container) {
+        clearAdvance();
+        return;
+      }
 
       this._updateTimelineWindowUI();
-      // Load next video stream immediately and silently in auto-advance mode (parallel, no lag)
-      this._loadTimelineVideo(this._timelineStartTs, true);
+      // Fetch recordings for the new window before loading, since the VOD chunk
+      // is chosen from the available footage (and gaps are skipped).
+      await this._fetchTimelineEvents();
+      if (requestId !== this._timelineWindowRequestId ||
+          this._timelineStartTs !== nextStart || this._timelineEndTs !== nextEnd) {
+        clearAdvance();
+        return;
+      }
+      this._updateTimelineScrubberEvents();
 
-      // Fetch event markers and check recordings concurrently in background
-      this._fetchTimelineEvents().then(async () => {
-        // A later window may already be playing while this request was in flight.
-        // Ignore stale results so they cannot change its recordings or window.
-        if (requestId !== this._timelineWindowRequestId ||
-            this._timelineStartTs !== nextStart || this._timelineEndTs !== nextEnd) {
-          return;
-        }
-        this._updateTimelineScrubberEvents();
-        // If this window had a recording gap (0 recordings), look ahead and leap to next available footage
-        if (this._timelineRecordings.length === 0 && this.hass && this._timelineCamera) {
-          try {
-            const clientId = this._config?.frigate_client_id || 'frigate';
-            const futureRecs = await getRecordings(this.hass, clientId, this._timelineCamera, nextEnd, now);
+      // If this window had a recording gap (0 recordings), look ahead and leap to next available footage
+      if (this._timelineRecordings.length === 0 && this.hass && this._timelineCamera) {
+        try {
+          const clientId = this._config?.frigate_client_id || 'frigate';
+          const futureRecs = await getRecordings(this.hass, clientId, this._timelineCamera, nextEnd, now);
+          if (requestId !== this._timelineWindowRequestId ||
+              this._timelineStartTs !== nextStart || this._timelineEndTs !== nextEnd) {
+            clearAdvance();
+            return;
+          }
+          if (Array.isArray(futureRecs) && futureRecs.length > 0) {
+            futureRecs.sort((a, b) => a.start_time - b.start_time);
+            const nextRecStart = futureRecs[0].start_time;
+            this._timelineStartTs = nextRecStart;
+            this._timelineEndTs = Math.min(now, Math.floor(nextRecStart + windowDuration));
+            this._updateTimelineWindowUI();
+            await this._fetchTimelineEvents();
             if (requestId !== this._timelineWindowRequestId ||
-                this._timelineStartTs !== nextStart || this._timelineEndTs !== nextEnd) {
+                this._timelineStartTs !== nextRecStart) {
+              clearAdvance();
               return;
             }
-            if (Array.isArray(futureRecs) && futureRecs.length > 0) {
-              futureRecs.sort((a, b) => a.start_time - b.start_time);
-              const nextRecStart = futureRecs[0].start_time;
-              this._timelineStartTs = nextRecStart;
-              this._timelineEndTs = Math.min(now, Math.floor(nextRecStart + windowDuration));
-              this._updateTimelineWindowUI();
-              this._loadTimelineVideo(this._timelineStartTs, true);
-              this._fetchTimelineEvents().then(() => this._updateTimelineScrubberEvents());
-            }
-          } catch (e) {
-            console.debug('Failed to check recordings ahead:', e);
+            this._updateTimelineScrubberEvents();
+          } else {
+            // Nothing to play; stop gracefully instead of showing an error.
+            stopAdvance();
+            return;
           }
+        } catch (e) {
+          console.debug('Failed to check recordings ahead:', e);
         }
-      });
+      }
+
+      // Start at the first recording in the new window, skipping any leading gap.
+      let loadSeek = this._timelineStartTs;
+      if (this._timelineRecordings.length > 0) {
+        const first = this._timelineRecordings.find(rec => rec.end_time > this._timelineStartTs);
+        loadSeek = first
+          ? Math.max(this._timelineStartTs, first.start_time)
+          : this._timelineRecordings[this._timelineRecordings.length - 1].start_time;
+      }
+      this._loadTimelineVideo(loadSeek, true);
     } catch (err) {
       console.warn('Failed to auto-advance timeline window:', err);
-      this._isAdvancingTimeline = false;
+      clearAdvance();
     }
   }
 
@@ -5048,7 +5090,7 @@ export class FrigateEventsCard extends LitElement {
           cameras: [camera],
           after: startTs,
           before: endTs,
-          limit: 100,
+          limit: 500,
         }),
         getRecordings(this.hass, clientId, camera, startTs, endTs).catch(() => []),
       ]);
@@ -5063,14 +5105,70 @@ export class FrigateEventsCard extends LitElement {
     }
   }
 
+  /**
+   * Resolve the chunk of recordings the video element should load for the
+   * visible timeline window. Frigate's nginx-vod module rejects playlists with
+   * more than 1080 clips, so long windows (e.g. 24h) must be paged in chunks.
+   *
+   * Returns the VOD chunk bounds and the closest wall-clock seek position that
+   * actually has footage, skipping gaps such as overnight periods.
+   */
+  private _resolveTimelineVodWindow(seekTargetTs?: number, isAutoAdvance = false): { startTs: number; endTs: number; seekTs: number } {
+    const windowStart = this._timelineStartTs;
+    const windowEnd = this._timelineEndTs;
+    const recordings = this._timelineRecordings.filter(
+      rec => rec.end_time > windowStart && rec.start_time < windowEnd
+    );
+
+    if (!recordings.length) {
+      return {
+        startTs: windowStart,
+        endTs: windowEnd,
+        seekTs: seekTargetTs ?? windowStart,
+      };
+    }
+
+    const requestedSeek = Math.max(windowStart, Math.min(windowEnd, seekTargetTs ?? windowStart));
+
+    // Find the recording covering the requested time, the next one after a
+    // gap, or the last one when the requested time is past all recordings.
+    let targetIdx = recordings.findIndex(rec => rec.end_time > requestedSeek);
+    let seekTs = requestedSeek;
+    if (targetIdx === -1) {
+      targetIdx = recordings.length - 1;
+      seekTs = recordings[targetIdx].start_time;
+    } else if (requestedSeek < recordings[targetIdx].start_time) {
+      seekTs = recordings[targetIdx].start_time;
+    }
+
+    // Include some footage before the target so small backwards scrubs do not
+    // immediately trigger another chunk load. Auto-advance must not backtrack,
+    // otherwise it would replay the tail of the previous chunk.
+    const backtrack = isAutoAdvance ? 0 : Math.floor(TIMELINE_VOD_MAX_CLIPS / 4);
+    const startIdx = Math.max(0, targetIdx - backtrack);
+    const endIdx = Math.min(recordings.length, startIdx + TIMELINE_VOD_MAX_CLIPS);
+    const chunk = recordings.slice(startIdx, endIdx);
+
+    const startTs = Math.max(windowStart, Math.floor(chunk[0].start_time));
+    const endTs = Math.min(windowEnd, Math.ceil(chunk[chunk.length - 1].end_time));
+
+    return {
+      startTs,
+      endTs,
+      seekTs: Math.max(startTs, Math.min(endTs, seekTs)),
+    };
+  }
+
   private _wallClockToVideoOffset(targetTs: number): number {
+    const vodStart = this._timelineVodStartTs || this._timelineStartTs;
+    const vodEnd = this._timelineVodEndTs || this._timelineEndTs;
     if (!this._timelineRecordings.length) {
-      return Math.max(0, targetTs - this._timelineStartTs);
+      return Math.max(0, targetTs - vodStart);
     }
     let videoSeconds = 0;
     for (const rec of this._timelineRecordings) {
-      const recStart = Math.max(this._timelineStartTs, rec.start_time);
-      const recEnd = Math.min(this._timelineEndTs, rec.end_time);
+      const recStart = Math.max(vodStart, rec.start_time);
+      const recEnd = Math.min(vodEnd, rec.end_time);
       if (recEnd <= recStart) continue;
 
       if (recEnd <= targetTs) {
@@ -5086,14 +5184,18 @@ export class FrigateEventsCard extends LitElement {
   }
 
   private _videoOffsetToWallClock(videoOffset: number): number {
+    const vodStart = this._timelineVodStartTs || this._timelineStartTs;
+    const vodEnd = this._timelineVodEndTs || this._timelineEndTs;
     if (!this._timelineRecordings.length) {
-      return this._timelineStartTs + videoOffset;
+      return vodStart + videoOffset;
     }
     let accumulated = 0;
+    let lastEnd = vodStart;
     for (const rec of this._timelineRecordings) {
-      const recStart = Math.max(this._timelineStartTs, rec.start_time);
-      const recEnd = Math.min(this._timelineEndTs, rec.end_time);
+      const recStart = Math.max(vodStart, rec.start_time);
+      const recEnd = Math.min(vodEnd, rec.end_time);
       if (recEnd <= recStart) continue;
+      lastEnd = recEnd;
 
       const dur = recEnd - recStart;
       if (accumulated + dur >= videoOffset) {
@@ -5101,14 +5203,19 @@ export class FrigateEventsCard extends LitElement {
       }
       accumulated += dur;
     }
-    return this._timelineRecordings.length > 0
-      ? Math.min(this._timelineEndTs, this._timelineRecordings[this._timelineRecordings.length - 1].end_time)
-      : (this._timelineStartTs + videoOffset);
+    return lastEnd;
   }
 
   private _loadTimelineVideo(seekTargetTs?: number, isAutoAdvance = false): void {
     if (!this._timelineContainer || !this._timelineCamera) return;
     if (!isAutoAdvance) this._timelineWindowRequestId++;
+
+    // Long windows are split into VOD chunks so Frigate's nginx-vod clip limit
+    // is never exceeded. Snap the seek target into the chunk that has footage.
+    const vodWindow = this._resolveTimelineVodWindow(seekTargetTs, isAutoAdvance);
+    this._timelineVodStartTs = vodWindow.startTs;
+    this._timelineVodEndTs = vodWindow.endTs;
+    seekTargetTs = vodWindow.seekTs;
 
     // In auto-advance, load the incoming footage into the standby video slot
     const slot = isAutoAdvance
@@ -5180,10 +5287,10 @@ export class FrigateEventsCard extends LitElement {
 
     const clientId = this._config?.frigate_client_id || 'frigate';
     const frigateUrl = this._config?.frigate_url;
-    const hlsUrl = getVodHlsURL(clientId, this._timelineCamera, this._timelineStartTs, this._timelineEndTs, frigateUrl);
-    const mp4Url = getVodClipURL(clientId, this._timelineCamera, this._timelineStartTs, this._timelineEndTs, frigateUrl);
+    const hlsUrl = getVodHlsURL(clientId, this._timelineCamera, this._timelineVodStartTs, this._timelineVodEndTs, frigateUrl);
+    const mp4Url = getVodClipURL(clientId, this._timelineCamera, this._timelineVodStartTs, this._timelineVodEndTs, frigateUrl);
 
-    const initialOffset = (seekTargetTs && seekTargetTs >= this._timelineStartTs && seekTargetTs <= this._timelineEndTs)
+    const initialOffset = (seekTargetTs && seekTargetTs >= this._timelineVodStartTs && seekTargetTs <= this._timelineVodEndTs)
       ? this._wallClockToVideoOffset(seekTargetTs)
       : 0;
 
@@ -5318,19 +5425,19 @@ export class FrigateEventsCard extends LitElement {
       }
     };
 
-    console.log('Frigate Events Card: VOD requested:', { slot, hlsUrl, mp4Url, start: this._timelineStartTs, end: this._timelineEndTs });
+    console.log('Frigate Events Card: VOD requested:', { slot, hlsUrl, mp4Url, start: this._timelineVodStartTs, end: this._timelineVodEndTs });
 
     // Signed paths (authSig) are required by the Frigate integration's VOD views.
     // hls.js can send a Bearer header, but native HLS (iOS Safari / HA companion app)
     // and direct <video> MP4 fallbacks cannot, so sign the URLs up front.
     // Only sign HA-proxied URLs; a direct Frigate URL must not be rewritten to a relative path.
     const requestId = this._timelineWindowRequestId;
-    const windowStart = this._timelineStartTs;
-    const windowEnd = this._timelineEndTs;
+    const vodStart = this._timelineVodStartTs;
+    const vodEnd = this._timelineVodEndTs;
     const isStale = () =>
       requestId !== this._timelineWindowRequestId ||
-      windowStart !== this._timelineStartTs ||
-      windowEnd !== this._timelineEndTs;
+      vodStart !== this._timelineVodStartTs ||
+      vodEnd !== this._timelineVodEndTs;
 
     const startStream = async () => {
       let signedHlsUrl = hlsUrl;
@@ -5355,6 +5462,10 @@ export class FrigateEventsCard extends LitElement {
           if (this._timelineLoadingTimeout) {
             clearTimeout(this._timelineLoadingTimeout);
             this._timelineLoadingTimeout = undefined;
+          }
+          if (this._timelineAdvanceTimeout) {
+            clearTimeout(this._timelineAdvanceTimeout);
+            this._timelineAdvanceTimeout = undefined;
           }
           if (loadingEl) {
             loadingEl.classList.remove('subtle');
@@ -5520,6 +5631,14 @@ export class FrigateEventsCard extends LitElement {
         const seekOffset = this._getEventSeekOffset(ev);
         if (baseTs > 0 && this._timelineVideoEl) {
           const targetTs = Math.max(this._timelineStartTs, Math.min(this._timelineEndTs, baseTs + seekOffset));
+
+          // The event may be outside the currently loaded VOD chunk; load a new
+          // chunk around it instead of clamping the seek to the chunk edge.
+          if (targetTs < this._timelineVodStartTs || targetTs > this._timelineVodEndTs) {
+            this._loadTimelineVideo(targetTs);
+            return;
+          }
+
           const targetOffset = this._wallClockToVideoOffset(targetTs);
           const maxSeek = (Number.isFinite(this._timelineVideoEl.duration) && this._timelineVideoEl.duration > 0)
             ? Math.max(0, this._timelineVideoEl.duration - 0.5)
@@ -5925,21 +6044,23 @@ export class FrigateEventsCard extends LitElement {
     // Scrubber track click / drag scrubbing
     const track = container.querySelector('.timeline-track-container') as HTMLElement | null;
     if (track) {
-      const handleSeek = (clientX: number) => {
+      let lastCommitAt = 0;
+
+      const getTargetTs = (clientX: number): number | null => {
         const rect = track.getBoundingClientRect();
-        if (rect.width <= 0) return;
+        if (rect.width <= 0) return null;
         const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
         const duration = this._timelineEndTs - this._timelineStartTs;
-        if (duration <= 0) return;
+        if (duration <= 0) return null;
+        return this._timelineStartTs + (ratio * duration);
+      };
 
-        const targetTs = this._timelineStartTs + (ratio * duration);
-        const targetOffset = this._wallClockToVideoOffset(targetTs);
-        if (this._timelineVideoEl) {
-          const maxSeek = (Number.isFinite(this._timelineVideoEl.duration) && this._timelineVideoEl.duration > 0)
-            ? Math.max(0, this._timelineVideoEl.duration - 0.5)
-            : targetOffset;
-          this._timelineVideoEl.currentTime = Math.max(0, Math.min(targetOffset, maxSeek));
-        }
+      const handleSeek = (clientX: number, commit = false) => {
+        const targetTs = getTargetTs(clientX);
+        if (targetTs === null) return;
+
+        const windowDuration = this._timelineEndTs - this._timelineStartTs;
+        const ratio = Math.max(0, Math.min(1, (targetTs - this._timelineStartTs) / windowDuration));
 
         // Immediately reflect position visually on track even before video timeupdate fires
         const playhead = container.querySelector('.timeline-playhead') as HTMLElement | null;
@@ -5950,6 +6071,23 @@ export class FrigateEventsCard extends LitElement {
         if (currentBadge) {
           const curDate = new Date(targetTs * 1000);
           currentBadge.textContent = curDate.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+        }
+
+        // Seeking outside the loaded VOD chunk requires loading a new chunk.
+        if (targetTs < this._timelineVodStartTs || targetTs > this._timelineVodEndTs) {
+          if (commit) {
+            lastCommitAt = Date.now();
+            this._loadTimelineVideo(targetTs);
+          }
+          return;
+        }
+
+        const targetOffset = this._wallClockToVideoOffset(targetTs);
+        if (this._timelineVideoEl) {
+          const maxSeek = (Number.isFinite(this._timelineVideoEl.duration) && this._timelineVideoEl.duration > 0)
+            ? Math.max(0, this._timelineVideoEl.duration - 0.5)
+            : targetOffset;
+          this._timelineVideoEl.currentTime = Math.max(0, Math.min(targetOffset, maxSeek));
         }
       };
 
@@ -5977,6 +6115,7 @@ export class FrigateEventsCard extends LitElement {
           track.removeEventListener('pointermove', onMove);
           track.removeEventListener('pointerup', onUp);
           track.removeEventListener('pointercancel', onUp);
+          handleSeek(ev.clientX, true);
           // Sync final playhead UI after drag release
           this._updateTimelinePlayheadUI();
         };
@@ -5989,7 +6128,9 @@ export class FrigateEventsCard extends LitElement {
       track.addEventListener('click', (e: MouseEvent) => {
         if ((e.target as HTMLElement)?.closest('.timeline-event-marker')) return;
         e.stopPropagation();
-        handleSeek(e.clientX);
+        // Avoid reloading twice when pointerup already committed the seek.
+        if (Date.now() - lastCommitAt < 400) return;
+        handleSeek(e.clientX, true);
       });
     }
   }

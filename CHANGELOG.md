@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.6.5] - 2026-10-26
+- Fixed: **Long timeline windows (24h) failing with "No continuous footage stream available"** — Frigate's nginx-vod module caps each playlist at 1080 recording clips (~3h), so large windows now load footage in smaller chunks and page through them automatically. Night-time gaps with no recordings are skipped instead of requesting an empty window.
+- Improved: Timeline window playback pages seamlessly through recordings, and seeking or clicking an event outside the loaded chunk loads the correct footage. Event marker loading now supports up to 500 events for wider windows.
+
 ## [2.6.2] - 2026-10-26
 - Changed: Timeline window presets now offer 24h instead of 2h, making longer playback ranges easier to select.
 
