@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.6.11';
+const CARD_VERSION = '2.6.14';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -2799,6 +2799,49 @@ export class FrigateEventsCard extends LitElement {
         .timeline-transport-bar { justify-content: center; }
       }
 
+      /* Timeline mute button base. The modal lives on document.body outside the
+         card's shadow root, so it cannot rely on the card stylesheet: without
+         this the button is position:static (and a grid row of its own inside
+         the compact player). Scoped to the timeline modal so it cannot collide
+         with the card/live-view mute styling. Size/placement overrides below
+         (compact 44px, TV variables, landscape offsets) all beat this base. */
+      .frigate-timeline-modal .timeline-mute-btn {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        z-index: 5;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 34px;
+        height: 34px;
+        padding: 0;
+        border: none;
+        border-radius: 50%;
+        background: rgba(0, 0, 0, 0.55);
+        color: #ffffff;
+        cursor: pointer;
+        backdrop-filter: blur(4px);
+        -webkit-backdrop-filter: blur(4px);
+        transition: background 0.2s ease, opacity 0.2s ease;
+      }
+
+      .frigate-timeline-modal .timeline-mute-btn.top-left {
+        left: 10px;
+        right: auto;
+      }
+
+      .frigate-timeline-modal .timeline-mute-btn.top-right {
+        right: 10px;
+        left: auto;
+      }
+
+      .frigate-timeline-modal .timeline-mute-btn svg {
+        width: 18px;
+        height: 18px;
+        fill: currentColor;
+      }
+
       /* ─── Timeline compact (phone / tablet) + TV layouts ───
          Strictly scoped under .is-compact / .is-tv. Base (desktop) selectors above are untouched. */
       .frigate-timeline-modal.is-compact,
@@ -3199,13 +3242,12 @@ export class FrigateEventsCard extends LitElement {
       }
 
       /* Compact popup card (phone portrait default; tablets too): a floating card
-         inset from the screen edges speaking the desktop timeline language —
-         card surface, 1px hairline border, desktop shadow, solid header and
-         bottom deck, desktop tab/track/button styling at phone proportions.
-         The video fills the card width edge-to-edge and flexes into all
-         leftover height (never cropped). Transport lives only in the settings
-         sheet Playback section; the stage keeps just the scrubber deck, and
-         tapping the video toggles play/pause. */
+         sized to its content — header + footage at the camera's real aspect +
+         scrubber deck — speaking the desktop timeline language (card surface,
+         1px hairline border, desktop shadow, solid header and deck). The video
+         fills the card width edge-to-edge and is never cropped, so there is no
+         top/bottom letterbox. Transport lives only in the settings sheet
+         Playback section; tapping the video toggles play/pause. */
       .frigate-timeline-modal.is-compact {
         padding: max(10px, env(safe-area-inset-top, 0px)) max(10px, env(safe-area-inset-right, 0px)) max(10px, env(safe-area-inset-bottom, 0px)) max(10px, env(safe-area-inset-left, 0px)) !important;
         align-items: center !important;
@@ -3213,14 +3255,14 @@ export class FrigateEventsCard extends LitElement {
       }
 
       .frigate-timeline-modal.is-compact .frigate-events-modal-content {
-        position: absolute !important;
-        inset: max(10px, env(safe-area-inset-top, 0px)) max(10px, env(safe-area-inset-right, 0px)) max(10px, env(safe-area-inset-bottom, 0px)) max(10px, env(safe-area-inset-left, 0px)) !important;
-        width: auto !important;
+        position: relative !important;
+        inset: auto !important;
+        width: 100% !important;
         height: auto !important;
         min-width: 0 !important;
-        max-width: none !important;
-        max-height: none !important;
-        margin: 0 !important;
+        max-width: 100% !important;
+        max-height: 100% !important;
+        margin: auto !important;
         border: 1px solid var(--tl-line) !important;
         border-radius: 20px !important;
         box-shadow: 0 24px 48px rgba(0, 0, 0, 0.5) !important;
@@ -3228,6 +3270,9 @@ export class FrigateEventsCard extends LitElement {
         display: flex !important;
         flex-direction: column !important;
         background: var(--card-background-color, #1c1c1e);
+        /* No entry-transform fill: the viewport-anchored sheet/backdrop below
+           must not be contained by this card. */
+        animation: none !important;
       }
 
       /* Solid header row on the card surface with a bottom hairline. */
@@ -3270,7 +3315,10 @@ export class FrigateEventsCard extends LitElement {
         height: 44px !important;
       }
 
-      /* In-flow body: the video takes all leftover height between solid chrome. */
+      /* In-flow body: the player sizes itself from the footage's intrinsic
+         ratio, so the card height follows the video with no letterbox bars.
+         If the footage is unusually tall, the video-level dvh cap clamps it
+         and contain letterboxes instead of cropping. */
       .frigate-timeline-modal.is-compact .timeline-modal-body {
         position: static !important;
         inset: auto !important;
@@ -3284,12 +3332,24 @@ export class FrigateEventsCard extends LitElement {
       .frigate-timeline-modal.is-compact .timeline-player-container {
         position: relative !important;
         inset: auto !important;
-        flex: 1 1 auto !important;
+        flex: 0 0 auto !important;
         min-height: 0 !important;
-        aspect-ratio: auto !important;
         width: 100% !important;
+        display: grid !important;
+        grid-template-columns: 1fr !important;
+        overflow: hidden !important;
         border-radius: 0 !important;
         background: #000000 !important;
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-video {
+        grid-area: 1 / 1 !important;
+        position: static !important;
+        inset: auto !important;
+        width: 100% !important;
+        height: auto !important;
+        max-height: calc(100dvh - 190px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)) !important;
+        object-fit: contain !important;
       }
 
       .frigate-timeline-modal.is-compact .timeline-mute-btn {
@@ -3412,6 +3472,20 @@ export class FrigateEventsCard extends LitElement {
         transition: transform 0.22s ease;
       }
 
+      /* Portrait compact: the card is content-sized and short, so the sheet
+         and its backdrop anchor to the viewport instead of the card. */
+      .frigate-timeline-modal.is-compact .timeline-settings-backdrop {
+        position: fixed !important;
+        inset: 0 !important;
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-settings-sheet {
+        position: fixed !important;
+        left: 0 !important;
+        right: 0 !important;
+        bottom: 0 !important;
+      }
+
       .frigate-timeline-modal.is-compact .timeline-settings-handle,
       .frigate-timeline-modal.is-tv .timeline-settings-handle {
         width: 40px;
@@ -3474,8 +3548,25 @@ export class FrigateEventsCard extends LitElement {
          compact layouts). iPad landscape and TV are untouched. */
       @media (orientation: landscape) and (max-height: 500px) {
         .frigate-timeline-modal.is-compact .frigate-events-modal-content {
+          position: absolute !important;
           inset: max(8px, env(safe-area-inset-top, 0px)) max(8px, env(safe-area-inset-right, 0px)) max(8px, env(safe-area-inset-bottom, 0px)) max(8px, env(safe-area-inset-left, 0px)) !important;
+          width: auto !important;
+          height: auto !important;
+          min-width: 0 !important;
+          max-width: none !important;
+          max-height: none !important;
+          margin: 0 !important;
           border-radius: 16px !important;
+          animation: frigate-modal-slide-up 0.2s forwards !important;
+        }
+        .frigate-timeline-modal.is-compact .timeline-settings-backdrop {
+          position: absolute !important;
+        }
+        .frigate-timeline-modal.is-compact .timeline-settings-sheet {
+          position: absolute !important;
+          left: 0 !important;
+          right: 0 !important;
+          bottom: 0 !important;
         }
         .frigate-timeline-modal.is-compact .timeline-modal-body {
           position: absolute !important;
@@ -3486,6 +3577,14 @@ export class FrigateEventsCard extends LitElement {
           position: absolute !important;
           inset: 0 !important;
           flex: none !important;
+        }
+        .frigate-timeline-modal.is-compact .timeline-video {
+          grid-area: auto !important;
+          position: absolute !important;
+          inset: 0 !important;
+          width: 100% !important;
+          height: 100% !important;
+          max-height: none !important;
         }
         .frigate-timeline-modal.is-compact .timeline-compact-topbar {
           position: absolute !important;

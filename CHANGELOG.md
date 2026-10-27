@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.6.14] - 2026-10-27
+- Fixed: **Stray mute button and black band under the video** — the modal stylesheet only carried size/position values for the timeline mute button, while its absolutely-positioned circular styling lived in the card's shadow stylesheet, which the timeline modal cannot reach. With the new grid player it became a second grid row. The mute base now ships in the modal stylesheet, so it floats over the footage again and the player is exactly as tall as the video.
+- Note: This also makes the mute button actually visible over the desktop and TV timeline player, where it had been painted underneath the video since the redesign.
+
+## [2.6.13] - 2026-10-27
+- Fixed: **Tiny video on iPad (and other Safari views)** — v2.6.12 sized the player with `aspect-ratio` inside a flex column, which Safari resolved from the wrong width, collapsing the footage to a thumbnail in a full-width black band. The player now takes its height from the video's own intrinsic ratio at 100% card width, with a `dvh` cap that letterboxes rather than overflowing. No JS involvement.
+- Improved: iPad landscape and portrait get a full-width video again (~1160px wide on an 11" iPad), and cards stay content-sized and centered with no bars for normal 16:9 footage.
+
+## [2.6.12] - 2026-10-27
+- Improved: **The mobile timeline popup now hugs the footage** — in portrait the card is only as tall as the header plus the camera's real video aspect plus the scrubber deck, centered on screen, so there are no black bars above or below the video. Tall/odd aspect ratios clamp to the viewport and letterbox instead of overflowing.
+- Improved: The settings sheet opens as a proper bottom sheet anchored to the screen on portrait phones, so it still has room when the card is short.
+
 ## [2.6.11] - 2026-10-27
 - Improved: **Mobile timeline transport moved into the settings sheet** — the skip jumps, play/pause and speed stepper now live only in the Playback section behind the gear button, so the stage is just the video and the scrubber. Tap the video to play/pause without opening the sheet.
 - Improved: The scrubber deck picks up the extra space the transport row used to take, and the sheet controls reflow down to 320px wide without clipping.
