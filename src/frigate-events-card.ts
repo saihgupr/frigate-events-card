@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.6.5';
+const CARD_VERSION = '2.6.6';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -179,6 +179,8 @@ export class FrigateEventsCard extends LitElement {
   @state() private _liveViewError?: string;   // Set when live feed fails gracefully
   @state() private _isLiveMuted = true;
   @state() private _maskManagerSelectedCamera = 'all';
+  // undefined = default (first mask expanded), '' = all collapsed, otherwise a mask id
+  private _maskManagerExpandedId?: string;
   @state() private _localPendingMasks: any[] = [];
 
   private _unsubscribe?: () => void;
@@ -1767,557 +1769,491 @@ export class FrigateEventsCard extends LitElement {
         flex-shrink: 0;
       }
 
-      /* ─── Mask Manager Modal Styles ─── */
+      /* ─── Mask Manager ───
+         Quiet surface that inherits the Home Assistant theme. Spacing follows a 4/8px scale. */
+      .frigate-mask-manager-modal {
+        --mm-text: var(--primary-text-color, #f2f2f7);
+        --mm-text-2: var(--secondary-text-color, #9a9aa2);
+        --mm-line: var(--divider-color, rgba(255, 255, 255, 0.12));
+        --mm-accent: var(--primary-color, #0a84ff);
+        --mm-warn: #ff9f0a;
+        --mm-danger: var(--error-color, #ff453a);
+        --mm-fill: color-mix(in srgb, var(--mm-text) 7%, transparent);
+        --mm-fill-hover: color-mix(in srgb, var(--mm-text) 12%, transparent);
+      }
+
       .frigate-mask-manager-modal .frigate-events-modal-content {
-        min-width: min(580px, 94vw);
-        max-width: 640px;
-        max-height: 85vh;
-        border: 1px solid rgba(255, 255, 255, 0.12);
-        box-shadow: 0 20px 40px rgba(0, 0, 0, 0.7);
-        background: #181818;
+        width: min(560px, 94vw);
+        min-width: 0;
+        max-width: 560px;
+        height: auto;
+        max-height: min(720px, calc(100dvh - 32px));
+        border: 1px solid var(--mm-line);
+        border-radius: 16px;
+        box-shadow: 0 24px 48px rgba(0, 0, 0, 0.5);
+        background: var(--card-background-color, #1c1c1e);
+        color: var(--mm-text);
+      }
+
+      .frigate-mask-manager-modal .frigate-events-modal-close {
+        top: 12px;
+        right: 12px;
+        width: 32px;
+        height: 32px;
+        background: var(--mm-fill);
+        color: var(--mm-text-2);
+      }
+
+      .frigate-mask-manager-modal .frigate-events-modal-close:hover {
+        background: var(--mm-fill-hover);
+        color: var(--mm-text);
+        transform: none;
       }
 
       .mask-manager-header {
         display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 16px 20px;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-        background: rgba(26, 26, 26, 0.98);
-      }
-
-      .mask-manager-header-left {
-        display: flex;
-        align-items: center;
-        gap: 10px;
+        align-items: baseline;
+        gap: 8px;
+        flex-shrink: 0;
+        padding: 20px 56px 12px 24px;
       }
 
       .mask-manager-title {
-        font-size: 16px;
+        margin: 0;
+        font-size: 20px;
         font-weight: 600;
-        color: #ffffff;
-        display: flex;
-        align-items: center;
-        gap: 8px;
+        letter-spacing: -0.01em;
+        color: var(--mm-text);
       }
 
-      .mask-manager-count-badge {
-        font-size: 11px;
-        padding: 2px 8px;
-        border-radius: 10px;
-        background: rgba(59, 130, 246, 0.2);
-        color: #93c5fd;
-        border: 1px solid rgba(59, 130, 246, 0.35);
-        font-weight: 600;
-      }
-
-      .mask-manager-header-actions {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-      }
-
-      .mask-manager-body {
-        padding: 16px 20px;
-        overflow-y: auto;
-        max-height: calc(85vh - 75px);
-        display: flex;
-        flex-direction: column;
-        gap: 12px;
-        box-sizing: border-box;
+      .mask-manager-count {
+        font-size: 13px;
+        color: var(--mm-text-2);
       }
 
       .mask-filter-tabs {
         display: flex;
-        gap: 6px;
+        gap: 4px;
+        flex-shrink: 0;
+        padding: 0 16px;
         overflow-x: auto;
-        padding-bottom: 4px;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        scrollbar-width: none;
+        border-bottom: 1px solid var(--mm-line);
+      }
+
+      .mask-filter-tabs::-webkit-scrollbar {
+        display: none;
       }
 
       .mask-filter-tab {
-        padding: 4px 10px;
-        border-radius: 6px;
-        font-size: 12px;
+        position: relative;
+        padding: 8px 8px 12px;
+        font-size: 13px;
         font-weight: 500;
-        color: #aaa;
-        background: transparent;
-        border: 1px solid rgba(255, 255, 255, 0.12);
-        cursor: pointer;
-        transition: all 0.15s;
         font-family: inherit;
+        color: var(--mm-text-2);
+        background: none;
+        border: none;
         white-space: nowrap;
+        cursor: pointer;
+        transition: color 0.15s ease;
       }
 
       .mask-filter-tab:hover {
-        background: rgba(255, 255, 255, 0.08);
-        color: #fff;
+        color: var(--mm-text);
       }
 
       .mask-filter-tab.active {
-        background: rgba(59, 130, 246, 0.25);
-        color: #93c5fd;
-        border-color: #3b82f6;
+        color: var(--mm-text);
       }
 
-      .mask-cards-list {
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-      }
-
-      .mask-card {
-        background: rgba(255, 255, 255, 0.04);
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 10px;
-        padding: 14px;
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-        transition: border-color 0.15s;
-      }
-
-      .mask-card:hover {
-        border-color: rgba(96, 165, 250, 0.4);
-      }
-
-      .mask-card-header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 8px;
-        flex-wrap: wrap;
-      }
-
-      .mask-card-title-col {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-      }
-
-      .mask-card-main-row {
-        display: flex;
-        gap: 12px;
-        align-items: stretch;
-      }
-
-      .mask-visual-preview {
-        position: relative;
-        width: 120px;
-        min-width: 120px;
-        aspect-ratio: 16 / 9;
-        height: auto;
-        border-radius: 6px;
-        overflow: hidden;
-        background: radial-gradient(circle at center, #1e293b 0%, #0f172a 100%);
-        border: none;
-        flex-shrink: 0;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-      }
-
-      .mask-preview-thumb {
+      .mask-filter-tab.active::after {
+        content: '';
         position: absolute;
-        inset: 0;
-        width: 100%;
-        height: 100%;
-        object-fit: cover;
-        display: block;
-        z-index: 1;
+        left: 8px;
+        right: 8px;
+        bottom: -1px;
+        height: 2px;
+        border-radius: 2px;
+        background: var(--mm-accent);
       }
 
+      .mask-filter-count {
+        margin-left: 2px;
+        font-weight: 400;
+        color: var(--mm-text-2);
+      }
+
+      .mask-manager-body {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        padding: 8px 8px 16px;
+        box-sizing: border-box;
+      }
+
+      .mask-list {
+        display: flex;
+        flex-direction: column;
+      }
+
+      .mask-row {
+        border-radius: 12px;
+        transition: background 0.15s ease;
+      }
+
+      .mask-row + .mask-row {
+        margin-top: 2px;
+      }
+
+      .mask-row.expanded {
+        background: var(--mm-fill);
+      }
+
+      .mask-row-head {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        width: 100%;
+        min-height: 64px;
+        padding: 8px 12px;
+        box-sizing: border-box;
+        font-family: inherit;
+        text-align: left;
+        color: inherit;
+        background: none;
+        border: none;
+        border-radius: 12px;
+      }
+
+      button.mask-row-head {
+        cursor: pointer;
+      }
+
+      button.mask-row-head:hover {
+        background: var(--mm-fill);
+      }
+
+      .mask-row.expanded button.mask-row-head:hover {
+        background: none;
+      }
+
+      .mask-row-head:focus-visible,
+      .mask-seg-btn:focus-visible,
+      .mask-chip:focus-visible,
+      .mask-remove-btn:focus-visible,
+      .mask-text-btn:focus-visible,
+      .mask-filter-tab:focus-visible {
+        outline: 2px solid var(--mm-accent);
+        outline-offset: 2px;
+      }
+
+      .mask-thumb,
+      .mask-frame {
+        position: relative;
+        overflow: hidden;
+        background: var(--mm-fill);
+      }
+
+      .mask-thumb {
+        flex: 0 0 72px;
+        width: 72px;
+        aspect-ratio: 16 / 9;
+        border-radius: 6px;
+      }
+
+      .mask-row.expanded .mask-thumb {
+        display: none;
+      }
+
+      .mask-frame {
+        aspect-ratio: 16 / 9;
+        border-radius: 8px;
+        margin: 0 12px;
+      }
+
+      .mask-preview-thumb,
       .mask-preview-minimap {
         position: absolute;
         inset: 0;
         width: 100%;
         height: 100%;
-        z-index: 2;
+      }
+
+      .mask-preview-thumb {
+        object-fit: cover;
+        display: block;
+      }
+
+      .mask-preview-minimap {
         pointer-events: none;
       }
 
-      .mask-preview-minimap svg {
-        position: absolute;
-        inset: 0;
-        width: 100%;
-        height: 100%;
-      }
-
       .minimap-poly {
-        fill: rgba(59, 130, 246, 0.45);
-        stroke: #60a5fa;
-        stroke-width: 1px;
+        fill: rgba(255, 255, 255, 0.14);
+        stroke: rgba(255, 255, 255, 0.9);
+        stroke-width: 1.5px;
         vector-effect: non-scaling-stroke;
-        filter: drop-shadow(0 0 1px rgba(59, 130, 246, 0.8));
       }
 
-      .mask-card.pending-restart .minimap-poly {
-        fill: rgba(245, 158, 11, 0.3);
-        stroke: #fbbf24;
-        stroke-dasharray: 4 2;
-      }
-
-      .minimap-pos-tag {
-        position: absolute;
-        bottom: 3px;
-        left: 4px;
-        font-size: 9px;
-        font-weight: 600;
-        color: #93c5fd;
-        background: rgba(15, 23, 42, 0.9);
-        border: 1px solid rgba(96, 165, 250, 0.4);
-        padding: 1px 5px;
-        border-radius: 3px;
-        z-index: 3;
-        line-height: 1.2;
-        backdrop-filter: blur(2px);
-      }
-
-      .mask-card-info {
+      .mask-row-text {
         flex: 1;
         min-width: 0;
         display: flex;
         flex-direction: column;
-        justify-content: space-between;
-        gap: 6px;
+        gap: 2px;
       }
 
-      .mask-object-pill {
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-        padding: 2px 7px;
-        border-radius: 4px;
-        font-size: 11px;
+      .mask-row-title {
+        font-size: 15px;
         font-weight: 600;
-        background: rgba(59, 130, 246, 0.2);
-        color: #93c5fd;
-        border: 1px solid rgba(59, 130, 246, 0.4);
+        line-height: 20px;
+        color: var(--mm-text);
         text-transform: capitalize;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
 
-      .mask-camera-pill {
+      .mask-row-sub {
+        font-size: 13px;
+        line-height: 16px;
+        color: var(--mm-text-2);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .mask-row-time {
+        flex-shrink: 0;
+        font-size: 13px;
+        font-variant-numeric: tabular-nums;
+        color: var(--mm-text-2);
+      }
+
+      .mask-row-time.expiring {
+        color: var(--mm-warn);
+      }
+
+      .mask-row-chevron {
+        flex: 0 0 20px;
+        width: 20px;
+        height: 20px;
+        fill: var(--mm-text-2);
+        transition: transform 0.15s ease;
+      }
+
+      .mask-row.expanded .mask-row-chevron {
+        transform: rotate(90deg);
+      }
+
+      .mask-row-detail {
+        display: none;
+        padding: 0 0 12px;
+      }
+
+      .mask-row.expanded .mask-row-detail {
+        display: block;
+      }
+
+      .mask-meta {
+        margin: 8px 12px 0;
         font-size: 12px;
-        font-weight: 600;
-        color: #fff;
-        background: rgba(255, 255, 255, 0.12);
-        padding: 3px 8px;
-        border-radius: 4px;
-        text-transform: capitalize;
+        line-height: 16px;
+        color: var(--mm-text-2);
       }
 
-      .mask-id-pill {
-        font-size: 11px;
-        font-family: monospace;
-        color: #94a3b8;
-        background: rgba(0, 0, 0, 0.35);
-        padding: 3px 6px;
-        border-radius: 4px;
-      }
-
-      .mask-card-time-badge {
+      .mask-controls {
         display: flex;
-        align-items: center;
-        gap: 5px;
-        font-size: 12px;
-        font-weight: 600;
-        color: #38bdf8;
-        background: rgba(56, 189, 248, 0.15);
-        padding: 3px 8px;
-        border-radius: 4px;
+        align-items: flex-end;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin: 12px 12px 0;
       }
 
-      .mask-card-time-badge.expiring {
-        color: #fbbf24;
-        background: rgba(251, 191, 36, 0.15);
-      }
-
-      .mask-card-details {
+      .mask-duration {
         display: flex;
         flex-direction: column;
         gap: 4px;
+      }
+
+      .mask-control-label {
         font-size: 12px;
-        color: #aaa;
-        background: rgba(0, 0, 0, 0.25);
-        padding: 6px 8px;
-        border-radius: 6px;
+        line-height: 16px;
+        color: var(--mm-text-2);
       }
 
-      .mask-detail-row {
-        display: flex;
-        gap: 8px;
-        align-items: center;
+      .mask-segmented {
+        display: inline-flex;
+        padding: 2px;
+        gap: 2px;
+        border-radius: 8px;
+        background: var(--mm-fill);
       }
 
-      .mask-detail-row .detail-label {
-        color: #888;
-        font-size: 11px;
-      }
-
-      .mask-detail-row .detail-value {
-        color: #ddd;
-        font-size: 12px;
-      }
-
-      .mask-detail-row .detail-value.mono {
-        font-family: monospace;
-        font-size: 11px;
-        color: #94a3b8;
-        word-break: break-all;
-      }
-
-      .mask-card-actions {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 10px;
-        flex-wrap: wrap;
-        padding-top: 2px;
-      }
-
-      .mask-duration-selector {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        flex-wrap: wrap;
-      }
-
-      .mask-duration-selector .duration-title {
-        font-size: 11px;
-        color: #888;
+      .mask-seg-btn {
+        min-width: 44px;
+        min-height: 32px;
+        padding: 0 12px;
+        font-size: 13px;
         font-weight: 500;
-      }
-
-      .mask-duration-chips {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 4px;
-        align-items: center;
-      }
-
-      .mask-duration-chip {
-        padding: 3px 7px;
-        border-radius: 4px;
-        font-size: 11px;
-        font-weight: 500;
-        background: rgba(255, 255, 255, 0.08);
-        color: #ddd;
-        border: 1px solid rgba(255, 255, 255, 0.12);
-        cursor: pointer;
-        transition: all 0.15s;
         font-family: inherit;
+        color: var(--mm-text-2);
+        background: none;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: background 0.15s ease, color 0.15s ease;
       }
 
-      .mask-duration-chip:hover {
-        background: rgba(255, 255, 255, 0.18);
-        color: #fff;
+      .mask-seg-btn:hover {
+        color: var(--mm-text);
       }
 
-      .mask-duration-chip.active {
-        background: rgba(59, 130, 246, 0.3);
-        color: #93c5fd;
-        border-color: #60a5fa;
-        font-weight: 600;
+      .mask-seg-btn.active {
+        color: var(--mm-text);
+        background: var(--card-background-color, #1c1c1e);
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 0 0 0.5px var(--mm-line);
+      }
+
+      .mask-more {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin: 12px 12px 0;
+      }
+
+      .mask-more[hidden] {
+        display: none;
+      }
+
+      .mask-chip {
+        min-height: 32px;
+        padding: 0 12px;
+        font-size: 13px;
+        font-weight: 500;
+        font-family: inherit;
+        color: var(--mm-text-2);
+        background: none;
+        border: 1px solid var(--mm-line);
+        border-radius: 16px;
+        cursor: pointer;
+        transition: background 0.15s ease, color 0.15s ease;
+      }
+
+      .mask-chip:hover {
+        color: var(--mm-text);
+        background: var(--mm-fill);
+      }
+
+      .mask-chip.active {
+        color: var(--mm-text);
+        border-color: var(--mm-accent);
+      }
+
+      .mask-remove-btn,
+      .mask-text-btn {
+        min-height: 32px;
+        padding: 0 8px;
+        font-size: 13px;
+        font-weight: 500;
+        font-family: inherit;
+        background: none;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: background 0.15s ease;
       }
 
       .mask-remove-btn {
-        display: flex;
-        align-items: center;
-        gap: 5px;
-        padding: 5px 10px;
-        border-radius: 6px;
-        font-size: 12px;
-        font-weight: 600;
-        color: #cbd5e1;
-        background: rgba(255, 255, 255, 0.08);
-        border: 1px solid rgba(255, 255, 255, 0.18);
-        cursor: pointer;
-        transition: all 0.15s;
-        font-family: inherit;
-        margin-left: auto;
+        color: var(--mm-danger);
       }
 
       .mask-remove-btn:hover {
-        background: rgba(255, 255, 255, 0.18);
-        color: #ffffff;
-        border-color: rgba(255, 255, 255, 0.28);
+        background: color-mix(in srgb, var(--mm-danger) 14%, transparent);
       }
 
-      .mask-empty-state,
-      .mask-manager-empty {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        text-align: center;
-        padding: 36px 20px;
-        gap: 10px;
-        color: #888;
+      .mask-text-btn {
+        color: var(--mm-accent);
       }
 
-      .mask-empty-state svg,
-      .mask-manager-empty svg {
-        width: 44px;
-        height: 44px;
-        fill: #475569;
-        flex-shrink: 0;
+      .mask-text-btn:hover {
+        background: color-mix(in srgb, var(--mm-accent) 14%, transparent);
       }
 
-      .mask-empty-state h3,
-      .mask-empty-state h4,
-      .mask-manager-empty h3,
-      .mask-manager-empty h4 {
-        margin: 0;
-        font-size: 15px;
-        color: #cbd5e1;
-        font-weight: 600;
+      .mask-pending-section {
+        margin-top: 16px;
+        padding-top: 8px;
+        border-top: 1px solid var(--mm-line);
       }
 
-      .mask-empty-state p,
-      .mask-manager-empty p {
-        margin: 0;
-        font-size: 13px;
-        max-width: 380px;
-        line-height: 1.5;
-        color: #71717a;
-      }
-
-      .mask-manager-header-restart-btn {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        padding: 4px 9px;
-        border-radius: 6px;
-        font-size: 11px;
-        font-weight: 500;
-        color: #cbd5e1;
-        background: rgba(255, 255, 255, 0.08);
-        border: 1px solid rgba(255, 255, 255, 0.15);
-        cursor: pointer;
-        transition: all 0.15s;
-        font-family: inherit;
-      }
-
-      .mask-manager-header-restart-btn:hover {
-        background: rgba(255, 255, 255, 0.15);
-        color: #fff;
-        border-color: rgba(255, 255, 255, 0.25);
-      }
-
-      .mask-manager-header-restart-btn svg {
-        width: 13px;
-        height: 13px;
-        fill: currentColor;
-      }
-
-      .pending-masks-section {
-        margin-top: 10px;
-        padding-top: 10px;
-        border-top: 1px solid rgba(255, 255, 255, 0.08);
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-      }
-
-      .pending-section-title {
+      .mask-section-heading {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        font-size: 11px;
-        font-weight: 600;
-        color: #64748b;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-      }
-
-      .mask-section-dismiss-all-btn {
-        background: transparent;
-        border: none;
-        color: #60a5fa;
-        font-size: 10px;
+        padding: 8px 12px 4px;
+        font-size: 12px;
         font-weight: 500;
-        cursor: pointer;
-        padding: 2px 6px;
-        border-radius: 4px;
-        text-transform: none;
-        transition: all 0.15s;
+        color: var(--mm-text-2);
       }
 
-      .mask-section-dismiss-all-btn:hover {
-        background: rgba(96, 165, 250, 0.15);
-        color: #93c5fd;
+      .mask-row.pending .mask-thumb {
+        opacity: 0.5;
       }
 
-      .mask-card.pending-restart {
-        opacity: 0.75;
-        border-style: dashed;
+      .mask-row.pending .minimap-poly {
+        stroke-dasharray: 4 3;
       }
 
-      .mask-card-time-badge.pending {
-        background: rgba(255, 255, 255, 0.08);
-        color: #94a3b8;
-      }
-
-      .mask-card-pending-actions {
+      .mask-empty-state {
         display: flex;
+        flex-direction: column;
         align-items: center;
-        gap: 6px;
-        margin-left: auto;
+        text-align: center;
+        padding: 48px 24px;
+        gap: 8px;
       }
 
-      .mask-pending-dismiss-action {
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-        padding: 4px 8px;
-        border-radius: 5px;
-        font-size: 11px;
-        font-weight: 500;
-        color: #94a3b8;
-        background: rgba(255, 255, 255, 0.04);
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        cursor: pointer;
-        transition: all 0.15s;
-        font-family: inherit;
+      .mask-empty-state h4 {
+        margin: 0;
+        font-size: 17px;
+        font-weight: 600;
+        color: var(--mm-text);
       }
 
-      .mask-pending-dismiss-action:hover {
-        background: rgba(239, 68, 68, 0.15);
-        color: #f87171;
-        border-color: rgba(239, 68, 68, 0.3);
+      .mask-empty-state p {
+        margin: 0;
+        max-width: 320px;
+        font-size: 13px;
+        line-height: 20px;
+        color: var(--mm-text-2);
       }
 
-      .mask-pending-dismiss-action svg {
-        width: 12px;
-        height: 12px;
-        fill: currentColor;
+      @media (pointer: coarse) {
+        .mask-seg-btn,
+        .mask-chip,
+        .mask-remove-btn,
+        .mask-text-btn {
+          min-height: 44px;
+        }
       }
 
-      .mask-pending-restart-action {
-        display: inline-flex;
-        align-items: center;
-        gap: 5px;
-        padding: 4px 8px;
-        border-radius: 5px;
-        font-size: 11px;
-        font-weight: 500;
-        color: #94a3b8;
-        background: rgba(255, 255, 255, 0.06);
-        border: 1px solid rgba(255, 255, 255, 0.12);
-        cursor: pointer;
-        transition: all 0.15s;
-        font-family: inherit;
+      @media (max-width: 420px) {
+        .mask-thumb {
+          flex-basis: 56px;
+          width: 56px;
+        }
       }
 
-      .mask-pending-restart-action:hover {
-        background: rgba(255, 255, 255, 0.12);
-        color: #e2e8f0;
-      }
-
-      .mask-pending-restart-action svg {
-        width: 12px;
-        height: 12px;
-        fill: currentColor;
+      @media (prefers-reduced-motion: reduce) {
+        .mask-row,
+        .mask-row-chevron,
+        .mask-seg-btn,
+        .mask-chip {
+          transition: none;
+        }
       }
 
       /* ─── Event Modal Timeline Action Button ─── */
@@ -3914,6 +3850,7 @@ export class FrigateEventsCard extends LitElement {
     if (this._maskManagerContainer && this._maskManagerContainer.parentNode) {
       this._maskManagerContainer.parentNode.removeChild(this._maskManagerContainer);
       this._maskManagerContainer = undefined;
+      this._maskManagerExpandedId = undefined;
     }
     if (this._maskManagerTimer) {
       clearInterval(this._maskManagerTimer);
@@ -3931,9 +3868,12 @@ export class FrigateEventsCard extends LitElement {
       const maskId = el.getAttribute('data-timer-mask-id');
       const mask = maskId ? map.get(maskId) : undefined;
       if (mask) {
-        const text = this._formatMaskRemainingTime(mask.expires_at, mask.duration_hours);
+        const remaining = this._formatMaskRemainingTime(mask.expires_at, mask.duration_hours);
         const span = el.querySelector('.timer-text');
-        if (span) span.textContent = text;
+        if (span) span.textContent = remaining === '∞' ? 'No expiry' : remaining;
+        const hasExpiry = typeof mask.duration_hours === 'number' ? mask.duration_hours > 0 : true;
+        const msLeft = (hasExpiry && mask.expires_at) ? new Date(mask.expires_at).getTime() - Date.now() : Infinity;
+        el.classList.toggle('expiring', msLeft < 3600000);
       }
     });
   }
@@ -4095,282 +4035,229 @@ export class FrigateEventsCard extends LitElement {
       ? pendingMasks
       : pendingMasks.filter((m: any) => m.camera === filterCamera);
 
-    const durationPresets = [
+    const primaryPresets = [
       { hours: 1, label: '1h' },
-      { hours: 4, label: '4h' },
       { hours: 8, label: '8h' },
-      { hours: 12, label: '12h' },
       { hours: 24, label: '24h' },
+      { hours: 168, label: '7d' },
+    ];
+    const morePresets = [
+      { hours: 4, label: '4h' },
+      { hours: 12, label: '12h' },
       { hours: 48, label: '48h' },
       { hours: 72, label: '72h' },
-      { hours: 168, label: '7d' },
-      { hours: -1, label: '∞' },
+      { hours: -1, label: 'No expiry' },
     ];
+    const allPresets = [...primaryPresets, ...morePresets];
+
+    // Keep the list scroll position across re-renders (timers, duration changes, snapshots).
+    const previousScroll = container.querySelector<HTMLElement>('.mask-manager-body')?.scrollTop ?? 0;
+
+    // Expanded row: the user's last choice, otherwise the first mask in the current view.
+    const expandedId = (this._maskManagerExpandedId === '' ||
+      (this._maskManagerExpandedId !== undefined && filteredMasks.some((m: any) => String(m.mask_id) === this._maskManagerExpandedId)))
+      ? this._maskManagerExpandedId
+      : (filteredMasks[0] ? String(filteredMasks[0].mask_id) : '');
+
+    const buildViewModel = (mask: any) => {
+      const clientId = this._config?.frigate_client_id || 'frigate';
+      const maskId = String(mask.mask_id || '');
+      const eventId = String(mask.event_id || maskId);
+      const matchedEvent = this._events?.find(e =>
+        e.id === eventId ||
+        e.id.startsWith(maskId) ||
+        maskId.startsWith(e.id)
+      );
+
+      const label = String(matchedEvent?.label || mask.label || 'Object');
+      const cameraName = mask.camera || matchedEvent?.camera || '';
+      const timeText = matchedEvent?.start_time ? this._formatTime(matchedEvent.start_time) : '';
+      const rawTs = matchedEvent?.start_time || (eventId.includes('.') ? parseFloat(eventId.split('-')[0]) : 0);
+      const eventTs = rawTs ? Math.floor(rawTs) : 0;
+
+      const frigateBase = this._config?.frigate_url ? this._config.frigate_url.replace(/\/+$/, '') : '';
+      const directRecordingUrl = (frigateBase && cameraName && eventTs)
+        ? `${frigateBase}/api/${encodeURIComponent(cameraName)}/recordings/${eventTs}/snapshot.png`
+        : '';
+      const fallbackSnapshotUrl = getEventSnapshotURL(clientId, matchedEvent ? matchedEvent.id : eventId, {
+        bbox: false,
+        crop: false
+      });
+      const eventSnapshotUrl = this._maskManagerEventSnapshotUrls.get(maskId) || fallbackSnapshotUrl;
+      const primaryUrl = eventSnapshotUrl || directRecordingUrl;
+      const liveSnapshotUrl = cameraName ? (this._maskManagerSnapshotUrls.get(cameraName) || '') : '';
+      const displayUrl = liveSnapshotUrl || primaryUrl;
+      const imageFallbackUrl = liveSnapshotUrl
+        ? primaryUrl
+        : (directRecordingUrl && directRecordingUrl !== primaryUrl ? directRecordingUrl : '');
+      const geo = this._getMaskPreviewGeometry(mask, matchedEvent);
+
+      const title = `${label} · ${this._formatCameraName(mask.camera || 'Camera')}`;
+      const subParts = [
+        timeText ? `Detected ${timeText}` : '',
+        geo.posName ? `${geo.posName} of frame` : '',
+      ].filter(Boolean);
+
+      return { maskId, title, sub: subParts.join(' · '), displayUrl, imageFallbackUrl, geo };
+    };
+
+    const buildPreview = (vm: ReturnType<typeof buildViewModel>): string => `
+      ${vm.displayUrl ? `
+        <img
+          src="${escapeHtml(vm.displayUrl)}"
+          class="mask-preview-thumb"
+          alt=""
+          loading="lazy"
+          data-fallback-url="${escapeHtml(vm.imageFallbackUrl)}"
+          onerror="((img) => {
+            if (!img.dataset.triedFallback && img.dataset.fallbackUrl) {
+              img.dataset.triedFallback = 'true';
+              img.src = img.dataset.fallbackUrl;
+            } else {
+              img.style.display = 'none';
+            }
+          })(this)"
+        />
+      ` : ''}
+      <svg class="mask-preview-minimap" viewBox="0 0 ${vm.geo.viewBoxW} ${vm.geo.viewBoxH}" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+        ${vm.geo.polyPts ? `<polygon points="${escapeHtml(vm.geo.polyPts)}" class="minimap-poly" vector-effect="non-scaling-stroke" />` : ''}
+      </svg>
+    `;
+
+    const chevronSvg = '<svg class="mask-row-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M8.59 16.59 13.17 12 8.59 7.41 10 6l6 6-6 6z"/></svg>';
+
+    const buildActiveRow = (mask: any): string => {
+      const vm = buildViewModel(mask);
+      const maskId = escapeHtml(vm.maskId);
+      const camera = escapeHtml(mask.camera || '');
+      const poly = escapeHtml(mask.polygon || '');
+      const maskLabel = escapeHtml(mask.label || '');
+      const currentDurationHours = this._getCurrentMaskDurationHours(mask);
+      const remaining = this._formatMaskRemainingTime(mask.expires_at, currentDurationHours);
+      const remainingText = remaining === '∞' ? 'No expiry' : remaining;
+      const msLeft = (currentDurationHours <= 0 || !mask.expires_at)
+        ? Infinity
+        : new Date(mask.expires_at).getTime() - Date.now();
+      const expiring = msLeft < 3600000;
+      const isExpanded = vm.maskId === expandedId;
+
+      const selectedPreset = allPresets.find(p => Math.abs(p.hours - currentDurationHours) < 0.01);
+      const selectedIsPrimary = !!selectedPreset && primaryPresets.includes(selectedPreset);
+      const moreLabel = selectedIsPrimary ? 'More' : (selectedPreset ? selectedPreset.label : `${currentDurationHours}h`);
+
+      const durationButton = (p: { hours: number; label: string }, cls: string) => `
+        <button type="button" class="${cls} ${Math.abs(p.hours - currentDurationHours) < 0.01 ? 'active' : ''}" data-action="set-duration" data-mask-id="${maskId}" data-camera="${camera}" data-hours="${p.hours}" data-poly="${poly}" data-label="${maskLabel}">${p.label}</button>
+      `;
+
+      return `
+        <div class="mask-row ${isExpanded ? 'expanded' : ''}" data-mask-id="${maskId}">
+          <button type="button" class="mask-row-head" data-action="toggle-mask" data-mask-id="${maskId}" aria-expanded="${isExpanded}">
+            <span class="mask-thumb">${buildPreview(vm)}</span>
+            <span class="mask-row-text">
+              <span class="mask-row-title" title="Mask ${maskId}" data-safe-text="${escapeHtml(vm.title)}"></span>
+              <span class="mask-row-sub" data-safe-text="${escapeHtml(vm.sub)}"></span>
+            </span>
+            <span class="mask-row-time ${expiring ? 'expiring' : ''}" data-timer-mask-id="${maskId}"><span class="timer-text">${escapeHtml(remainingText)}</span></span>
+            ${chevronSvg}
+          </button>
+          <div class="mask-row-detail">
+            <div class="mask-frame">${buildPreview(vm)}</div>
+            ${vm.geo.maskW > 0 ? `<div class="mask-meta">Covers ${Math.round(vm.geo.maskW)} × ${Math.round(vm.geo.maskH)} px</div>` : ''}
+            <div class="mask-controls">
+              <div class="mask-duration" role="group" aria-label="Keep this mask for">
+                <span class="mask-control-label">Keep for</span>
+                <div class="mask-segmented">
+                  ${primaryPresets.map(p => durationButton(p, 'mask-seg-btn')).join('')}
+                  <button type="button" class="mask-seg-btn ${selectedIsPrimary ? '' : 'active'}" data-action="toggle-more" aria-expanded="false">${escapeHtml(moreLabel)}</button>
+                </div>
+              </div>
+              <button type="button" class="mask-remove-btn" data-action="remove-mask" data-mask-id="${maskId}" data-camera="${camera}">Remove mask</button>
+            </div>
+            <div class="mask-more" hidden>
+              ${morePresets.map(p => durationButton(p, 'mask-chip')).join('')}
+              <button type="button" class="mask-chip ${(!selectedPreset) ? 'active' : ''}" data-action="custom-duration" data-mask-id="${maskId}" data-camera="${camera}" data-poly="${poly}" data-label="${maskLabel}">${selectedPreset ? 'Custom…' : `Custom (${currentDurationHours}h)`}</button>
+            </div>
+          </div>
+        </div>
+      `;
+    };
+
+    const buildPendingRow = (mask: any): string => {
+      const vm = buildViewModel(mask);
+      const maskId = escapeHtml(vm.maskId);
+      return `
+        <div class="mask-row pending" data-mask-id="${maskId}">
+          <div class="mask-row-head">
+            <span class="mask-thumb">${buildPreview(vm)}</span>
+            <span class="mask-row-text">
+              <span class="mask-row-title" title="Mask ${maskId}" data-safe-text="${escapeHtml(vm.title)}"></span>
+              <span class="mask-row-sub">Removal applies after Frigate restarts</span>
+            </span>
+            <button type="button" class="mask-text-btn" data-action="dismiss-pending" data-mask-id="${maskId}">Dismiss</button>
+          </div>
+        </div>
+      `;
+    };
 
     container.innerHTML = `
       <div class="frigate-events-modal-backdrop" data-action="close"></div>
-      <div class="frigate-events-modal-content">
+      <div class="frigate-events-modal-content" role="dialog" aria-modal="true" aria-label="Temporary masks">
         <div class="mask-manager-header">
-          <div class="mask-manager-header-left">
-            <h2 class="mask-manager-title">Temporary False-Positive Masks</h2>
-            <span class="mask-manager-count-badge">${totalCount} active</span>
-          </div>
-          <div class="mask-manager-header-actions">
-            <button class="frigate-events-modal-close" data-action="close" title="Close">
-              <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
-            </button>
-          </div>
+          <h2 class="mask-manager-title">Temporary masks</h2>
+          <span class="mask-manager-count">${totalCount} active</span>
+          <button class="frigate-events-modal-close" data-action="close" title="Close" aria-label="Close">
+            <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+          </button>
         </div>
 
-        <div class="mask-manager-body">
-          ${cameras.length > 1 ? `
-            <div class="mask-filter-tabs">
-              <button class="mask-filter-tab ${filterCamera === 'all' ? 'active' : ''}" data-camera-filter="all">
-                All Cameras (${activeMasks.length + pendingMasks.length})
-              </button>
-              ${cameras.map(cam => {
-                const count = activeMasks.filter((m: any) => m.camera === cam).length +
-                              pendingMasks.filter((m: any) => m.camera === cam).length;
-                return `
-                  <button class="mask-filter-tab ${filterCamera === cam ? 'active' : ''}" data-camera-filter="${escapeHtml(cam)}">
-                    <span data-safe-text="${escapeHtml(this._formatCameraName(cam))}"></span> (${count})
-                  </button>
-                `;
-              }).join('')}
-            </div>
-          ` : ''}
+        ${cameras.length > 1 ? `
+          <div class="mask-filter-tabs" role="tablist">
+            <button type="button" role="tab" aria-selected="${filterCamera === 'all'}" class="mask-filter-tab ${filterCamera === 'all' ? 'active' : ''}" data-camera-filter="all">
+              All <span class="mask-filter-count">${activeMasks.length + pendingMasks.length}</span>
+            </button>
+            ${cameras.map(cam => {
+              const count = activeMasks.filter((m: any) => m.camera === cam).length +
+                            pendingMasks.filter((m: any) => m.camera === cam).length;
+              return `
+                <button type="button" role="tab" aria-selected="${filterCamera === cam}" class="mask-filter-tab ${filterCamera === cam ? 'active' : ''}" data-camera-filter="${escapeHtml(cam)}">
+                  <span data-safe-text="${escapeHtml(this._formatCameraName(cam))}"></span> <span class="mask-filter-count">${count}</span>
+                </button>
+              `;
+            }).join('')}
+          </div>
+        ` : ''}
 
+        <div class="mask-manager-body">
           ${filteredMasks.length === 0 && filteredPending.length === 0 ? `
             <div class="mask-empty-state">
-              <svg viewBox="0 0 24 24"><path d="M2,2H8V4H16V2H22V8H20V16H22V22H16V20H8V22H2V16H4V8H2V2M4,4V6H6V4H4M18,4V6H20V4H18M20,18V20H18V18H20M4,18V20H6V18H4M8,6V8H6V16H8V18H16V16H18V8H16V6H8M9,9H15V15H9V9Z"/></svg>
-              <h4>No Active Temporary Masks</h4>
-              <p>Apply temporary false-positive masks by right-clicking any event thumbnail below or from actionable notifications.</p>
+              <h4>Nothing is being ignored</h4>
+              <p>Right-click an event thumbnail to ignore a recurring false detection, or use the action button on a mobile notification.</p>
             </div>
           ` : ''}
 
           ${filteredMasks.length > 0 ? `
-            <div class="mask-cards-list">
-              ${filteredMasks.map((mask: any) => {
-                const currentDurationHours = this._getCurrentMaskDurationHours(mask);
-                const isCustom = !durationPresets.some(p => Math.abs(p.hours - currentDurationHours) < 0.01);
-                const remainingText = this._formatMaskRemainingTime(mask.expires_at, currentDurationHours);
-
-                const clientId = this._config?.frigate_client_id || 'frigate';
-                const maskId = String(mask.mask_id || '');
-                const eventId = String(mask.event_id || maskId);
-
-                // Find matching event from card events cache
-                const matchedEvent = this._events?.find(e =>
-                  e.id === eventId ||
-                  e.id.startsWith(maskId) ||
-                  maskId.startsWith(e.id)
-                );
-
-                const objectLabel = escapeHtml((matchedEvent?.label || mask.label || 'Detected Object').toUpperCase());
-                const scoreText = matchedEvent?.top_score ? ` (${Math.round(matchedEvent.top_score * 100)}%)` : '';
-                const timeText = matchedEvent?.start_time ? this._formatTime(matchedEvent.start_time) : '';
-                const cameraName = mask.camera || matchedEvent?.camera || '';
-                const rawTs = matchedEvent?.start_time || (eventId.includes('.') ? parseFloat(eventId.split('-')[0]) : 0);
-                const eventTs = rawTs ? Math.floor(rawTs) : 0;
-
-                const frigateBase = this._config?.frigate_url ? this._config.frigate_url.replace(/\/+$/, '') : '';
-                const directRecordingUrl = (frigateBase && cameraName && eventTs)
-                  ? `${frigateBase}/api/${encodeURIComponent(cameraName)}/recordings/${eventTs}/snapshot.png`
-                  : '';
-                const fallbackSnapshotUrl = getEventSnapshotURL(clientId, matchedEvent ? matchedEvent.id : eventId, {
-                  bbox: false,
-                  crop: false
-                });
-
-                const eventSnapshotUrl = this._maskManagerEventSnapshotUrls.get(String(mask.mask_id)) || fallbackSnapshotUrl;
-                const primaryUrl = eventSnapshotUrl || directRecordingUrl;
-                const liveSnapshotUrl = cameraName ? (this._maskManagerSnapshotUrls.get(cameraName) || '') : '';
-                const displayUrl = liveSnapshotUrl || primaryUrl;
-                const imageFallbackUrl = liveSnapshotUrl
-                  ? primaryUrl
-                  : (directRecordingUrl && directRecordingUrl !== primaryUrl ? directRecordingUrl : '');
-
-                // Compute polygon geometry & minimap coordinates
-                const geo = this._getMaskPreviewGeometry(mask, matchedEvent);
-
-                return `
-                  <div class="mask-card" data-mask-id="${escapeHtml(mask.mask_id)}">
-                    <div class="mask-card-main-row">
-                      <div class="mask-visual-preview">
-                        ${displayUrl ? `
-                          <img
-                            src="${escapeHtml(displayUrl)}"
-                            class="mask-preview-thumb"
-                            alt="${objectLabel}"
-                            loading="lazy"
-                            data-fallback-url="${escapeHtml(imageFallbackUrl)}"
-                            onerror="((img) => {
-                              if (!img.dataset.triedFallback && img.dataset.fallbackUrl) {
-                                img.dataset.triedFallback = 'true';
-                                img.src = img.dataset.fallbackUrl;
-                              } else {
-                                img.style.display = 'none';
-                              }
-                            })(this)"
-                          />
-                        ` : ''}
-                        <div class="mask-preview-minimap">
-                          <svg viewBox="0 0 ${geo.viewBoxW} ${geo.viewBoxH}" preserveAspectRatio="xMidYMid slice">
-                            ${geo.polyPts ? `<polygon points="${escapeHtml(geo.polyPts)}" class="minimap-poly" vector-effect="non-scaling-stroke" />` : ''}
-                          </svg>
-                        </div>
-                      </div>
-
-                      <div class="mask-card-info">
-                        <div class="mask-card-header">
-                          <div class="mask-card-title-col">
-                            <span class="mask-object-pill"><span data-safe-text="${objectLabel}"></span>${scoreText}</span>
-                            <span class="mask-camera-pill" data-safe-text="${escapeHtml(this._formatCameraName(mask.camera || 'Camera'))}"></span>
-                            <span class="mask-id-pill">#<span data-safe-text="${escapeHtml(mask.mask_id)}"></span></span>
-                          </div>
-                          <div class="mask-card-time-badge" data-timer-mask-id="${escapeHtml(mask.mask_id)}">
-                            <svg viewBox="0 0 24 24" style="width: 13px; height: 13px; fill: currentColor;"><path d="M12,20A8,8 0 0,0 20,12A8,8 0 0,0 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,2C6.47,22 2,17.5 2,12A10,10 0 0,1 12,2M12.5,7V12.25L17,14.92L16.25,16.15L11,13 V7H12.5Z"/></svg>
-                            <span class="timer-text">${escapeHtml(remainingText)}</span>
-                          </div>
-                        </div>
-
-                        <div class="mask-card-details">
-                          <div class="mask-detail-row">
-                            <span class="detail-label">Location:</span>
-                            <span class="detail-value"><span data-safe-text="${escapeHtml(geo.posName)}"></span> on camera ${geo.maskW > 0 ? `(${Math.round(geo.maskW)} × ${Math.round(geo.maskH)} px)` : ''}</span>
-                          </div>
-                          ${timeText ? `
-                          <div class="mask-detail-row">
-                            <span class="detail-label">Detected:</span>
-                            <span class="detail-value">${escapeHtml(timeText)}</span>
-                          </div>
-                          ` : ''}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div class="mask-card-actions">
-                      <div class="mask-duration-selector">
-                        <span class="duration-title">Duration:</span>
-                        <div class="mask-duration-chips">
-                          ${durationPresets.map(p => {
-                            const isSelected = Math.abs(p.hours - currentDurationHours) < 0.01;
-                            return `
-                              <button class="mask-duration-chip ${isSelected ? 'active' : ''}" data-action="set-duration" data-mask-id="${escapeHtml(mask.mask_id)}" data-camera="${escapeHtml(mask.camera || '')}" data-hours="${p.hours}" data-poly="${escapeHtml(mask.polygon || '')}" data-label="${escapeHtml(mask.label || '')}">
-                                ${p.label}
-                              </button>
-                            `;
-                          }).join('')}
-                          <button class="mask-duration-chip ${isCustom ? 'active' : ''}" data-action="custom-duration" data-mask-id="${escapeHtml(mask.mask_id)}" data-camera="${escapeHtml(mask.camera || '')}" data-poly="${escapeHtml(mask.polygon || '')}" data-label="${escapeHtml(mask.label || '')}">
-                            ${isCustom ? `Custom (${currentDurationHours}h)` : 'Custom...'}
-                          </button>
-                        </div>
-                      </div>
-                      <button class="mask-remove-btn" data-action="remove-mask" data-mask-id="${escapeHtml(mask.mask_id)}" data-camera="${escapeHtml(mask.camera || '')}">
-                        <svg viewBox="0 0 24 24" style="width: 14px; height: 14px; fill: currentColor;"><path d="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z"/></svg>
-                        <span>Remove</span>
-                      </button>
-                    </div>
-                  </div>
-                `;
-              }).join('')}
+            <div class="mask-list">
+              ${filteredMasks.map(buildActiveRow).join('')}
             </div>
           ` : ''}
 
           ${filteredPending.length > 0 ? `
-            <div class="pending-masks-section">
-              <div class="pending-section-title">
-                <span>Removed</span>
-                ${filteredPending.length > 1 ? `
-                  <button class="mask-section-dismiss-all-btn" data-action="dismiss-all-pending" title="Dismiss all pending restart notifications">
-                    Dismiss All
-                  </button>
-                ` : ''}
+            <div class="mask-pending-section">
+              <div class="mask-section-heading">
+                <span>Waiting for Frigate restart</span>
+                ${filteredPending.length > 1 ? `<button type="button" class="mask-text-btn" data-action="dismiss-all-pending">Dismiss all</button>` : ''}
               </div>
-              <div class="mask-cards-list">
-                ${filteredPending.map((mask: any) => {
-                  const clientId = this._config?.frigate_client_id || 'frigate';
-                  const maskId = String(mask.mask_id || '');
-                  const eventId = String(mask.event_id || maskId);
-                  const matchedEvent = this._events?.find(e => e.id === eventId || e.id.startsWith(maskId) || maskId.startsWith(e.id));
-                const objectLabel = escapeHtml((matchedEvent?.label || mask.label || 'Detected Object').toUpperCase());
-                  
-                  const cameraName = mask.camera || matchedEvent?.camera || '';
-                  const rawTs = matchedEvent?.start_time || (eventId.includes('.') ? parseFloat(eventId.split('-')[0]) : 0);
-                  const eventTs = rawTs ? Math.floor(rawTs) : 0;
-
-                  const frigateBase = this._config?.frigate_url ? this._config.frigate_url.replace(/\/+$/, '') : '';
-                  const directRecordingUrl = (frigateBase && cameraName && eventTs)
-                    ? `${frigateBase}/api/${encodeURIComponent(cameraName)}/recordings/${eventTs}/snapshot.png`
-                    : '';
-                  const fallbackSnapshotUrl = getEventSnapshotURL(clientId, matchedEvent ? matchedEvent.id : eventId, { bbox: false, crop: false });
-                  const eventSnapshotUrl = this._maskManagerEventSnapshotUrls.get(String(mask.mask_id)) || fallbackSnapshotUrl;
-                  const primaryUrl = eventSnapshotUrl || directRecordingUrl;
-                  const liveSnapshotUrl = cameraName ? (this._maskManagerSnapshotUrls.get(cameraName) || '') : '';
-                  const displayUrl = liveSnapshotUrl || primaryUrl;
-                  const imageFallbackUrl = liveSnapshotUrl
-                    ? primaryUrl
-                    : (directRecordingUrl && directRecordingUrl !== primaryUrl ? directRecordingUrl : '');
-                  const geo = this._getMaskPreviewGeometry(mask, matchedEvent);
-
-                  return `
-                    <div class="mask-card pending-restart" data-mask-id="${escapeHtml(mask.mask_id)}">
-                      <div class="mask-card-main-row">
-                        <div class="mask-visual-preview">
-                          ${displayUrl ? `
-                            <img
-                              src="${escapeHtml(displayUrl)}"
-                              class="mask-preview-thumb"
-                              alt="${objectLabel}"
-                              loading="lazy"
-                              data-fallback-url="${escapeHtml(imageFallbackUrl)}"
-                              onerror="((img) => {
-                                if (!img.dataset.triedFallback && img.dataset.fallbackUrl) {
-                                  img.dataset.triedFallback = 'true';
-                                  img.src = img.dataset.fallbackUrl;
-                                } else {
-                                  img.style.display = 'none';
-                                }
-                              })(this)"
-                            />
-                          ` : ''}
-                          <div class="mask-preview-minimap">
-                            <svg viewBox="0 0 ${geo.viewBoxW} ${geo.viewBoxH}" preserveAspectRatio="xMidYMid slice">
-                              ${geo.polyPts ? `<polygon points="${escapeHtml(geo.polyPts)}" class="minimap-poly" vector-effect="non-scaling-stroke" />` : ''}
-                            </svg>
-                          </div>
-                        </div>
-                        <div class="mask-card-info">
-                          <div class="mask-card-header">
-                            <div class="mask-card-title-col">
-                              <span class="mask-object-pill"><span data-safe-text="${objectLabel}"></span></span>
-                              <span class="mask-camera-pill" data-safe-text="${escapeHtml(this._formatCameraName(mask.camera || 'Camera'))}"></span>
-                              <span class="mask-id-pill">#<span data-safe-text="${escapeHtml(mask.mask_id)}"></span></span>
-                            </div>
-                          </div>
-                          <div class="mask-card-details">
-                            <div class="mask-detail-row">
-                              <span class="detail-label">Status:</span>
-                              <span class="detail-value" style="color: #94a3b8; font-size: 11px;">Removed</span>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                      <div class="mask-card-actions mask-card-pending-actions">
-                        <button class="mask-pending-dismiss-action" data-action="dismiss-pending" data-mask-id="${escapeHtml(mask.mask_id)}" title="Dismiss">
-                          <svg viewBox="0 0 24 24"><path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"/></svg>
-                          <span>Dismiss</span>
-                        </button>
-                      </div>
-                    </div>
-                  `;
-                }).join('')}
+              <div class="mask-list">
+                ${filteredPending.map(buildPendingRow).join('')}
               </div>
             </div>
           ` : ''}
         </div>
       </div>
     `;
+
+    const nextBody = container.querySelector<HTMLElement>('.mask-manager-body');
+    if (nextBody) nextBody.scrollTop = previousScroll;
 
     container.querySelectorAll<HTMLElement>('[data-safe-text]').forEach((element) => {
       element.textContent = element.getAttribute('data-safe-text') || '';
@@ -4417,6 +4304,35 @@ export class FrigateEventsCard extends LitElement {
         e.stopPropagation();
         this._maskManagerSelectedCamera = (tab as HTMLElement).getAttribute('data-camera-filter') || 'all';
         this._renderMaskManagerContent(container);
+      });
+    });
+
+    container.querySelectorAll('[data-action="toggle-mask"]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const row = (btn as HTMLElement).closest('.mask-row');
+        if (!row) return;
+        const willExpand = !row.classList.contains('expanded');
+        container.querySelectorAll('.mask-row.expanded').forEach(r => {
+          r.classList.remove('expanded');
+          r.querySelector('[data-action="toggle-mask"]')?.setAttribute('aria-expanded', 'false');
+        });
+        if (willExpand) {
+          row.classList.add('expanded');
+          btn.setAttribute('aria-expanded', 'true');
+          row.scrollIntoView({ block: 'nearest' });
+        }
+        this._maskManagerExpandedId = willExpand ? ((btn as HTMLElement).getAttribute('data-mask-id') || '') : '';
+      });
+    });
+
+    container.querySelectorAll('[data-action="toggle-more"]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const more = (btn as HTMLElement).closest('.mask-row-detail')?.querySelector<HTMLElement>('.mask-more');
+        if (!more) return;
+        more.hidden = !more.hidden;
+        btn.setAttribute('aria-expanded', String(!more.hidden));
       });
     });
 
