@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.6.16';
+const CARD_VERSION = '2.6.17';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -171,6 +171,8 @@ const TIMELINE_PLAYBACK_SPEEDS = [0.5, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 10
 export class FrigateEventsCard extends LitElement {
   @property({ attribute: false }) public hass?: HomeAssistant;
   @state() private _config?: FrigateEventsCardConfig;
+  /** Config exactly as authored, before DEFAULTS fill in mute flags. */
+  private _userConfig?: FrigateEventsCardConfig;
   @state() private _events: FrigateEvent[] = [];
   @state() private _selectedEvent?: FrigateEvent;
   @state() private _loading = true;
@@ -290,6 +292,7 @@ export class FrigateEventsCard extends LitElement {
     if (!config) {
       throw new Error('Invalid configuration');
     }
+    this._userConfig = config;
     this._config = { ...DEFAULT_CONFIG, ...config };
     if (config.muted !== undefined) {
       this._isLiveMuted = config.muted !== false;
@@ -5709,7 +5712,14 @@ export class FrigateEventsCard extends LitElement {
   }
 
   private _timelinePlayerMarkup(): string {
-    const showMuteBtn = this._config?.timeline_show_mute !== false;
+    // Honour an explicit opt-out of mute controls anywhere in the config:
+    // timeline_show_mute (timeline-specific) or show_mute / live_view_show_mute
+    // (the card-wide mute toggles). An explicit timeline value wins.
+    const raw = this._userConfig;
+    const cardMute = raw?.show_mute ?? raw?.live_view_show_mute;
+    const showMuteBtn = raw?.timeline_show_mute !== undefined
+      ? raw.timeline_show_mute !== false
+      : cardMute !== false;
     const mutePosition = this._config?.live_view_mute_position === 'top-left' ? 'top-left' : 'top-right';
     return `
       <div class="timeline-player-container">

@@ -1,5 +1,8 @@
 # Changelog
 
+## [2.6.17] - 2026-10-27
+- Fixed: **Timeline mute button ignored `show_mute: false`** — the timeline only looked at `timeline_show_mute`, so cards that opt out of mute controls card-wide still got a mute toggle over the footage. It now honours `show_mute` / `live_view_show_mute` as well, with an explicit `timeline_show_mute` taking precedence.
+
 ## [2.6.16] - 2026-10-27
 - Fixed: **Scrubber track still invisible on iPad** — the track fill no longer depends on `color-mix()` or a custom property at all. It is now a plain translucent grey, so the rounded bar always reads lighter than the popup surface, on any engine. The mute button is also pinned out of the grid flow so no black row can appear under the footage, and the compact player paints the card surface instead of black.
 
