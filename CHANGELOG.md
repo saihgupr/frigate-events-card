@@ -1,5 +1,8 @@
 # Changelog
 
+## [2.6.20] - 2026-10-27
+- Improved: **The selected window preset is now obvious** — it fills with the accent colour and white bold text instead of the old card-coloured pill, which was nearly invisible against the settings sheet on mobile. Hovering a selected pill no longer washes it out either.
+
 ## [2.6.19] - 2026-10-27
 - Improved: **Android TV now uses the same timeline popup as iPad** — TV no longer gets the separate full-bleed scrim design (`is-tv`). It renders the compact card: solid header, footage at full width, deck with the scrubber underneath. D-pad focus is anchored on the scrubber so arrows still seek and Enter/Space toggles playback.
 

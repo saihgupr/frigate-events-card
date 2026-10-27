@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.6.19';
+const CARD_VERSION = '2.6.20';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -2511,9 +2511,16 @@ export class FrigateEventsCard extends LitElement {
       }
 
       .timeline-window-pill.active {
-        background: var(--card-background-color, #1c1c1e);
-        color: var(--tl-text);
+        background: var(--tl-accent);
+        color: #ffffff;
+        font-weight: 600;
         box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+      }
+
+      /* Hover must not wash out the selected pill. */
+      .timeline-window-pill.active:hover {
+        background: var(--tl-accent);
+        color: #ffffff;
       }
 
       .timeline-window-group {
