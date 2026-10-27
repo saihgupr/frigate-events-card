@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.6.3] - 2026-10-27
+- Added: **Mobile & TV timeline layout** — the timeline modal now detects the device and switches to a dedicated fullscreen layout on phones, tablets and TV browsers (including TVBro / Android TV) while the desktop layout stays exactly as it was.
+- Added: **Video-first mobile layout** — the player takes all available height, the scrubber sits directly under it with a taller track and larger event markers, and the transport buttons are sized for touch.
+- Added: **Time controls in a bottom sheet** — start time, quick jumps and window presets moved behind a settings button on mobile/TV so they no longer push the video down.
+- Improved: Landscape phones reserve space for the controls instead of covering footage, and TV gets always-visible focus rings, a D-pad focus anchor on the play button, plus arrow-key / Home / End seeking on the scrubber.
+- Note: Video is always scaled to fit (never cropped) on every layout.
+
 ## [2.6.1] - 2026-10-27
 - Improved: **Timeline UI Redesign** — Modernized timeline player layout, scrubber track, event markers, and controls.
 - Improved: **Temporary Mask Manager UI** — Redesigned mask management cards, countdown indicators, and polygon preview overlays.
