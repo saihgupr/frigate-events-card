@@ -5,8 +5,9 @@ An all-in-one Lovelace card for Frigate: recent detection gallery, WebRTC live v
 **Available directly in HACS** — search for **Frigate Events Card** under Frontend.
 
 ![Demo](images/snapshots/demo.gif)
-![Screenshot](images/snapshots/timeline-2.jpeg)
+![Screenshot](images/snapshots/timeline.jpeg)
 ![Screenshot](images/snapshots/screenshot_3.png)
+![Screenshot](images/snapshots/temp-mask.png)
 ![Screenshot](images/snapshots/temp-mask-1.png)
 
 <details>
@@ -257,7 +258,7 @@ go2rtc_url: http://192.168.1.211:1984
 The Timeline modal plays continuous recordings from Frigate 0.13+ VOD, so you can review footage around an event instead of being limited to the event clip itself. Click any event thumbnail (with `timeline_on_click: true`) or use the live feed's right-click menu to open it.
 
 <p align="center">
-  <img src="images/snapshots/timeline-2.jpeg" width="100%" alt="Timeline player with event markers and playback controls" />
+  <img src="images/snapshots/timeline.jpeg" width="100%" alt="Timeline player with event markers and playback controls" />
 </p>
 
 - **Interactive scrubber**: Drag anywhere on the track to seek. The current time is shown above the playhead, with the window start and end times on either side.
@@ -287,9 +288,8 @@ Right-clicking the live feed exposes the same context menu, with direct shortcut
 The card works standalone. The `frigate_temp_mask` companion integration enables temporary masks for recurring false detections such as a parked car, package, or wheelbarrow. Masks use a 10% expanded bounding box around the detection, are written to Frigate's config, and can be changed or removed later.
 
 <p align="center">
-  <img src="images/snapshots/temp_mask_1.png" width="32%" />
-  <img src="images/snapshots/temp_mask_4.png" width="32%" />
-  <img src="images/snapshots/temp_mask_3.png" width="32%" />
+  <img src="images/snapshots/temp-mask.png" width="49%" alt="Temporary Mask Manager" />
+  <img src="images/snapshots/temp-mask-1.png" width="49%" alt="Frigate Config Object Mask" />
 </p>
 
 * **Flexible durations**: Set a mask for 1h, 4h, 8h, 12h, 24h, 48h, 7d, or custom hours.
