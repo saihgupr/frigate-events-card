@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.6.8] - 2026-10-27
+- Improved: **Full-bleed timeline on phones in both orientations** — the video now fills the screen with a floating topbar and scrubber over gradient scrims; nothing reserves layout height.
+- Improved: **Playback controls moved into the settings sheet** on mobile — play/pause, the skip jumps and the speed stepper now live alongside Start time and Window under the gear button, leaving just the scrubber on screen (tap the video to play/pause).
+
+## [2.6.7] - 2026-10-27
+- Fixed: **iPhone portrait timeline** — the modal now fills the viewport exactly (no dead band under the controls) and the stage is vertically centered, with the camera name shown in the topbar when there is only one camera.
+- Improved: **iPhone landscape timeline** — the player is now full-bleed and the topbar, scrubber and transport float over it as translucent gradient bars, so the footage keeps the whole screen instead of being squeezed by ~40% of chrome.
+
 ## [2.6.6] - 2026-10-27
 - Fixed: Tablet detection no longer gets demoted to the desktop layout. Any device reporting a touch digitizer or a coarse pointer now gets the mobile timeline; previously an iPad with a trackpad/mouse attached (or a WebView reporting `pointer: fine` + `hover: hover`) could fall through to desktop.
 

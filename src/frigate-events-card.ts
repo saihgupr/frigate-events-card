@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.6.6';
+const CARD_VERSION = '2.6.8';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -2830,13 +2830,13 @@ export class FrigateEventsCard extends LitElement {
 
       .frigate-timeline-modal.is-compact .frigate-events-modal-content,
       .frigate-timeline-modal.is-tv .frigate-events-modal-content {
-        width: 100% !important;
+        position: absolute !important;
+        inset: 0 !important;
+        width: auto !important;
+        height: auto !important;
         min-width: 0 !important;
-        max-width: 100% !important;
-        height: 100vh !important;
-        height: 100dvh !important;
-        max-height: 100vh !important;
-        max-height: 100dvh !important;
+        max-width: none !important;
+        max-height: none !important;
         margin: 0 !important;
         border: none !important;
         border-radius: 0 !important;
@@ -2860,8 +2860,30 @@ export class FrigateEventsCard extends LitElement {
         padding-left: max(12px, env(safe-area-inset-left, 0px));
         border-bottom: 1px solid var(--tl-line);
         background: var(--card-background-color, #1c1c1e);
-        min-height: 52px;
+        min-height: 48px;
         box-sizing: border-box;
+      }
+
+      /* Single camera: show the camera name on the left instead of an empty spacer. */
+      .frigate-timeline-modal.is-compact .timeline-compact-camera-name,
+      .frigate-timeline-modal.is-tv .timeline-compact-camera-name {
+        flex: 1 1 auto;
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-compact-camera-name .timeline-camera-badge,
+      .frigate-timeline-modal.is-tv .timeline-compact-camera-name .timeline-camera-badge {
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--tl-text);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
 
       .frigate-timeline-modal.is-compact .timeline-compact-topbar .timeline-camera-tabs,
@@ -3106,52 +3128,162 @@ export class FrigateEventsCard extends LitElement {
         font-size: 14px;
       }
 
-      /* Compact: transport + speed cluster fit on ONE line at 375px CSS width. */
-      .frigate-timeline-modal.is-compact .timeline-transport-bar {
-        flex-wrap: nowrap;
-        gap: 4px;
-        padding: 6px 8px max(8px, env(safe-area-inset-bottom, 8px));
-        overflow-x: auto;
-        scrollbar-width: none;
+      /* Compact: transport lives in the settings sheet (Playback section), laid
+         out as a comfortable touch row that wraps to two rows if needed. */
+      .frigate-timeline-modal.is-compact .timeline-settings-sheet {
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
       }
 
-      .frigate-timeline-modal.is-compact .timeline-transport-bar::-webkit-scrollbar {
-        display: none;
+      .frigate-timeline-modal.is-compact .timeline-sheet-section {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        min-width: 0;
       }
 
-      .frigate-timeline-modal.is-compact .timeline-transport-controls {
-        flex-wrap: nowrap;
-        gap: 2px;
+      .frigate-timeline-modal.is-compact .timeline-sheet-heading {
+        font-size: 12px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--tl-text-2);
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-settings-sheet .timeline-transport-bar {
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+        padding: 0;
+        overflow: visible;
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-settings-sheet .timeline-transport-controls {
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 6px;
         flex-shrink: 0;
       }
 
-      .frigate-timeline-modal.is-compact .timeline-speed-controls {
+      .frigate-timeline-modal.is-compact .timeline-settings-sheet .timeline-transport-btn {
+        min-width: 48px;
+        height: 48px;
+        padding: 0 12px;
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-settings-sheet .timeline-transport-btn.play-btn {
+        width: 56px;
+        height: 56px;
+        margin: 0 6px;
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-settings-sheet .timeline-speed-controls {
+        align-self: center;
+        justify-content: center;
+        max-width: 110px;
         flex-shrink: 0;
         gap: 2px;
         padding: 2px;
       }
 
-      .frigate-timeline-modal.is-compact .timeline-stepper-btn {
+      .frigate-timeline-modal.is-compact .timeline-settings-sheet .timeline-stepper-btn {
         width: 30px;
+        height: 34px;
       }
 
-      .frigate-timeline-modal.is-compact .timeline-speed-display {
+      .frigate-timeline-modal.is-compact .timeline-settings-sheet .timeline-speed-display {
         min-width: 32px;
         min-height: 34px;
         font-size: 13px;
       }
 
-      /* Compact portrait: player keeps 16:9 (no flex-grow black bars), the whole
-         stack centers so spare space is symmetric. Landscape keeps fill-height. */
-      @media (orientation: portrait) {
-        .frigate-timeline-modal.is-compact .timeline-modal-body {
-          justify-content: center;
-        }
-        .frigate-timeline-modal.is-compact .timeline-player-container {
-          flex: 0 0 auto;
-          aspect-ratio: 16 / 9;
-          width: 100%;
-        }
+      /* Compact full-bleed (both orientations): body + player fill the screen;
+         the topbar and scrubber float over gradient scrims and reserve zero
+         layout height. The transport lives in the settings sheet. */
+      .frigate-timeline-modal.is-compact .timeline-modal-body {
+        position: absolute;
+        inset: 0;
+        flex: none;
+        gap: 0;
+        padding: 0;
+        overflow: hidden;
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-player-container {
+        position: absolute;
+        inset: 0;
+        flex: none;
+        aspect-ratio: auto;
+        width: 100%;
+        border-radius: 0;
+        background: #000000;
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-compact-topbar {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        z-index: 8;
+        min-height: 0;
+        height: calc(48px + env(safe-area-inset-top, 0px));
+        padding-top: env(safe-area-inset-top, 0px);
+        padding-bottom: 0;
+        padding-left: max(12px, env(safe-area-inset-left, 0px));
+        padding-right: max(8px, env(safe-area-inset-right, 0px));
+        border-bottom: none;
+        background: linear-gradient(to bottom, rgba(0, 0, 0, 0.75), rgba(0, 0, 0, 0));
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-compact-topbar .timeline-camera-tab {
+        color: rgba(255, 255, 255, 0.85);
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-compact-topbar .timeline-camera-tab.active {
+        color: #ffffff;
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-compact-camera-name .timeline-camera-badge {
+        color: #ffffff;
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-mute-btn {
+        top: calc(56px + env(safe-area-inset-top, 0px));
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-scrubber-wrapper {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 7;
+        margin-top: 0;
+        padding: 10px 12px max(8px, env(safe-area-inset-bottom, 8px));
+        padding-left: max(12px, env(safe-area-inset-left, 0px));
+        padding-right: max(12px, env(safe-area-inset-right, 0px));
+        gap: 4px;
+        background: linear-gradient(to top, rgba(0, 0, 0, 0.75), rgba(0, 0, 0, 0));
+        border-top: none;
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-track-container {
+        height: 46px;
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-event-marker {
+        top: 7px;
+        bottom: 7px;
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-track-labels {
+        font-size: 12px;
+        line-height: 1.2;
+        color: rgba(255, 255, 255, 0.85);
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-time-badge {
+        color: #ffffff;
       }
 
       /* Time controls live in a bottom sheet behind the gear button. */
@@ -3260,66 +3392,36 @@ export class FrigateEventsCard extends LitElement {
         gap: 10px;
       }
 
-      /* Landscape phones / short screens: never overlay the scrubber — reserve
-         space so the full video image stays visible. TV keeps its overlay below. */
-      @media (orientation: landscape), (max-height: 550px) {
+      /* Landscape phones: keep the shared full-bleed floating layout, just
+         shrink the chrome. iPad landscape (768px height) and TV are untouched. */
+      @media (orientation: landscape) and (max-height: 500px) {
         .frigate-timeline-modal.is-compact .timeline-compact-topbar {
-          min-height: 48px;
-          padding-top: max(4px, env(safe-area-inset-top, 0px));
-          padding-bottom: 4px;
+          height: calc(44px + env(safe-area-inset-top, 0px));
         }
         .frigate-timeline-modal.is-compact .timeline-compact-topbar .timeline-camera-tab {
-          min-height: 40px;
-          padding: 8px 10px;
+          min-height: 36px;
+          padding: 6px 10px;
         }
-        .frigate-timeline-modal.is-compact .timeline-settings-btn,
-        .frigate-timeline-modal.is-compact .timeline-compact-topbar .frigate-events-modal-close {
+        .frigate-timeline-modal.is-compact .timeline-mute-btn {
+          top: calc(52px + env(safe-area-inset-top, 0px));
           width: 40px;
           height: 40px;
         }
         .frigate-timeline-modal.is-compact .timeline-scrubber-wrapper {
-          margin-top: 0;
-          padding: 6px 12px 4px;
-          gap: 4px;
-          background: var(--card-background-color, #1c1c1e);
-          border-top: 1px solid var(--tl-line);
-          z-index: auto;
+          padding: 8px 12px 4px;
+          padding-left: max(12px, env(safe-area-inset-left, 0px));
+          padding-right: max(12px, env(safe-area-inset-right, 0px));
+          gap: 2px;
         }
         .frigate-timeline-modal.is-compact .timeline-track-container {
-          height: 46px;
+          height: 40px;
         }
         .frigate-timeline-modal.is-compact .timeline-event-marker {
-          top: 6px;
-          bottom: 6px;
-        }
-        .frigate-timeline-modal.is-compact .timeline-track-labels {
-          font-size: 12px;
-          line-height: 1.2;
-          color: var(--tl-text-2);
+          top: 5px;
+          bottom: 5px;
         }
         .frigate-timeline-modal.is-compact .timeline-time-badge {
           font-size: 14px;
-        }
-        .frigate-timeline-modal.is-compact .timeline-transport-bar {
-          padding: 4px 12px max(4px, env(safe-area-inset-bottom, 4px));
-          gap: 6px;
-        }
-        .frigate-timeline-modal.is-compact .timeline-transport-btn {
-          height: 40px;
-          min-width: 44px;
-          font-size: 13px;
-        }
-        .frigate-timeline-modal.is-compact .timeline-transport-btn.play-btn {
-          width: 48px;
-          height: 48px;
-          margin: 0 4px;
-        }
-        .frigate-timeline-modal.is-compact .timeline-stepper-btn {
-          width: 40px;
-          height: 36px;
-        }
-        .frigate-timeline-modal.is-compact .timeline-speed-display {
-          min-height: 36px;
         }
       }
 
@@ -3360,8 +3462,8 @@ export class FrigateEventsCard extends LitElement {
         gap: var(--tl-tv-topbar-pad);
       }
 
-      /* Single-camera spacer must not add height; the bar sizes to its content. */
-      .frigate-timeline-modal.is-tv .timeline-compact-topbar > div:not(.timeline-camera-tabs):not(.timeline-compact-actions) {
+      /* Single-camera name must not add height; the bar sizes to its content. */
+      .frigate-timeline-modal.is-tv .timeline-compact-topbar > :not(.timeline-camera-tabs):not(.timeline-compact-actions) {
         min-height: 0;
         height: auto;
         align-self: center;
@@ -5309,31 +5411,52 @@ export class FrigateEventsCard extends LitElement {
     `;
   }
 
-  private _timelineControlsMarkup(dtValue: string, windowMinutes: number): string {
+  private _timelineControlsMarkup(dtValue: string, windowMinutes: number, withHeadings = false): string {
+    const timeGroup = `
+      <div class="timeline-datetime-group">
+        <span class="timeline-datetime-label">Start time</span>
+        <input type="datetime-local" class="timeline-datetime-input" value="${dtValue}" />
+        <div class="timeline-quick-jumps">
+          <button class="timeline-quick-btn" data-jump="now">Now</button>
+          <button class="timeline-quick-btn" data-jump="-15m">-15m</button>
+          <button class="timeline-quick-btn" data-jump="-1h">-1h</button>
+          <button class="timeline-quick-btn" data-jump="-3h">-3h</button>
+          <button class="timeline-quick-btn" data-jump="-12h">-12h</button>
+          <button class="timeline-quick-btn" data-jump="day-start">Start of day</button>
+        </div>
+      </div>
+    `;
+    const windowGroup = `
+      <div class="timeline-window-group">
+        <span class="timeline-datetime-label">Window</span>
+        <div class="timeline-window-pills">
+          <button class="timeline-window-pill ${windowMinutes === 15 ? 'active' : ''}" data-window="15">15m</button>
+          <button class="timeline-window-pill ${windowMinutes === 30 ? 'active' : ''}" data-window="30">30m</button>
+          <button class="timeline-window-pill ${windowMinutes === 60 ? 'active' : ''}" data-window="60">1h</button>
+          <button class="timeline-window-pill ${windowMinutes === 180 ? 'active' : ''}" data-window="180">3h</button>
+          <button class="timeline-window-pill ${windowMinutes === 1440 ? 'active' : ''}" data-window="1440">24h</button>
+        </div>
+      </div>
+    `;
+    if (!withHeadings) {
+      return `
+      <div class="timeline-controls-bar">
+        ${timeGroup}
+
+        ${windowGroup}
+      </div>
+    `;
+    }
     return `
       <div class="timeline-controls-bar">
-        <div class="timeline-datetime-group">
-          <span class="timeline-datetime-label">Start time</span>
-          <input type="datetime-local" class="timeline-datetime-input" value="${dtValue}" />
-          <div class="timeline-quick-jumps">
-            <button class="timeline-quick-btn" data-jump="now">Now</button>
-            <button class="timeline-quick-btn" data-jump="-15m">-15m</button>
-            <button class="timeline-quick-btn" data-jump="-1h">-1h</button>
-            <button class="timeline-quick-btn" data-jump="-3h">-3h</button>
-            <button class="timeline-quick-btn" data-jump="-12h">-12h</button>
-            <button class="timeline-quick-btn" data-jump="day-start">Start of day</button>
-          </div>
+        <div class="timeline-sheet-section">
+          <div class="timeline-sheet-heading">Time</div>
+          ${timeGroup}
         </div>
 
-        <div class="timeline-window-group">
-          <span class="timeline-datetime-label">Window</span>
-          <div class="timeline-window-pills">
-            <button class="timeline-window-pill ${windowMinutes === 15 ? 'active' : ''}" data-window="15">15m</button>
-            <button class="timeline-window-pill ${windowMinutes === 30 ? 'active' : ''}" data-window="30">30m</button>
-            <button class="timeline-window-pill ${windowMinutes === 60 ? 'active' : ''}" data-window="60">1h</button>
-            <button class="timeline-window-pill ${windowMinutes === 180 ? 'active' : ''}" data-window="180">3h</button>
-            <button class="timeline-window-pill ${windowMinutes === 1440 ? 'active' : ''}" data-window="1440">24h</button>
-          </div>
+        <div class="timeline-sheet-section">
+          <div class="timeline-sheet-heading">Window</div>
+          ${windowGroup}
         </div>
       </div>
     `;
@@ -6537,10 +6660,15 @@ export class FrigateEventsCard extends LitElement {
     `;
     } else {
       const tabsMarkup = this._timelineCameraTabsMarkup(availableCameras, currentCamera);
+      const isTvLayout = layoutMode === 'tv';
+      // Compact: transport lives in the settings sheet (Playback section), the
+      // on-screen chrome is just the floating topbar + scrubber. TV keeps its
+      // on-screen transport bar and heading-free sheet.
+      const compactSheetInner = `<div class="timeline-sheet-section"><div class="timeline-sheet-heading">Playback</div>${this._timelineTransportMarkup(true)}</div>${this._timelineControlsMarkup(dtValue, windowMinutes, true)}`;
       container.innerHTML = `
       <div class="frigate-events-modal-content" role="dialog" aria-modal="true" aria-label="Timeline">
         <div class="timeline-compact-topbar">
-          ${tabsMarkup || '<div style="flex: 1 1 auto; min-width: 0;"></div>'}
+          ${tabsMarkup || `<span class="timeline-compact-camera-name"><span class="timeline-camera-badge" data-safe-text="${escapeHtml(this._formatCameraName(currentCamera))}"></span></span>`}
           <div class="timeline-compact-actions">
             <button class="timeline-settings-btn" data-action="toggle-settings" title="Time & window settings" aria-label="Time and window settings" aria-expanded="false">
               <svg viewBox="0 0 24 24"><path d="M19.14,12.94C19.18,12.64 19.2,12.33 19.2,12C19.2,11.68 19.18,11.36 19.14,11.06L21.16,9.48C21.34,9.34 21.39,9.07 21.27,8.87L19.27,5.41C19.16,5.22 18.92,5.15 18.7,5.24L16.32,6.2C15.82,5.82 15.28,5.5 14.7,5.25L14.34,2.74C14.31,2.5 14.1,2.32 13.86,2.32H10.14C9.9,2.32 9.69,2.5 9.66,2.74L9.3,5.25C8.72,5.5 8.18,5.82 7.68,6.2L5.3,5.24C5.08,5.15 4.84,5.22 4.73,5.41L2.73,8.87C2.61,9.07 2.66,9.34 2.84,9.48L4.86,11.06C4.82,11.36 4.8,11.68 4.8,12C4.8,12.33 4.82,12.64 4.86,12.94L2.84,14.52C2.66,14.66 2.61,14.93 2.73,15.13L4.73,18.59C4.84,18.78 5.08,18.85 5.3,18.76L7.68,17.8C8.18,18.18 8.72,18.5 9.3,18.75L9.66,21.26C9.69,21.5 9.9,21.68 10.14,21.68H13.86C14.1,21.68 14.31,21.5 14.34,21.26L14.7,18.75C15.28,18.5 15.82,18.18 16.32,17.8L18.7,18.76C18.92,18.85 19.16,18.78 19.27,18.59L21.27,15.13C21.39,14.93 21.34,14.66 21.16,14.52L19.14,12.94M12,15.6C10.02,15.6 8.4,13.98 8.4,12C8.4,10.02 10.02,8.4 12,8.4C13.98,8.4 15.6,10.02 15.6,12C15.6,13.98 13.98,15.6 12,15.6Z"/></svg>
@@ -6562,15 +6690,16 @@ export class FrigateEventsCard extends LitElement {
 
           <!-- Scrubber Track -->
           ${this._timelineScrubberMarkup(startDate, endDate, true)}
-
+          ${isTvLayout ? `
           <!-- Transport & Speed Controls -->
           ${this._timelineTransportMarkup(true)}
+          ` : ''}
         </div>
 
         <div class="timeline-settings-backdrop" data-action="close-settings"></div>
         <div class="timeline-settings-sheet" role="dialog" aria-label="Timeline settings">
           <div class="timeline-settings-handle"></div>
-          ${this._timelineControlsMarkup(dtValue, windowMinutes)}
+          ${isTvLayout ? this._timelineControlsMarkup(dtValue, windowMinutes) : compactSheetInner}
         </div>
       </div>
     `;
