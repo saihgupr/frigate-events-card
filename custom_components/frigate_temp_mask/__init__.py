@@ -16,6 +16,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, HomeAssistantError, ServiceCall
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_call_later, async_track_time_interval
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.helpers.service import async_register_admin_service
 
@@ -26,6 +27,8 @@ _LOGGER = logging.getLogger(__name__)
 DEFAULT_PADDING = 0.10
 SYNC_INTERVAL_SECONDS = 30
 CONFIG_AUDIT_INTERVAL_SECONDS = 600  # 10 minutes background audit safety net
+STORAGE_VERSION = 1
+STORAGE_KEY = f"{DOMAIN}.state"
 
 
 def _coerce_frigate_box(value: object) -> list[float] | None:
@@ -895,6 +898,44 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
     # Optimistic default: assume modern Frigate (0.18+) so supports_dynamic_toggle starts
     # as true. The real version is fetched on the first sync and will override this.
     domain_data.setdefault("frigate_version", (0, 18, 0))
+    domain_data.setdefault("store", Store(hass, STORAGE_VERSION, STORAGE_KEY))
+    domain_data.setdefault("save_lock", asyncio.Lock())
+
+    async def _async_save_state() -> None:
+        """Persist mask metadata so durations survive HA restarts."""
+        store = domain_data.get("store")
+        if store is None:
+            return
+        try:
+            async with domain_data["save_lock"]:
+                await store.async_save({
+                    "active_masks": domain_data.get("active_masks", {}),
+                    "pending_restart_masks": domain_data.get("pending_restart_masks", {}),
+                })
+        except Exception as e:
+            _LOGGER.warning("Could not persist temporary mask state: %s", e)
+
+    def _schedule_save() -> None:
+        hass.async_create_task(_async_save_state())
+
+    if not domain_data.get("store_loaded"):
+        try:
+            stored = await domain_data["store"].async_load()
+            if isinstance(stored, dict):
+                loaded_active = stored.get("active_masks")
+                if isinstance(loaded_active, dict):
+                    domain_data["active_masks"].update(loaded_active)
+                loaded_pending = stored.get("pending_restart_masks")
+                if isinstance(loaded_pending, dict):
+                    domain_data["pending_restart_masks"].update(loaded_pending)
+                _LOGGER.info(
+                    "Restored %s active and %s pending temporary mask(s) from storage",
+                    len(domain_data["active_masks"]),
+                    len(domain_data["pending_restart_masks"]),
+                )
+        except Exception as e:
+            _LOGGER.warning("Could not restore temporary mask state from storage: %s", e)
+        domain_data["store_loaded"] = True
 
     def _get_frigate_base_url() -> str:
         # Check if Frigate integration data is available
@@ -1021,6 +1062,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                         )
                         pending.pop(mask_id, None)
                     _update_state()
+                    _schedule_save()
 
         # 2. Check for any active masks whose duration expired while offline or timers stalled
         active = domain_data.get("active_masks", {})
@@ -1090,74 +1132,59 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                                 existing["label"] = label_val
                             if not existing.get("polygon") and poly_str:
                                 existing["polygon"] = poly_str
+                            # A tracked finite-duration mask may have expired while
+                            # Frigate was offline. The earlier expiration pass
+                            # could not remove it until Frigate came back up.
+                            exp_ts = _parse_iso_to_timestamp(existing.get("expires_at"))
+                            if (
+                                not existing.get("is_orphan")
+                                and exp_ts is not None
+                                and exp_ts <= now_ts
+                            ):
+                                _LOGGER.info(
+                                    "Tracked temporary mask %s expired while Frigate was unavailable, pruning...",
+                                    disc_id,
+                                )
+                                await async_handle_remove_mask(
+                                    ServiceCall(DOMAIN, "remove_mask", {"mask_id": disc_id})
+                                )
                             continue
 
-                        # Discovered mask not yet tracked in active_masks
-                        # Adopt ANY temporary mask found in Frigate config into HA so the user sees it
-                        # and can manage/remove/extend it from the card popup.
-                        is_orphan = False
-                        if creation_ts is not None:
-                            created_dt = datetime.fromtimestamp(creation_ts, timezone.utc)
-                            expires_dt = created_dt + timedelta(hours=24)
-                            remaining_seconds = expires_dt.timestamp() - now_ts
-                            duration_hrs = 24.0
-                            if remaining_seconds <= 0:
-                                # Mask creation is older than 24h: adopt as orphan with expired timestamp
-                                # so it displays as 'Expired' in the UI with full remove/extend controls.
-                                is_orphan = True
-                                remaining_seconds = 0
-                        else:
-                            duration_hrs = 24.0
-                            expires_dt = now_dt + timedelta(hours=duration_hrs)
-                            remaining_seconds = duration_hrs * 3600.0
-
-                        # Adopt orphan mask
+                        # Discovered mask not yet tracked in active_masks.
+                        # Adopt ANY temporary mask found in Frigate config into HA so
+                        # the user sees it and can manage/remove/extend it from the
+                        # card popup. Never delete it based on the timestamp embedded
+                        # in the mask ID: durations are user-selected (48h, 7d,
+                        # infinite, ...) and the ID only records creation time. A
+                        # wrong guess here is what silently wiped masks on restart.
+                        # If we have no persisted expiry, adopt it without one.
                         box_coords = _polygon_to_box(poly_str)
                         adopted_mask = {
                             "mask_id": disc_id,
                             "camera": cam_name,
                             "polygon": poly_str,
-                            "duration_hours": duration_hrs,
-                            "expires_at": expires_dt.isoformat().replace("+00:00", "Z"),
+                            "duration_hours": -1,
+                            "expires_at": None,
                             "event_id": disc_id,
                             "label": label_val,
                             "box": box_coords,
                             "width": 1920,
                             "height": 1080,
-                            "is_orphan": is_orphan,
+                            "is_orphan": True,
                         }
                         active[disc_id] = adopted_mask
                         domain_data["pending_restart_masks"].pop(disc_id, None)
 
-                        # Only schedule timer if not already an expired orphan
-                        if not is_orphan and remaining_seconds > 0:
-                            def _make_expire_cb(m_id, dur_h):
-                                async def _expire_callback(_now):
-                                    _LOGGER.info(
-                                        "Adopted temporary mask %s expired after %s hours, pruning...",
-                                        m_id,
-                                        dur_h,
-                                    )
-                                    await async_handle_remove_mask(ServiceCall(DOMAIN, "remove_mask", {"mask_id": m_id}))
-                                return _expire_callback
-
-                            if disc_id in domain_data["timers"]:
-                                domain_data["timers"][disc_id]()
-                            domain_data["timers"][disc_id] = async_call_later(
-                                hass,
-                                max(1, int(remaining_seconds)),
-                                _make_expire_cb(disc_id, duration_hrs),
-                            )
-
                         _LOGGER.info(
-                            "Adopted orphan temporary mask %s (camera: '%s', label: '%s', expired: %s)",
+                            "Adopted temporary mask %s from Frigate config (camera: '%s', label: '%s', created: %s). No persisted expiry, so it will not auto-expire.",
                             disc_id,
                             cam_name,
                             label_val,
-                            is_orphan,
+                            datetime.fromtimestamp(creation_ts, timezone.utc).isoformat() if creation_ts else "unknown",
                         )
 
                     _update_state()
+                    _schedule_save()
         except Exception as e:
             _LOGGER.warning("Error reconciling Frigate temporary masks from config: %s", e)
 
@@ -1362,6 +1389,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
             "height": height,
         }
         _update_state()
+        _schedule_save()
 
         # Schedule automatic expiration only if not infinite
         if not is_infinite:
@@ -1403,6 +1431,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         if not is_v18_or_newer and removed_mask:
             domain_data["pending_restart_masks"][mask_id] = removed_mask
         _update_state()
+        _schedule_save()
 
         session = async_get_clientsession(hass)
         safe_mask_id = re.sub(r"[^a-zA-Z0-9_]", "_", mask_id)
@@ -1433,6 +1462,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                 domain_data["pending_restart_masks"].pop(mask_id, None)
                 domain_data["pending_restart_masks"].pop(safe_mask_id, None)
                 _update_state()
+                _schedule_save()
                 return
 
             # If camera wasn't known from active_masks, attempt to discover it from raw config for toggle
@@ -1465,6 +1495,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                     # confirmed gone before the user reopens the mask manager.
                     domain_data["last_config_audit_ts"] = 0.0
                     _update_state()
+                    _schedule_save()
                 else:
                     err_msg = await save_resp.text()
                     _LOGGER.error("Failed to save Frigate config during remove_mask (status: %s): %s", save_resp.status, err_msg)
@@ -1492,6 +1523,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         )
         domain_data["active_masks"][mask_id] = updated_mask
         _update_state()
+        _schedule_save()
 
         if duration_hours > 0:
             async def _expire_callback(_now):
@@ -1523,6 +1555,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                 domain_data["pending_restart_masks"][m_id] = removed_mask
         domain_data["active_masks"].clear()
         _update_state()
+        _schedule_save()
 
         # In Frigate 0.18+, toggle all active masks OFF dynamically
         if is_v18_or_newer:
@@ -1544,6 +1577,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
             if "TEMP_MASK_" not in raw_config and "temp_mask_" not in raw_config:
                 domain_data["pending_restart_masks"].clear()
                 _update_state()
+                _schedule_save()
                 return
 
             if is_v18_or_newer:
@@ -1572,6 +1606,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                         _LOGGER.info("Pruned all temporary masks (reloaded Frigate detector)")
                     domain_data["pending_restart_masks"].clear()
                     _update_state()
+                    _schedule_save()
                 else:
                     err_msg = await save_resp.text()
                     _LOGGER.error("Failed to save Frigate config during prune_all (status: %s): %s", save_resp.status, err_msg)
@@ -1589,6 +1624,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                 _LOGGER.info("Frigate restart triggered via service: %s", resp.status)
                 domain_data["pending_restart_masks"].clear()
                 _update_state()
+                _schedule_save()
         except Exception as e:
             _LOGGER.error("Failed to restart Frigate: %s", e)
 
@@ -1605,6 +1641,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
             domain_data["pending_restart_masks"].clear()
             _LOGGER.info("Dismissed all pending restart masks")
         _update_state()
+        _schedule_save()
 
     async def async_handle_delete_event(call: ServiceCall):
         event_id = call.data.get("event_id")
@@ -1666,6 +1703,35 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
             await _async_sync_frigate_state()
         domain_data["unsub_sync"] = async_track_time_interval(
             hass, _periodic_sync_cb, timedelta(seconds=SYNC_INTERVAL_SECONDS)
+        )
+
+    # Re-arm expiration timers for masks restored from storage so a HA restart
+    # keeps the user's chosen duration instead of falling back to a 24h guess.
+    now_ts = datetime.now(timezone.utc).timestamp()
+    for restored_id, restored_mask in list(domain_data["active_masks"].items()):
+        if restored_mask.get("is_orphan") or restored_id in domain_data["timers"]:
+            continue
+        exp_ts = _parse_iso_to_timestamp(restored_mask.get("expires_at"))
+        if exp_ts is None:
+            continue
+        remaining = int(exp_ts - now_ts)
+        if remaining <= 0:
+            # Leave it to the initial/periodic sync, which removes expired
+            # masks before reconciling against Frigate's config. Removing it
+            # here as a separate task can race with that reconciliation.
+            _LOGGER.info("Restored temporary mask %s has already expired; it will be removed on the next sync.", restored_id)
+            continue
+
+        def _make_restored_expire_cb(m_id, dur_h):
+            async def _expire_callback(_now):
+                _LOGGER.info("Restored temporary mask %s expired after %s hours, pruning...", m_id, dur_h)
+                await async_handle_remove_mask(ServiceCall(DOMAIN, "remove_mask", {"mask_id": m_id}))
+            return _expire_callback
+
+        domain_data["timers"][restored_id] = async_call_later(
+            hass,
+            max(1, remaining),
+            _make_restored_expire_cb(restored_id, restored_mask.get("duration_hours", 24)),
         )
 
     # Initial state update & background sync with running Frigate process

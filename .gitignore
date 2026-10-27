@@ -24,3 +24,7 @@ npm-debug.log*
 # Deploy script
 deploy.sh
 .git-backup-*
+
+# Python
+__pycache__/
+*.py[cod]

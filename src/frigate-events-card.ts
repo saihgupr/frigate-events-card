@@ -1,5 +1,5 @@
 /**
- * Frigate Events Card - A simple Lovelace card for displaying recent Frigate events
+ * Frigate Events Card - Lovelace card for Frigate events, live WebRTC, timeline playback, and temporary masks
  */
 import { LitElement, html, css, PropertyValues, TemplateResult, CSSResult } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
@@ -9,13 +9,19 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.5.23';
+const CARD_VERSION = '2.6.1';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
 const FALLBACK_POLL_INTERVAL = 10000; // 10 seconds
 const HOVER_CROP_DEFAULT_SMOOTHING = 1.0; // 0.0 is jerky, 1.0 is smoothest
 const HOVER_CROP_MARGIN_PERCENT = 0.20; // 20% margin on each side of the container
+
+// Frigate's nginx-vod-module is compiled with a hard limit of 1080 clips per
+// playlist. Each clip is a recording segment (~10s), so a single VOD request
+// with more than ~3h of footage returns HTTP 503. Keep each VOD chunk well
+// below that limit and page through recordings for larger timeline windows.
+const TIMELINE_VOD_MAX_CLIPS = 900;
 
 const escapeHtml = (value: unknown): string => String(value ?? '')
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -173,6 +179,8 @@ export class FrigateEventsCard extends LitElement {
   @state() private _liveViewError?: string;   // Set when live feed fails gracefully
   @state() private _isLiveMuted = true;
   @state() private _maskManagerSelectedCamera = 'all';
+  // undefined = default (first mask expanded), '' = all collapsed, otherwise a mask id
+  private _maskManagerExpandedId?: string;
   @state() private _localPendingMasks: any[] = [];
 
   private _unsubscribe?: () => void;
@@ -182,6 +190,9 @@ export class FrigateEventsCard extends LitElement {
   private _modalContainer?: HTMLDivElement;
   private _maskManagerContainer?: HTMLDivElement;
   private _maskManagerTimer?: ReturnType<typeof setInterval>;
+  private _maskManagerSnapshotUrls = new Map<string, string>();
+  private _maskManagerEventSnapshotUrls = new Map<string, string>();
+  private _maskManagerSnapshotToken = 0;
   private _maskDurationOverrides = new Map<string, number>();
   private _hoverVideoCropPositions = new WeakMap<HTMLVideoElement, ObjectPositionPercent>();
   private static _stylesInjected = false;
@@ -223,6 +234,10 @@ export class FrigateEventsCard extends LitElement {
   private _timelineCamera?: string;
   private _timelineStartTs = 0;
   private _timelineEndTs = 0;
+  // The VOD stream only covers a chunk of the visible timeline window so that
+  // long windows (e.g. 24h) never exceed Frigate's nginx-vod clip limit.
+  private _timelineVodStartTs = 0;
+  private _timelineVodEndTs = 0;
   private _timelineWindowDurationSec = 3600; // default 1 hour
   private _timelinePlaybackRate = 1;
   private _timelineSpeedInterval?: number;
@@ -301,8 +316,8 @@ export class FrigateEventsCard extends LitElement {
         if (this.hass && !this._unsubscribe) {
           this._subscribeToEvents();
         }
-        const oldMasks = oldHass?.states?.['sensor.frigate_active_masks'];
-        const newMasks = this.hass?.states?.['sensor.frigate_active_masks'];
+        const oldMasks = this._getTemporaryMaskSensor(oldHass?.states);
+        const newMasks = this._getTemporaryMaskSensor(this.hass?.states);
         if (oldMasks !== newMasks) {
           if (this._maskManagerContainer) {
             this._renderMaskManagerContent(this._maskManagerContainer);
@@ -313,6 +328,18 @@ export class FrigateEventsCard extends LitElement {
       }
     }
     return true;
+  }
+
+  /** Resolve the integration sensor by its stable unique-id suffix. HA may prefix
+   * the suggested object id with the integration/config-entry name. */
+  private _getTemporaryMaskSensor(states: HomeAssistant['states'] | undefined): any {
+    if (!states) return undefined;
+    if (states['sensor.frigate_active_masks']) return states['sensor.frigate_active_masks'];
+    const matches = Object.entries(states).filter(([entityId, state]: [string, any]) =>
+      entityId.startsWith('sensor.') && entityId.endsWith('_frigate_active_masks') &&
+      Array.isArray(state?.attributes?.masks)
+    );
+    return matches.length === 1 ? matches[0][1] : undefined;
   }
 
   protected async firstUpdated(): Promise<void> {
@@ -1742,557 +1769,491 @@ export class FrigateEventsCard extends LitElement {
         flex-shrink: 0;
       }
 
-      /* ─── Mask Manager Modal Styles ─── */
+      /* ─── Mask Manager ───
+         Quiet surface that inherits the Home Assistant theme. Spacing follows a 4/8px scale. */
+      .frigate-mask-manager-modal {
+        --mm-text: var(--primary-text-color, #f2f2f7);
+        --mm-text-2: var(--secondary-text-color, #9a9aa2);
+        --mm-line: var(--divider-color, rgba(255, 255, 255, 0.12));
+        --mm-accent: var(--primary-color, #0a84ff);
+        --mm-warn: #ff9f0a;
+        --mm-danger: var(--error-color, #ff453a);
+        --mm-fill: color-mix(in srgb, var(--mm-text) 7%, transparent);
+        --mm-fill-hover: color-mix(in srgb, var(--mm-text) 12%, transparent);
+      }
+
       .frigate-mask-manager-modal .frigate-events-modal-content {
-        min-width: min(580px, 94vw);
-        max-width: 640px;
-        max-height: 85vh;
-        border: 1px solid rgba(255, 255, 255, 0.12);
-        box-shadow: 0 20px 40px rgba(0, 0, 0, 0.7);
-        background: #181818;
+        width: min(560px, 94vw);
+        min-width: 0;
+        max-width: 560px;
+        height: auto;
+        max-height: min(720px, calc(100dvh - 32px));
+        border: 1px solid var(--mm-line);
+        border-radius: 16px;
+        box-shadow: 0 24px 48px rgba(0, 0, 0, 0.5);
+        background: var(--card-background-color, #1c1c1e);
+        color: var(--mm-text);
+      }
+
+      .frigate-mask-manager-modal .frigate-events-modal-close {
+        top: 12px;
+        right: 12px;
+        width: 32px;
+        height: 32px;
+        background: var(--mm-fill);
+        color: var(--mm-text-2);
+      }
+
+      .frigate-mask-manager-modal .frigate-events-modal-close:hover {
+        background: var(--mm-fill-hover);
+        color: var(--mm-text);
+        transform: none;
       }
 
       .mask-manager-header {
         display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 16px 20px;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-        background: rgba(26, 26, 26, 0.98);
-      }
-
-      .mask-manager-header-left {
-        display: flex;
-        align-items: center;
-        gap: 10px;
+        align-items: baseline;
+        gap: 8px;
+        flex-shrink: 0;
+        padding: 20px 56px 12px 24px;
       }
 
       .mask-manager-title {
-        font-size: 16px;
+        margin: 0;
+        font-size: 20px;
         font-weight: 600;
-        color: #ffffff;
-        display: flex;
-        align-items: center;
-        gap: 8px;
+        letter-spacing: -0.01em;
+        color: var(--mm-text);
       }
 
-      .mask-manager-count-badge {
-        font-size: 11px;
-        padding: 2px 8px;
-        border-radius: 10px;
-        background: rgba(59, 130, 246, 0.2);
-        color: #93c5fd;
-        border: 1px solid rgba(59, 130, 246, 0.35);
-        font-weight: 600;
-      }
-
-      .mask-manager-header-actions {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-      }
-
-      .mask-manager-body {
-        padding: 16px 20px;
-        overflow-y: auto;
-        max-height: calc(85vh - 75px);
-        display: flex;
-        flex-direction: column;
-        gap: 12px;
-        box-sizing: border-box;
+      .mask-manager-count {
+        font-size: 13px;
+        color: var(--mm-text-2);
       }
 
       .mask-filter-tabs {
         display: flex;
-        gap: 6px;
+        gap: 4px;
+        flex-shrink: 0;
+        padding: 0 16px;
         overflow-x: auto;
-        padding-bottom: 4px;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        scrollbar-width: none;
+        border-bottom: 1px solid var(--mm-line);
+      }
+
+      .mask-filter-tabs::-webkit-scrollbar {
+        display: none;
       }
 
       .mask-filter-tab {
-        padding: 4px 10px;
-        border-radius: 6px;
-        font-size: 12px;
+        position: relative;
+        padding: 8px 8px 12px;
+        font-size: 13px;
         font-weight: 500;
-        color: #aaa;
-        background: transparent;
-        border: 1px solid rgba(255, 255, 255, 0.12);
-        cursor: pointer;
-        transition: all 0.15s;
         font-family: inherit;
+        color: var(--mm-text-2);
+        background: none;
+        border: none;
         white-space: nowrap;
+        cursor: pointer;
+        transition: color 0.15s ease;
       }
 
       .mask-filter-tab:hover {
-        background: rgba(255, 255, 255, 0.08);
-        color: #fff;
+        color: var(--mm-text);
       }
 
       .mask-filter-tab.active {
-        background: rgba(59, 130, 246, 0.25);
-        color: #93c5fd;
-        border-color: #3b82f6;
+        color: var(--mm-text);
       }
 
-      .mask-cards-list {
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-      }
-
-      .mask-card {
-        background: rgba(255, 255, 255, 0.04);
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 10px;
-        padding: 14px;
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-        transition: border-color 0.15s;
-      }
-
-      .mask-card:hover {
-        border-color: rgba(96, 165, 250, 0.4);
-      }
-
-      .mask-card-header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 8px;
-        flex-wrap: wrap;
-      }
-
-      .mask-card-title-col {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-      }
-
-      .mask-card-main-row {
-        display: flex;
-        gap: 12px;
-        align-items: stretch;
-      }
-
-      .mask-visual-preview {
-        position: relative;
-        width: 120px;
-        min-width: 120px;
-        aspect-ratio: 16 / 9;
-        height: auto;
-        border-radius: 6px;
-        overflow: hidden;
-        background: radial-gradient(circle at center, #1e293b 0%, #0f172a 100%);
-        border: none;
-        flex-shrink: 0;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-      }
-
-      .mask-preview-thumb {
+      .mask-filter-tab.active::after {
+        content: '';
         position: absolute;
-        inset: 0;
-        width: 100%;
-        height: 100%;
-        object-fit: cover;
-        display: block;
-        z-index: 1;
+        left: 8px;
+        right: 8px;
+        bottom: -1px;
+        height: 2px;
+        border-radius: 2px;
+        background: var(--mm-accent);
       }
 
+      .mask-filter-count {
+        margin-left: 2px;
+        font-weight: 400;
+        color: var(--mm-text-2);
+      }
+
+      .mask-manager-body {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        padding: 8px 8px 16px;
+        box-sizing: border-box;
+      }
+
+      .mask-list {
+        display: flex;
+        flex-direction: column;
+      }
+
+      .mask-row {
+        border-radius: 12px;
+        transition: background 0.15s ease;
+      }
+
+      .mask-row + .mask-row {
+        margin-top: 2px;
+      }
+
+      .mask-row.expanded {
+        background: var(--mm-fill);
+      }
+
+      .mask-row-head {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        width: 100%;
+        min-height: 64px;
+        padding: 8px 12px;
+        box-sizing: border-box;
+        font-family: inherit;
+        text-align: left;
+        color: inherit;
+        background: none;
+        border: none;
+        border-radius: 12px;
+      }
+
+      button.mask-row-head {
+        cursor: pointer;
+      }
+
+      button.mask-row-head:hover {
+        background: var(--mm-fill);
+      }
+
+      .mask-row.expanded button.mask-row-head:hover {
+        background: none;
+      }
+
+      .mask-row-head:focus-visible,
+      .mask-seg-btn:focus-visible,
+      .mask-chip:focus-visible,
+      .mask-remove-btn:focus-visible,
+      .mask-text-btn:focus-visible,
+      .mask-filter-tab:focus-visible {
+        outline: 2px solid var(--mm-accent);
+        outline-offset: 2px;
+      }
+
+      .mask-thumb,
+      .mask-frame {
+        position: relative;
+        overflow: hidden;
+        background: var(--mm-fill);
+      }
+
+      .mask-thumb {
+        flex: 0 0 72px;
+        width: 72px;
+        aspect-ratio: 16 / 9;
+        border-radius: 6px;
+      }
+
+      .mask-row.expanded .mask-thumb {
+        display: none;
+      }
+
+      .mask-frame {
+        aspect-ratio: 16 / 9;
+        border-radius: 8px;
+        margin: 0 12px;
+      }
+
+      .mask-preview-thumb,
       .mask-preview-minimap {
         position: absolute;
         inset: 0;
         width: 100%;
         height: 100%;
-        z-index: 2;
+      }
+
+      .mask-preview-thumb {
+        object-fit: cover;
+        display: block;
+      }
+
+      .mask-preview-minimap {
         pointer-events: none;
       }
 
-      .mask-preview-minimap svg {
-        position: absolute;
-        inset: 0;
-        width: 100%;
-        height: 100%;
-      }
-
       .minimap-poly {
-        fill: rgba(59, 130, 246, 0.45);
-        stroke: #60a5fa;
-        stroke-width: 2.5px;
+        fill: rgba(255, 255, 255, 0.14);
+        stroke: rgba(255, 255, 255, 0.9);
+        stroke-width: 1.5px;
         vector-effect: non-scaling-stroke;
-        filter: drop-shadow(0 0 3px rgba(59, 130, 246, 0.8));
       }
 
-      .mask-card.pending-restart .minimap-poly {
-        fill: rgba(245, 158, 11, 0.3);
-        stroke: #fbbf24;
-        stroke-dasharray: 4 2;
-      }
-
-      .minimap-pos-tag {
-        position: absolute;
-        bottom: 3px;
-        left: 4px;
-        font-size: 9px;
-        font-weight: 600;
-        color: #93c5fd;
-        background: rgba(15, 23, 42, 0.9);
-        border: 1px solid rgba(96, 165, 250, 0.4);
-        padding: 1px 5px;
-        border-radius: 3px;
-        z-index: 3;
-        line-height: 1.2;
-        backdrop-filter: blur(2px);
-      }
-
-      .mask-card-info {
+      .mask-row-text {
         flex: 1;
         min-width: 0;
         display: flex;
         flex-direction: column;
-        justify-content: space-between;
-        gap: 6px;
+        gap: 2px;
       }
 
-      .mask-object-pill {
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-        padding: 2px 7px;
-        border-radius: 4px;
-        font-size: 11px;
+      .mask-row-title {
+        font-size: 15px;
         font-weight: 600;
-        background: rgba(59, 130, 246, 0.2);
-        color: #93c5fd;
-        border: 1px solid rgba(59, 130, 246, 0.4);
+        line-height: 20px;
+        color: var(--mm-text);
         text-transform: capitalize;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
 
-      .mask-camera-pill {
+      .mask-row-sub {
+        font-size: 13px;
+        line-height: 16px;
+        color: var(--mm-text-2);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .mask-row-time {
+        flex-shrink: 0;
+        font-size: 13px;
+        font-variant-numeric: tabular-nums;
+        color: var(--mm-text-2);
+      }
+
+      .mask-row-time.expiring {
+        color: var(--mm-warn);
+      }
+
+      .mask-row-chevron {
+        flex: 0 0 20px;
+        width: 20px;
+        height: 20px;
+        fill: var(--mm-text-2);
+        transition: transform 0.15s ease;
+      }
+
+      .mask-row.expanded .mask-row-chevron {
+        transform: rotate(90deg);
+      }
+
+      .mask-row-detail {
+        display: none;
+        padding: 0 0 12px;
+      }
+
+      .mask-row.expanded .mask-row-detail {
+        display: block;
+      }
+
+      .mask-meta {
+        margin: 8px 12px 0;
         font-size: 12px;
-        font-weight: 600;
-        color: #fff;
-        background: rgba(255, 255, 255, 0.12);
-        padding: 3px 8px;
-        border-radius: 4px;
-        text-transform: capitalize;
+        line-height: 16px;
+        color: var(--mm-text-2);
       }
 
-      .mask-id-pill {
-        font-size: 11px;
-        font-family: monospace;
-        color: #94a3b8;
-        background: rgba(0, 0, 0, 0.35);
-        padding: 3px 6px;
-        border-radius: 4px;
-      }
-
-      .mask-card-time-badge {
+      .mask-controls {
         display: flex;
-        align-items: center;
-        gap: 5px;
-        font-size: 12px;
-        font-weight: 600;
-        color: #38bdf8;
-        background: rgba(56, 189, 248, 0.15);
-        padding: 3px 8px;
-        border-radius: 4px;
+        align-items: flex-end;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin: 12px 12px 0;
       }
 
-      .mask-card-time-badge.expiring {
-        color: #fbbf24;
-        background: rgba(251, 191, 36, 0.15);
-      }
-
-      .mask-card-details {
+      .mask-duration {
         display: flex;
         flex-direction: column;
         gap: 4px;
+      }
+
+      .mask-control-label {
         font-size: 12px;
-        color: #aaa;
-        background: rgba(0, 0, 0, 0.25);
-        padding: 6px 8px;
-        border-radius: 6px;
+        line-height: 16px;
+        color: var(--mm-text-2);
       }
 
-      .mask-detail-row {
-        display: flex;
-        gap: 8px;
-        align-items: center;
+      .mask-segmented {
+        display: inline-flex;
+        padding: 2px;
+        gap: 2px;
+        border-radius: 8px;
+        background: var(--mm-fill);
       }
 
-      .mask-detail-row .detail-label {
-        color: #888;
-        font-size: 11px;
-      }
-
-      .mask-detail-row .detail-value {
-        color: #ddd;
-        font-size: 12px;
-      }
-
-      .mask-detail-row .detail-value.mono {
-        font-family: monospace;
-        font-size: 11px;
-        color: #94a3b8;
-        word-break: break-all;
-      }
-
-      .mask-card-actions {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 10px;
-        flex-wrap: wrap;
-        padding-top: 2px;
-      }
-
-      .mask-duration-selector {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        flex-wrap: wrap;
-      }
-
-      .mask-duration-selector .duration-title {
-        font-size: 11px;
-        color: #888;
+      .mask-seg-btn {
+        min-width: 44px;
+        min-height: 32px;
+        padding: 0 12px;
+        font-size: 13px;
         font-weight: 500;
-      }
-
-      .mask-duration-chips {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 4px;
-        align-items: center;
-      }
-
-      .mask-duration-chip {
-        padding: 3px 7px;
-        border-radius: 4px;
-        font-size: 11px;
-        font-weight: 500;
-        background: rgba(255, 255, 255, 0.08);
-        color: #ddd;
-        border: 1px solid rgba(255, 255, 255, 0.12);
-        cursor: pointer;
-        transition: all 0.15s;
         font-family: inherit;
+        color: var(--mm-text-2);
+        background: none;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: background 0.15s ease, color 0.15s ease;
       }
 
-      .mask-duration-chip:hover {
-        background: rgba(255, 255, 255, 0.18);
-        color: #fff;
+      .mask-seg-btn:hover {
+        color: var(--mm-text);
       }
 
-      .mask-duration-chip.active {
-        background: rgba(59, 130, 246, 0.3);
-        color: #93c5fd;
-        border-color: #60a5fa;
-        font-weight: 600;
+      .mask-seg-btn.active {
+        color: var(--mm-text);
+        background: var(--card-background-color, #1c1c1e);
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 0 0 0.5px var(--mm-line);
+      }
+
+      .mask-more {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin: 12px 12px 0;
+      }
+
+      .mask-more[hidden] {
+        display: none;
+      }
+
+      .mask-chip {
+        min-height: 32px;
+        padding: 0 12px;
+        font-size: 13px;
+        font-weight: 500;
+        font-family: inherit;
+        color: var(--mm-text-2);
+        background: none;
+        border: 1px solid var(--mm-line);
+        border-radius: 16px;
+        cursor: pointer;
+        transition: background 0.15s ease, color 0.15s ease;
+      }
+
+      .mask-chip:hover {
+        color: var(--mm-text);
+        background: var(--mm-fill);
+      }
+
+      .mask-chip.active {
+        color: var(--mm-text);
+        border-color: var(--mm-accent);
+      }
+
+      .mask-remove-btn,
+      .mask-text-btn {
+        min-height: 32px;
+        padding: 0 8px;
+        font-size: 13px;
+        font-weight: 500;
+        font-family: inherit;
+        background: none;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: background 0.15s ease;
       }
 
       .mask-remove-btn {
-        display: flex;
-        align-items: center;
-        gap: 5px;
-        padding: 5px 10px;
-        border-radius: 6px;
-        font-size: 12px;
-        font-weight: 600;
-        color: #cbd5e1;
-        background: rgba(255, 255, 255, 0.08);
-        border: 1px solid rgba(255, 255, 255, 0.18);
-        cursor: pointer;
-        transition: all 0.15s;
-        font-family: inherit;
-        margin-left: auto;
+        color: var(--mm-danger);
       }
 
       .mask-remove-btn:hover {
-        background: rgba(255, 255, 255, 0.18);
-        color: #ffffff;
-        border-color: rgba(255, 255, 255, 0.28);
+        background: color-mix(in srgb, var(--mm-danger) 14%, transparent);
       }
 
-      .mask-empty-state,
-      .mask-manager-empty {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        text-align: center;
-        padding: 36px 20px;
-        gap: 10px;
-        color: #888;
+      .mask-text-btn {
+        color: var(--mm-accent);
       }
 
-      .mask-empty-state svg,
-      .mask-manager-empty svg {
-        width: 44px;
-        height: 44px;
-        fill: #475569;
-        flex-shrink: 0;
+      .mask-text-btn:hover {
+        background: color-mix(in srgb, var(--mm-accent) 14%, transparent);
       }
 
-      .mask-empty-state h3,
-      .mask-empty-state h4,
-      .mask-manager-empty h3,
-      .mask-manager-empty h4 {
-        margin: 0;
-        font-size: 15px;
-        color: #cbd5e1;
-        font-weight: 600;
+      .mask-pending-section {
+        margin-top: 16px;
+        padding-top: 8px;
+        border-top: 1px solid var(--mm-line);
       }
 
-      .mask-empty-state p,
-      .mask-manager-empty p {
-        margin: 0;
-        font-size: 13px;
-        max-width: 380px;
-        line-height: 1.5;
-        color: #71717a;
-      }
-
-      .mask-manager-header-restart-btn {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        padding: 4px 9px;
-        border-radius: 6px;
-        font-size: 11px;
-        font-weight: 500;
-        color: #cbd5e1;
-        background: rgba(255, 255, 255, 0.08);
-        border: 1px solid rgba(255, 255, 255, 0.15);
-        cursor: pointer;
-        transition: all 0.15s;
-        font-family: inherit;
-      }
-
-      .mask-manager-header-restart-btn:hover {
-        background: rgba(255, 255, 255, 0.15);
-        color: #fff;
-        border-color: rgba(255, 255, 255, 0.25);
-      }
-
-      .mask-manager-header-restart-btn svg {
-        width: 13px;
-        height: 13px;
-        fill: currentColor;
-      }
-
-      .pending-masks-section {
-        margin-top: 10px;
-        padding-top: 10px;
-        border-top: 1px solid rgba(255, 255, 255, 0.08);
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-      }
-
-      .pending-section-title {
+      .mask-section-heading {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        font-size: 11px;
-        font-weight: 600;
-        color: #64748b;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-      }
-
-      .mask-section-dismiss-all-btn {
-        background: transparent;
-        border: none;
-        color: #60a5fa;
-        font-size: 10px;
+        padding: 8px 12px 4px;
+        font-size: 12px;
         font-weight: 500;
-        cursor: pointer;
-        padding: 2px 6px;
-        border-radius: 4px;
-        text-transform: none;
-        transition: all 0.15s;
+        color: var(--mm-text-2);
       }
 
-      .mask-section-dismiss-all-btn:hover {
-        background: rgba(96, 165, 250, 0.15);
-        color: #93c5fd;
+      .mask-row.pending .mask-thumb {
+        opacity: 0.5;
       }
 
-      .mask-card.pending-restart {
-        opacity: 0.75;
-        border-style: dashed;
+      .mask-row.pending .minimap-poly {
+        stroke-dasharray: 4 3;
       }
 
-      .mask-card-time-badge.pending {
-        background: rgba(255, 255, 255, 0.08);
-        color: #94a3b8;
-      }
-
-      .mask-card-pending-actions {
+      .mask-empty-state {
         display: flex;
+        flex-direction: column;
         align-items: center;
-        gap: 6px;
-        margin-left: auto;
+        text-align: center;
+        padding: 48px 24px;
+        gap: 8px;
       }
 
-      .mask-pending-dismiss-action {
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-        padding: 4px 8px;
-        border-radius: 5px;
-        font-size: 11px;
-        font-weight: 500;
-        color: #94a3b8;
-        background: rgba(255, 255, 255, 0.04);
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        cursor: pointer;
-        transition: all 0.15s;
-        font-family: inherit;
+      .mask-empty-state h4 {
+        margin: 0;
+        font-size: 17px;
+        font-weight: 600;
+        color: var(--mm-text);
       }
 
-      .mask-pending-dismiss-action:hover {
-        background: rgba(239, 68, 68, 0.15);
-        color: #f87171;
-        border-color: rgba(239, 68, 68, 0.3);
+      .mask-empty-state p {
+        margin: 0;
+        max-width: 320px;
+        font-size: 13px;
+        line-height: 20px;
+        color: var(--mm-text-2);
       }
 
-      .mask-pending-dismiss-action svg {
-        width: 12px;
-        height: 12px;
-        fill: currentColor;
+      @media (pointer: coarse) {
+        .mask-seg-btn,
+        .mask-chip,
+        .mask-remove-btn,
+        .mask-text-btn {
+          min-height: 44px;
+        }
       }
 
-      .mask-pending-restart-action {
-        display: inline-flex;
-        align-items: center;
-        gap: 5px;
-        padding: 4px 8px;
-        border-radius: 5px;
-        font-size: 11px;
-        font-weight: 500;
-        color: #94a3b8;
-        background: rgba(255, 255, 255, 0.06);
-        border: 1px solid rgba(255, 255, 255, 0.12);
-        cursor: pointer;
-        transition: all 0.15s;
-        font-family: inherit;
+      @media (max-width: 420px) {
+        .mask-thumb {
+          flex-basis: 56px;
+          width: 56px;
+        }
       }
 
-      .mask-pending-restart-action:hover {
-        background: rgba(255, 255, 255, 0.12);
-        color: #e2e8f0;
-      }
-
-      .mask-pending-restart-action svg {
-        width: 12px;
-        height: 12px;
-        fill: currentColor;
+      @media (prefers-reduced-motion: reduce) {
+        .mask-row,
+        .mask-row-chevron,
+        .mask-seg-btn,
+        .mask-chip {
+          transition: none;
+        }
       }
 
       /* ─── Event Modal Timeline Action Button ─── */
@@ -2324,113 +2285,151 @@ export class FrigateEventsCard extends LitElement {
         fill: currentColor;
       }
 
-      /* ─── Timeline Modal Styles ─── */
+      /* ─── Timeline ───
+         Same quiet surface as the mask manager: inherits the Home Assistant theme, 4/8px spacing.
+         The only saturated colors are data: event markers and the playhead. */
+      .frigate-timeline-modal {
+        --tl-text: var(--primary-text-color, #f2f2f7);
+        --tl-text-2: var(--secondary-text-color, #9a9aa2);
+        --tl-line: var(--divider-color, rgba(255, 255, 255, 0.12));
+        --tl-accent: var(--primary-color, #0a84ff);
+        --tl-warn: #ff9f0a;
+        --tl-ok: #30d158;
+        --tl-playhead: #ff453a;
+        --tl-fill: color-mix(in srgb, var(--tl-text) 7%, transparent);
+        --tl-fill-hover: color-mix(in srgb, var(--tl-text) 12%, transparent);
+      }
+
       .frigate-timeline-modal .frigate-events-modal-content {
         width: min(860px, 95vw);
-        min-width: min(860px, 95vw);
-        max-width: 900px;
-        max-height: 92vh;
-        border: 1px solid rgba(255, 255, 255, 0.12);
-        box-shadow: 0 24px 48px rgba(0, 0, 0, 0.8);
-        background: #161616;
+        min-width: 0;
+        max-width: 860px;
+        max-height: min(92vh, calc(100dvh - 32px));
+        border: 1px solid var(--tl-line);
+        border-radius: 16px;
+        box-shadow: 0 24px 48px rgba(0, 0, 0, 0.5);
+        background: var(--card-background-color, #1c1c1e);
+        color: var(--tl-text);
         display: flex;
         flex-direction: column;
+      }
+
+      .frigate-timeline-modal .frigate-events-modal-close {
+        top: 12px;
+        right: 12px;
+        width: 32px;
+        height: 32px;
+        background: var(--tl-fill);
+        color: var(--tl-text-2);
+      }
+
+      .frigate-timeline-modal .frigate-events-modal-close:hover {
+        background: var(--tl-fill-hover);
+        color: var(--tl-text);
+        transform: none;
       }
 
       .timeline-modal-header {
         display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 14px 20px;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-        background: rgba(24, 24, 24, 0.98);
-      }
-
-      .timeline-modal-header-left {
-        display: flex;
-        align-items: center;
-        gap: 10px;
+        align-items: baseline;
+        gap: 8px;
+        flex-shrink: 0;
+        padding: 20px 56px 12px 24px;
       }
 
       .timeline-modal-title {
-        font-size: 16px;
-        font-weight: 600;
-        color: #ffffff;
-        display: flex;
-        align-items: center;
-        gap: 8px;
         margin: 0;
-      }
-
-      .timeline-modal-title svg {
-        width: 18px;
-        height: 18px;
-        fill: #60a5fa;
+        font-size: 20px;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+        color: var(--tl-text);
       }
 
       .timeline-camera-badge {
-        font-size: 11px;
-        padding: 2px 8px;
-        border-radius: 10px;
-        background: rgba(59, 130, 246, 0.2);
-        color: #93c5fd;
-        border: 1px solid rgba(59, 130, 246, 0.35);
-        font-weight: 600;
+        font-size: 13px;
+        color: var(--tl-text-2);
       }
 
       .timeline-modal-body {
-        padding: 16px 20px;
+        flex: 1;
+        min-height: 0;
         overflow-y: auto;
+        overscroll-behavior: contain;
         display: flex;
         flex-direction: column;
-        gap: 14px;
+        gap: 16px;
+        padding: 16px 24px 24px;
         box-sizing: border-box;
       }
 
       .timeline-camera-tabs {
         display: flex;
-        gap: 6px;
+        gap: 4px;
+        flex-shrink: 0;
+        margin: -16px -24px 0;
+        padding: 0 16px;
         overflow-x: auto;
-        padding-bottom: 4px;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        scrollbar-width: none;
+        border-bottom: 1px solid var(--tl-line);
+      }
+
+      .timeline-camera-tabs::-webkit-scrollbar {
+        display: none;
       }
 
       .timeline-camera-tab {
-        padding: 5px 12px;
-        border-radius: 6px;
-        font-size: 12px;
+        position: relative;
+        padding: 8px 8px 12px;
+        font-size: 13px;
         font-weight: 500;
-        color: #aaa;
-        background: transparent;
-        border: 1px solid rgba(255, 255, 255, 0.12);
-        cursor: pointer;
-        transition: all 0.15s;
         font-family: inherit;
+        color: var(--tl-text-2);
+        background: none;
+        border: none;
         white-space: nowrap;
+        cursor: pointer;
+        transition: color 0.15s ease;
       }
 
-      .timeline-camera-tab:hover {
-        background: rgba(255, 255, 255, 0.08);
-        color: #fff;
-      }
-
+      .timeline-camera-tab:hover,
       .timeline-camera-tab.active {
-        background: rgba(59, 130, 246, 0.25);
-        color: #93c5fd;
-        border-color: #3b82f6;
+        color: var(--tl-text);
       }
 
-      /* Time & Window Controls Row */
+      .timeline-camera-tab.active::after {
+        content: '';
+        position: absolute;
+        left: 8px;
+        right: 8px;
+        bottom: -1px;
+        height: 2px;
+        border-radius: 2px;
+        background: var(--tl-accent);
+      }
+
+      .timeline-camera-tabs + .timeline-controls-bar {
+        margin-top: 0;
+      }
+
+      .timeline-camera-tab:focus-visible,
+      .timeline-quick-btn:focus-visible,
+      .timeline-window-pill:focus-visible,
+      .timeline-transport-btn:focus-visible,
+      .timeline-stepper-btn:focus-visible,
+      .timeline-speed-display:focus-visible,
+      .timeline-datetime-input:focus-visible,
+      .timeline-mute-btn:focus-visible {
+        outline: 2px solid var(--tl-accent);
+        outline-offset: 2px;
+      }
+
+      /* Time & window controls */
       .timeline-controls-bar {
         display: flex;
         flex-wrap: wrap;
-        align-items: center;
+        align-items: flex-end;
         justify-content: space-between;
-        gap: 10px;
-        background: rgba(255, 255, 255, 0.03);
-        padding: 10px 14px;
-        border-radius: 8px;
-        border: 1px solid rgba(255, 255, 255, 0.06);
+        gap: 12px 24px;
       }
 
       .timeline-datetime-group {
@@ -2441,94 +2440,89 @@ export class FrigateEventsCard extends LitElement {
       }
 
       .timeline-datetime-label {
-        font-size: 12px;
-        font-weight: 500;
-        color: #94a3b8;
+        font-size: 13px;
+        color: var(--tl-text-2);
       }
 
       .timeline-datetime-input {
-        background: rgba(0, 0, 0, 0.4);
-        border: 1px solid rgba(255, 255, 255, 0.15);
-        color: #ffffff;
-        padding: 5px 10px;
-        border-radius: 6px;
-        font-size: 12px;
+        background: var(--tl-fill);
+        border: 1px solid transparent;
+        color: var(--tl-text);
+        color-scheme: dark light;
+        height: 32px;
+        padding: 0 10px;
+        border-radius: 8px;
+        font-size: 13px;
         font-family: inherit;
-        outline: none;
-        transition: border-color 0.15s;
+        box-sizing: border-box;
+        transition: background 0.15s ease;
+      }
+
+      .timeline-datetime-input:hover {
+        background: var(--tl-fill-hover);
       }
 
       .timeline-datetime-input:focus {
-        border-color: #3b82f6;
+        outline: none;
+        border-color: var(--tl-accent);
       }
 
-      .timeline-quick-jumps {
-        display: flex;
+      .timeline-quick-jumps,
+      .timeline-window-pills {
+        display: inline-flex;
         align-items: center;
-        gap: 4px;
         flex-wrap: wrap;
+        gap: 2px;
+        padding: 2px;
+        border-radius: 10px;
+        background: var(--tl-fill);
       }
 
-      .timeline-quick-btn {
-        padding: 3px 8px;
-        font-size: 11px;
+      .timeline-quick-btn,
+      .timeline-window-pill {
+        height: 28px;
+        padding: 0 10px;
+        font-size: 13px;
         font-weight: 500;
-        border-radius: 4px;
-        background: rgba(255, 255, 255, 0.06);
-        color: #cbd5e1;
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        cursor: pointer;
-        transition: all 0.15s;
         font-family: inherit;
+        border-radius: 8px;
+        background: none;
+        color: var(--tl-text-2);
+        border: none;
+        cursor: pointer;
+        white-space: nowrap;
+        transition: background 0.15s ease, color 0.15s ease;
       }
 
-      .timeline-quick-btn:hover {
-        background: rgba(255, 255, 255, 0.12);
-        color: #ffffff;
+      .timeline-quick-btn:hover,
+      .timeline-window-pill:hover {
+        background: var(--tl-fill-hover);
+        color: var(--tl-text);
+      }
+
+      .timeline-window-pill.active {
+        background: var(--card-background-color, #1c1c1e);
+        color: var(--tl-text);
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
       }
 
       .timeline-window-group {
         display: flex;
         align-items: center;
-        gap: 6px;
+        gap: 8px;
       }
 
-      .timeline-window-pills {
-        display: flex;
-        gap: 4px;
-      }
-
-      .timeline-window-pill {
-        padding: 3px 8px;
-        font-size: 11px;
-        font-weight: 500;
-        border-radius: 4px;
-        background: transparent;
-        color: #94a3b8;
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        cursor: pointer;
-        transition: all 0.15s;
-        font-family: inherit;
-      }
-
-      .timeline-window-pill.active {
-        background: rgba(59, 130, 246, 0.25);
-        color: #93c5fd;
-        border-color: #3b82f6;
-      }
-
-      /* Video Player Container */
+      /* Video player */
       .timeline-player-container {
         position: relative;
         width: 100%;
         aspect-ratio: 16 / 9;
         background: #000000;
-        border-radius: 10px;
+        border-radius: 12px;
         overflow: hidden;
         display: flex;
         align-items: center;
         justify-content: center;
-        box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.6);
         cursor: pointer;
       }
 
@@ -2564,9 +2558,9 @@ export class FrigateEventsCard extends LitElement {
         flex-direction: column;
         align-items: center;
         justify-content: center;
-        gap: 10px;
+        gap: 12px;
         background: rgba(0, 0, 0, 0.6);
-        color: #94a3b8;
+        color: rgba(255, 255, 255, 0.72);
         font-size: 13px;
         z-index: 5;
         pointer-events: none;
@@ -2578,10 +2572,10 @@ export class FrigateEventsCard extends LitElement {
       }
 
       .timeline-spinner {
-        width: 32px;
-        height: 32px;
-        border: 3px solid rgba(255, 255, 255, 0.1);
-        border-top-color: #3b82f6;
+        width: 28px;
+        height: 28px;
+        border: 2px solid rgba(255, 255, 255, 0.15);
+        border-top-color: #ffffff;
         border-radius: 50%;
         animation: timeline-spin 0.8s linear infinite;
       }
@@ -2590,75 +2584,22 @@ export class FrigateEventsCard extends LitElement {
         to { transform: rotate(360deg); }
       }
 
-      .timeline-mute-btn {
-        position: absolute;
-        top: 10px;
-        right: 10px;
-        z-index: 10;
-        width: 34px;
-        height: 34px;
-        border-radius: 50%;
-        background: rgba(0, 0, 0, 0.55);
-        backdrop-filter: blur(4px);
-        -webkit-backdrop-filter: blur(4px);
-        border: none;
-        color: #ffffff;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        cursor: pointer;
-        padding: 0;
-        opacity: 0;
-        pointer-events: auto;
-        transition: opacity 0.2s ease, background 0.2s ease, transform 0.15s ease;
+      @media (prefers-reduced-motion: reduce) {
+        .timeline-spinner { animation-duration: 2.4s; }
       }
 
-      .timeline-mute-btn.top-left {
-        left: 10px;
-        right: auto;
-      }
-
-      .timeline-mute-btn.top-right {
-        right: 10px;
-        left: auto;
-      }
-
-      .timeline-player-container:hover .timeline-mute-btn {
-        opacity: 0.85;
-      }
-
-      .timeline-mute-btn:hover {
-        opacity: 1 !important;
-        background: rgba(0, 0, 0, 0.8);
-        transform: scale(1.08);
-      }
-
-      .timeline-mute-btn:active {
-        transform: scale(0.95);
-      }
-
-      .timeline-mute-btn svg {
-        width: 18px;
-        height: 18px;
-        fill: currentColor;
-      }
-
-      /* Scrubber Track Area */
+      /* Scrubber */
       .timeline-scrubber-wrapper {
         display: flex;
         flex-direction: column;
-        gap: 6px;
-        background: rgba(255, 255, 255, 0.03);
-        padding: 12px 14px;
-        border-radius: 8px;
-        border: 1px solid rgba(255, 255, 255, 0.06);
+        gap: 8px;
       }
 
       .timeline-track-container {
         position: relative;
-        height: 36px;
-        background: rgba(255, 255, 255, 0.08);
-        border-radius: 6px;
+        height: 40px;
+        background: var(--tl-fill);
+        border-radius: 10px;
         cursor: pointer;
         user-select: none;
         touch-action: none;
@@ -2673,33 +2614,35 @@ export class FrigateEventsCard extends LitElement {
 
       .timeline-event-marker {
         position: absolute;
-        top: 2px;
-        bottom: 2px;
-        background: rgba(59, 130, 246, 0.7);
+        top: 6px;
+        bottom: 6px;
+        min-width: 3px;
+        background: var(--tl-accent);
+        opacity: 0.85;
         border-radius: 3px;
         cursor: pointer;
         pointer-events: auto;
-        transition: transform 0.15s, background 0.15s;
+        transition: opacity 0.15s ease, top 0.15s ease, bottom 0.15s ease;
         z-index: 2;
       }
 
       .timeline-event-marker:hover {
-        background: #60a5fa;
-        transform: scaleY(1.1);
+        opacity: 1;
+        top: 3px;
+        bottom: 3px;
         z-index: 4;
       }
 
-      .timeline-event-marker.person { background: rgba(59, 130, 246, 0.8); }
-      .timeline-event-marker.car { background: rgba(245, 158, 11, 0.8); }
-      .timeline-event-marker.dog, .timeline-event-marker.cat { background: rgba(16, 185, 129, 0.8); }
+      .timeline-event-marker.person { background: var(--tl-accent); }
+      .timeline-event-marker.car { background: var(--tl-warn); }
+      .timeline-event-marker.dog, .timeline-event-marker.cat { background: var(--tl-ok); }
 
       .timeline-playhead {
         position: absolute;
         top: 0;
         bottom: 0;
-        width: 3px;
-        background: #ef4444;
-        box-shadow: 0 0 8px #ef4444;
+        width: 2px;
+        background: var(--tl-playhead);
         z-index: 5;
         pointer-events: none;
         transform: translateX(-50%);
@@ -2708,24 +2651,32 @@ export class FrigateEventsCard extends LitElement {
       .timeline-playhead::after {
         content: '';
         position: absolute;
-        top: 0;
+        top: -1px;
         left: 50%;
         transform: translateX(-50%);
-        width: 9px;
-        height: 9px;
-        background: #ef4444;
+        width: 8px;
+        height: 8px;
+        background: var(--tl-playhead);
         border-radius: 50%;
       }
 
       .timeline-track-labels {
         display: flex;
+        align-items: center;
         justify-content: space-between;
-        font-size: 11px;
-        color: #94a3b8;
-        font-family: monospace;
+        font-size: 12px;
+        color: var(--tl-text-2);
+        font-variant-numeric: tabular-nums;
       }
 
-      /* Transport & Speed Row */
+      .timeline-time-badge {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--tl-text);
+        font-variant-numeric: tabular-nums;
+      }
+
+      /* Transport & speed */
       .timeline-transport-bar {
         display: flex;
         flex-wrap: wrap;
@@ -2737,42 +2688,52 @@ export class FrigateEventsCard extends LitElement {
       .timeline-transport-controls {
         display: flex;
         align-items: center;
-        gap: 6px;
+        gap: 4px;
       }
 
       .timeline-transport-btn {
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        background: rgba(255, 255, 255, 0.06);
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        color: #ffffff;
-        padding: 6px 10px;
-        border-radius: 6px;
-        font-size: 12px;
+        min-width: 44px;
+        height: 36px;
+        background: none;
+        border: none;
+        color: var(--tl-text-2);
+        padding: 0 10px;
+        border-radius: 10px;
+        font-size: 13px;
         font-weight: 500;
-        cursor: pointer;
-        transition: all 0.15s;
         font-family: inherit;
+        font-variant-numeric: tabular-nums;
+        cursor: pointer;
+        transition: background 0.15s ease, color 0.15s ease;
       }
 
       .timeline-transport-btn:hover {
-        background: rgba(255, 255, 255, 0.15);
+        background: var(--tl-fill-hover);
+        color: var(--tl-text);
       }
 
       .timeline-transport-btn.play-btn {
-        background: #3b82f6;
-        border-color: #2563eb;
-        padding: 6px 14px;
+        width: 44px;
+        height: 44px;
+        min-width: 0;
+        padding: 0;
+        margin: 0 4px;
+        border-radius: 50%;
+        background: var(--tl-accent);
+        color: #ffffff;
       }
 
       .timeline-transport-btn.play-btn:hover {
-        background: #2563eb;
+        background: color-mix(in srgb, var(--tl-accent) 85%, #000);
+        color: #ffffff;
       }
 
       .timeline-transport-btn svg {
-        width: 14px;
-        height: 14px;
+        width: 18px;
+        height: 18px;
         fill: currentColor;
         pointer-events: none;
       }
@@ -2781,9 +2742,8 @@ export class FrigateEventsCard extends LitElement {
         display: inline-flex;
         align-items: center;
         gap: 2px;
-        background: rgba(255, 255, 255, 0.05);
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 6px;
+        background: var(--tl-fill);
+        border-radius: 10px;
         padding: 2px;
       }
 
@@ -2791,23 +2751,23 @@ export class FrigateEventsCard extends LitElement {
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        width: 22px;
-        height: 22px;
-        background: transparent;
-        color: #94a3b8;
+        width: 28px;
+        height: 28px;
+        background: none;
+        color: var(--tl-text-2);
         border: none;
-        border-radius: 4px;
+        border-radius: 8px;
         cursor: pointer;
-        font-size: 14px;
-        font-weight: 700;
+        font-size: 16px;
+        font-weight: 500;
         line-height: 1;
-        transition: all 0.15s;
+        transition: background 0.15s ease, color 0.15s ease;
         user-select: none;
       }
 
       .timeline-stepper-btn:hover:not(:disabled) {
-        background: rgba(255, 255, 255, 0.12);
-        color: #ffffff;
+        background: var(--tl-fill-hover);
+        color: var(--tl-text);
       }
 
       .timeline-stepper-btn:disabled {
@@ -2816,31 +2776,27 @@ export class FrigateEventsCard extends LitElement {
       }
 
       .timeline-speed-display {
-        font-size: 11px;
-        font-weight: 700;
-        min-width: 38px;
+        font-size: 13px;
+        font-weight: 600;
+        min-width: 48px;
         text-align: center;
-        color: #93c5fd;
-        padding: 2px 4px;
-        border-radius: 4px;
+        color: var(--tl-text);
+        font-variant-numeric: tabular-nums;
+        padding: 4px;
+        border-radius: 8px;
         cursor: pointer;
         user-select: none;
-        transition: all 0.15s;
+        transition: background 0.15s ease;
       }
 
       .timeline-speed-display:hover {
-        background: rgba(59, 130, 246, 0.2);
-        color: #60a5fa;
+        background: var(--tl-fill-hover);
       }
 
-      .timeline-time-badge {
-        font-size: 12px;
-        font-family: monospace;
-        color: #e2e8f0;
-        background: rgba(0, 0, 0, 0.3);
-        padding: 4px 8px;
-        border-radius: 4px;
-        border: 1px solid rgba(255, 255, 255, 0.06);
+      @media (max-width: 560px) {
+        .timeline-modal-body { padding: 12px 16px 20px; gap: 12px; }
+        .timeline-camera-tabs { margin: -12px -16px 0; }
+        .timeline-transport-bar { justify-content: center; }
       }
     `;
     if (!style.parentNode) {
@@ -3181,7 +3137,7 @@ export class FrigateEventsCard extends LitElement {
   private async _executeTempMaskToggle(event: FrigateEvent): Promise<boolean> {
     if (!this.hass) return false;
     const maskId = event.id.includes('-') ? event.id.split('-')[0] : event.id;
-    const activeMasks = (this.hass.states?.['sensor.frigate_active_masks']?.attributes?.masks as any[]) || [];
+    const activeMasks = (this._getTemporaryMaskSensor(this.hass.states)?.attributes?.masks as any[]) || [];
     const isCurrentlyActive: boolean = Boolean(
       Array.isArray(activeMasks) && activeMasks.some((m: any) => m.mask_id === maskId)
     );
@@ -3350,7 +3306,7 @@ export class FrigateEventsCard extends LitElement {
     this._injectModalStyles();
 
     const maskId = event.id.includes('-') ? event.id.split('-')[0] : event.id;
-    const activeMasks = (this.hass?.states?.['sensor.frigate_active_masks']?.attributes?.masks as any[]) || [];
+    const activeMasks = (this._getTemporaryMaskSensor(this.hass?.states)?.attributes?.masks as any[]) || [];
     const currentMask = Array.isArray(activeMasks) ? activeMasks.find((m: any) => m.mask_id === maskId || m.event_id === event.id || String(m.mask_id) === String(maskId)) : undefined;
     const isMaskActive: boolean = Boolean(currentMask);
 
@@ -3398,7 +3354,7 @@ export class FrigateEventsCard extends LitElement {
 
     const hasTempMaskIntegration = !!(
       this._config?.show_temp_mask !== false &&
-      (this.hass?.services?.['frigate_temp_mask'] || this.hass?.services?.['shell_command']?.['frigate_add_temp_mask'] || this.hass?.states?.['sensor.frigate_active_masks'])
+      (this.hass?.services?.['frigate_temp_mask'] || this.hass?.services?.['shell_command']?.['frigate_add_temp_mask'] || this._getTemporaryMaskSensor(this.hass?.states))
     );
 
     const menu = document.createElement('div');
@@ -3605,7 +3561,7 @@ export class FrigateEventsCard extends LitElement {
     const liveCam = this._config?.camera || (this._getAvailableCameras()[0] || '');
     const hasTempMaskIntegration = !!(
       this._config?.show_temp_mask !== false &&
-      (this.hass?.services?.['frigate_temp_mask'] || this.hass?.services?.['shell_command']?.['frigate_add_temp_mask'] || this.hass?.states?.['sensor.frigate_active_masks'])
+      (this.hass?.services?.['frigate_temp_mask'] || this.hass?.services?.['shell_command']?.['frigate_add_temp_mask'] || this._getTemporaryMaskSensor(this.hass?.states))
     );
 
     const menu = document.createElement('div');
@@ -3734,6 +3690,7 @@ export class FrigateEventsCard extends LitElement {
 
     if (this._maskManagerContainer) {
       this._renderMaskManagerContent(this._maskManagerContainer);
+      void this._refreshMaskManagerSnapshots();
       return;
     }
 
@@ -3742,6 +3699,7 @@ export class FrigateEventsCard extends LitElement {
     this._maskManagerContainer = container;
 
     this._renderMaskManagerContent(container);
+    void this._refreshMaskManagerSnapshots();
 
     container.addEventListener('click', (e) => {
       if (e.target === container) {
@@ -3769,10 +3727,125 @@ export class FrigateEventsCard extends LitElement {
     document.body.appendChild(container);
   }
 
+  private _findCameraEntityId(cameraName: string): string | null {
+    const states = this.hass?.states;
+    if (!states || !cameraName) return null;
+
+    const normalize = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const target = normalize(cameraName);
+    if (!target) return null;
+
+    const liveEntity = this._config?.live_view_entity;
+    if (liveEntity && liveEntity.startsWith('camera.') && states[liveEntity]) {
+      const liveObjectId = normalize(liveEntity.slice('camera.'.length));
+      if (liveObjectId === target || liveObjectId.endsWith(target) || target.endsWith(liveObjectId)) {
+        return liveEntity;
+      }
+    }
+
+    const cameraIds = Object.keys(states).filter((id) => id.startsWith('camera.'));
+    let suffixMatch: string | null = null;
+    let fuzzyMatch: string | null = null;
+
+    for (const id of cameraIds) {
+      const objectId = normalize(id.slice('camera.'.length));
+      const attrs = states[id]?.attributes || {};
+      const attrNames = ['camera_name', 'frigate_camera_name', 'friendly_name']
+        .map((key) => attrs[key])
+        .filter((value): value is string => typeof value === 'string')
+        .map(normalize);
+
+      if (objectId === target || attrNames.includes(target)) {
+        return id;
+      }
+      if (!suffixMatch && (objectId.endsWith(target) || attrNames.some((name) => name.endsWith(target)))) {
+        suffixMatch = id;
+      }
+      if (!fuzzyMatch && (objectId.includes(target) || attrNames.some((name) => name.includes(target)))) {
+        fuzzyMatch = id;
+      }
+    }
+
+    return suffixMatch || fuzzyMatch;
+  }
+
+  private async _refreshMaskManagerSnapshots(): Promise<void> {
+    const sensor = this._getTemporaryMaskSensor(this.hass?.states);
+    const activeMasks = Array.isArray(sensor?.attributes?.masks) ? sensor.attributes.masks : [];
+    const pendingMasks = Array.isArray(sensor?.attributes?.pending_restart_masks) ? sensor.attributes.pending_restart_masks : [];
+    const cameras = Array.from(new Set(
+      [...activeMasks, ...pendingMasks]
+        .map((mask: any) => mask?.camera)
+        .filter((camera: unknown): camera is string => typeof camera === 'string' && camera.length > 0)
+    ));
+    if (cameras.length === 0) return;
+
+    const token = ++this._maskManagerSnapshotToken;
+    const cacheBust = Date.now();
+    const results = await Promise.all(cameras.map(async (camera) => {
+      let url = '';
+      const entityId = this._findCameraEntityId(camera);
+
+      if (entityId && this.hass) {
+        const proxyPath = `/api/camera_proxy/${entityId}?t=${cacheBust}`;
+        try {
+          url = await signPath(this.hass, proxyPath);
+        } catch {
+          url = proxyPath;
+        }
+      }
+
+      if (!url && this._config?.frigate_url) {
+        const base = this._config.frigate_url.replace(/\/+$/, '');
+        url = `${base}/api/${encodeURIComponent(camera)}/latest.jpg?t=${cacheBust}`;
+      }
+
+      return [camera, url] as const;
+    }));
+
+    const clientId = this._config?.frigate_client_id || 'frigate';
+    const eventSnapshotResults = await Promise.all([...activeMasks, ...pendingMasks].map(async (mask: any) => {
+      const maskId = String(mask?.mask_id || '');
+      const eventId = String(mask?.event_id || maskId);
+      if (!maskId || !eventId) return null;
+
+      const snapshotPath = getEventSnapshotURL(clientId, eventId, { bbox: false, crop: false });
+      let signedPath = snapshotPath;
+      if (this.hass) {
+        try {
+          signedPath = await signPath(this.hass, snapshotPath);
+        } catch {
+          signedPath = snapshotPath;
+        }
+      }
+      return [maskId, signedPath] as const;
+    }));
+
+    if (token !== this._maskManagerSnapshotToken) return;
+
+    results.forEach(([camera, url]) => {
+      if (url) {
+        this._maskManagerSnapshotUrls.set(camera, url);
+      } else {
+        this._maskManagerSnapshotUrls.delete(camera);
+      }
+    });
+
+    this._maskManagerEventSnapshotUrls.clear();
+    eventSnapshotResults.forEach((result) => {
+      if (result) this._maskManagerEventSnapshotUrls.set(result[0], result[1]);
+    });
+
+    if (this._maskManagerContainer) {
+      this._renderMaskManagerContent(this._maskManagerContainer);
+    }
+  }
+
   private _removeMaskManagerModal(): void {
     if (this._maskManagerContainer && this._maskManagerContainer.parentNode) {
       this._maskManagerContainer.parentNode.removeChild(this._maskManagerContainer);
       this._maskManagerContainer = undefined;
+      this._maskManagerExpandedId = undefined;
     }
     if (this._maskManagerTimer) {
       clearInterval(this._maskManagerTimer);
@@ -3781,7 +3854,7 @@ export class FrigateEventsCard extends LitElement {
   }
 
   private _updateMaskManagerTimers(container: HTMLElement): void {
-    const activeMasks = (this.hass?.states?.['sensor.frigate_active_masks']?.attributes?.masks as any[]) || [];
+    const activeMasks = (this._getTemporaryMaskSensor(this.hass?.states)?.attributes?.masks as any[]) || [];
     if (!Array.isArray(activeMasks)) return;
     const map = new Map<string, any>();
     activeMasks.forEach(m => map.set(m.mask_id, m));
@@ -3790,9 +3863,12 @@ export class FrigateEventsCard extends LitElement {
       const maskId = el.getAttribute('data-timer-mask-id');
       const mask = maskId ? map.get(maskId) : undefined;
       if (mask) {
-        const text = this._formatMaskRemainingTime(mask.expires_at, mask.duration_hours);
+        const remaining = this._formatMaskRemainingTime(mask.expires_at, mask.duration_hours);
         const span = el.querySelector('.timer-text');
-        if (span) span.textContent = text;
+        if (span) span.textContent = remaining === '∞' ? 'No expiry' : remaining;
+        const hasExpiry = typeof mask.duration_hours === 'number' ? mask.duration_hours > 0 : true;
+        const msLeft = (hasExpiry && mask.expires_at) ? new Date(mask.expires_at).getTime() - Date.now() : Infinity;
+        el.classList.toggle('expiring', msLeft < 3600000);
       }
     });
   }
@@ -3920,14 +3996,14 @@ export class FrigateEventsCard extends LitElement {
   }
 
   private _renderMaskManagerContent(container: HTMLElement): void {
-    const rawMasks = (this.hass?.states?.['sensor.frigate_active_masks']?.attributes?.masks as any[]) || [];
+    const rawMasks = (this._getTemporaryMaskSensor(this.hass?.states)?.attributes?.masks as any[]) || [];
     const activeMasks = Array.isArray(rawMasks) ? rawMasks : [];
     const totalCount = activeMasks.length;
 
-    const rawPending = (this.hass?.states?.['sensor.frigate_active_masks']?.attributes?.pending_restart_masks as any[]) || [];
+    const rawPending = (this._getTemporaryMaskSensor(this.hass?.states)?.attributes?.pending_restart_masks as any[]) || [];
     const backendPending = Array.isArray(rawPending) ? rawPending : [];
 
-    const sensorAttrs = this.hass?.states?.['sensor.frigate_active_masks']?.attributes;
+    const sensorAttrs = this._getTemporaryMaskSensor(this.hass?.states)?.attributes;
     const supportsDynamic = sensorAttrs?.supports_dynamic_toggle === true;
 
     // Combine local pending and backend pending
@@ -3954,322 +4030,229 @@ export class FrigateEventsCard extends LitElement {
       ? pendingMasks
       : pendingMasks.filter((m: any) => m.camera === filterCamera);
 
-    const durationPresets = [
+    const primaryPresets = [
       { hours: 1, label: '1h' },
-      { hours: 4, label: '4h' },
       { hours: 8, label: '8h' },
-      { hours: 12, label: '12h' },
       { hours: 24, label: '24h' },
+      { hours: 168, label: '7d' },
+    ];
+    const morePresets = [
+      { hours: 4, label: '4h' },
+      { hours: 12, label: '12h' },
       { hours: 48, label: '48h' },
       { hours: 72, label: '72h' },
-      { hours: 168, label: '7d' },
-      { hours: -1, label: '∞' },
+      { hours: -1, label: 'No expiry' },
     ];
+    const allPresets = [...primaryPresets, ...morePresets];
+
+    // Keep the list scroll position across re-renders (timers, duration changes, snapshots).
+    const previousScroll = container.querySelector<HTMLElement>('.mask-manager-body')?.scrollTop ?? 0;
+
+    // Expanded row: the user's last choice, otherwise the first mask in the current view.
+    const expandedId = (this._maskManagerExpandedId === '' ||
+      (this._maskManagerExpandedId !== undefined && filteredMasks.some((m: any) => String(m.mask_id) === this._maskManagerExpandedId)))
+      ? this._maskManagerExpandedId
+      : (filteredMasks[0] ? String(filteredMasks[0].mask_id) : '');
+
+    const buildViewModel = (mask: any) => {
+      const clientId = this._config?.frigate_client_id || 'frigate';
+      const maskId = String(mask.mask_id || '');
+      const eventId = String(mask.event_id || maskId);
+      const matchedEvent = this._events?.find(e =>
+        e.id === eventId ||
+        e.id.startsWith(maskId) ||
+        maskId.startsWith(e.id)
+      );
+
+      const label = String(matchedEvent?.label || mask.label || 'Object');
+      const cameraName = mask.camera || matchedEvent?.camera || '';
+      const timeText = matchedEvent?.start_time ? this._formatTime(matchedEvent.start_time) : '';
+      const rawTs = matchedEvent?.start_time || (eventId.includes('.') ? parseFloat(eventId.split('-')[0]) : 0);
+      const eventTs = rawTs ? Math.floor(rawTs) : 0;
+
+      const frigateBase = this._config?.frigate_url ? this._config.frigate_url.replace(/\/+$/, '') : '';
+      const directRecordingUrl = (frigateBase && cameraName && eventTs)
+        ? `${frigateBase}/api/${encodeURIComponent(cameraName)}/recordings/${eventTs}/snapshot.png`
+        : '';
+      const fallbackSnapshotUrl = getEventSnapshotURL(clientId, matchedEvent ? matchedEvent.id : eventId, {
+        bbox: false,
+        crop: false
+      });
+      const eventSnapshotUrl = this._maskManagerEventSnapshotUrls.get(maskId) || fallbackSnapshotUrl;
+      const primaryUrl = eventSnapshotUrl || directRecordingUrl;
+      const liveSnapshotUrl = cameraName ? (this._maskManagerSnapshotUrls.get(cameraName) || '') : '';
+      const displayUrl = liveSnapshotUrl || primaryUrl;
+      const imageFallbackUrl = liveSnapshotUrl
+        ? primaryUrl
+        : (directRecordingUrl && directRecordingUrl !== primaryUrl ? directRecordingUrl : '');
+      const geo = this._getMaskPreviewGeometry(mask, matchedEvent);
+
+      const title = `${label} · ${this._formatCameraName(mask.camera || 'Camera')}`;
+      const subParts = [
+        timeText ? `Detected ${timeText}` : '',
+        geo.posName ? `${geo.posName} of frame` : '',
+      ].filter(Boolean);
+
+      return { maskId, title, sub: subParts.join(' · '), displayUrl, imageFallbackUrl, geo };
+    };
+
+    const buildPreview = (vm: ReturnType<typeof buildViewModel>): string => `
+      ${vm.displayUrl ? `
+        <img
+          src="${escapeHtml(vm.displayUrl)}"
+          class="mask-preview-thumb"
+          alt=""
+          loading="lazy"
+          data-fallback-url="${escapeHtml(vm.imageFallbackUrl)}"
+          onerror="((img) => {
+            if (!img.dataset.triedFallback && img.dataset.fallbackUrl) {
+              img.dataset.triedFallback = 'true';
+              img.src = img.dataset.fallbackUrl;
+            } else {
+              img.style.display = 'none';
+            }
+          })(this)"
+        />
+      ` : ''}
+      <svg class="mask-preview-minimap" viewBox="0 0 ${vm.geo.viewBoxW} ${vm.geo.viewBoxH}" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+        ${vm.geo.polyPts ? `<polygon points="${escapeHtml(vm.geo.polyPts)}" class="minimap-poly" vector-effect="non-scaling-stroke" />` : ''}
+      </svg>
+    `;
+
+    const chevronSvg = '<svg class="mask-row-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M8.59 16.59 13.17 12 8.59 7.41 10 6l6 6-6 6z"/></svg>';
+
+    const buildActiveRow = (mask: any): string => {
+      const vm = buildViewModel(mask);
+      const maskId = escapeHtml(vm.maskId);
+      const camera = escapeHtml(mask.camera || '');
+      const poly = escapeHtml(mask.polygon || '');
+      const maskLabel = escapeHtml(mask.label || '');
+      const currentDurationHours = this._getCurrentMaskDurationHours(mask);
+      const remaining = this._formatMaskRemainingTime(mask.expires_at, currentDurationHours);
+      const remainingText = remaining === '∞' ? 'No expiry' : remaining;
+      const msLeft = (currentDurationHours <= 0 || !mask.expires_at)
+        ? Infinity
+        : new Date(mask.expires_at).getTime() - Date.now();
+      const expiring = msLeft < 3600000;
+      const isExpanded = vm.maskId === expandedId;
+
+      const selectedPreset = allPresets.find(p => Math.abs(p.hours - currentDurationHours) < 0.01);
+      const selectedIsPrimary = !!selectedPreset && primaryPresets.includes(selectedPreset);
+      const moreLabel = selectedIsPrimary ? 'More' : (selectedPreset ? selectedPreset.label : `${currentDurationHours}h`);
+
+      const durationButton = (p: { hours: number; label: string }, cls: string) => `
+        <button type="button" class="${cls} ${Math.abs(p.hours - currentDurationHours) < 0.01 ? 'active' : ''}" data-action="set-duration" data-mask-id="${maskId}" data-camera="${camera}" data-hours="${p.hours}" data-poly="${poly}" data-label="${maskLabel}">${p.label}</button>
+      `;
+
+      return `
+        <div class="mask-row ${isExpanded ? 'expanded' : ''}" data-mask-id="${maskId}">
+          <button type="button" class="mask-row-head" data-action="toggle-mask" data-mask-id="${maskId}" aria-expanded="${isExpanded}">
+            <span class="mask-thumb">${buildPreview(vm)}</span>
+            <span class="mask-row-text">
+              <span class="mask-row-title" title="Mask ${maskId}" data-safe-text="${escapeHtml(vm.title)}"></span>
+              <span class="mask-row-sub" data-safe-text="${escapeHtml(vm.sub)}"></span>
+            </span>
+            <span class="mask-row-time ${expiring ? 'expiring' : ''}" data-timer-mask-id="${maskId}"><span class="timer-text">${escapeHtml(remainingText)}</span></span>
+            ${chevronSvg}
+          </button>
+          <div class="mask-row-detail">
+            <div class="mask-frame">${buildPreview(vm)}</div>
+            ${vm.geo.maskW > 0 ? `<div class="mask-meta">Covers ${Math.round(vm.geo.maskW)} × ${Math.round(vm.geo.maskH)} px</div>` : ''}
+            <div class="mask-controls">
+              <div class="mask-duration" role="group" aria-label="Keep this mask for">
+                <span class="mask-control-label">Keep for</span>
+                <div class="mask-segmented">
+                  ${primaryPresets.map(p => durationButton(p, 'mask-seg-btn')).join('')}
+                  <button type="button" class="mask-seg-btn ${selectedIsPrimary ? '' : 'active'}" data-action="toggle-more" aria-expanded="false">${escapeHtml(moreLabel)}</button>
+                </div>
+              </div>
+              <button type="button" class="mask-remove-btn" data-action="remove-mask" data-mask-id="${maskId}" data-camera="${camera}">Remove mask</button>
+            </div>
+            <div class="mask-more" hidden>
+              ${morePresets.map(p => durationButton(p, 'mask-chip')).join('')}
+              <button type="button" class="mask-chip ${(!selectedPreset) ? 'active' : ''}" data-action="custom-duration" data-mask-id="${maskId}" data-camera="${camera}" data-poly="${poly}" data-label="${maskLabel}">${selectedPreset ? 'Custom…' : `Custom (${currentDurationHours}h)`}</button>
+            </div>
+          </div>
+        </div>
+      `;
+    };
+
+    const buildPendingRow = (mask: any): string => {
+      const vm = buildViewModel(mask);
+      const maskId = escapeHtml(vm.maskId);
+      return `
+        <div class="mask-row pending" data-mask-id="${maskId}">
+          <div class="mask-row-head">
+            <span class="mask-thumb">${buildPreview(vm)}</span>
+            <span class="mask-row-text">
+              <span class="mask-row-title" title="Mask ${maskId}" data-safe-text="${escapeHtml(vm.title)}"></span>
+              <span class="mask-row-sub">Removal applies after Frigate restarts</span>
+            </span>
+            <button type="button" class="mask-text-btn" data-action="dismiss-pending" data-mask-id="${maskId}">Dismiss</button>
+          </div>
+        </div>
+      `;
+    };
 
     container.innerHTML = `
       <div class="frigate-events-modal-backdrop" data-action="close"></div>
-      <div class="frigate-events-modal-content">
+      <div class="frigate-events-modal-content" role="dialog" aria-modal="true" aria-label="Temporary masks">
         <div class="mask-manager-header">
-          <div class="mask-manager-header-left">
-            <h2 class="mask-manager-title">Temporary False-Positive Masks</h2>
-            <span class="mask-manager-count-badge">${totalCount} active</span>
-          </div>
-          <div class="mask-manager-header-actions">
-            <button class="frigate-events-modal-close" data-action="close" title="Close">
-              <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
-            </button>
-          </div>
+          <h2 class="mask-manager-title">Temporary masks</h2>
+          <span class="mask-manager-count">${totalCount} active</span>
+          <button class="frigate-events-modal-close" data-action="close" title="Close" aria-label="Close">
+            <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+          </button>
         </div>
 
-        <div class="mask-manager-body">
-          ${cameras.length > 1 ? `
-            <div class="mask-filter-tabs">
-              <button class="mask-filter-tab ${filterCamera === 'all' ? 'active' : ''}" data-camera-filter="all">
-                All Cameras (${activeMasks.length + pendingMasks.length})
-              </button>
-              ${cameras.map(cam => {
-                const count = activeMasks.filter((m: any) => m.camera === cam).length +
-                              pendingMasks.filter((m: any) => m.camera === cam).length;
-                return `
-                  <button class="mask-filter-tab ${filterCamera === cam ? 'active' : ''}" data-camera-filter="${escapeHtml(cam)}">
-                    <span data-safe-text="${escapeHtml(this._formatCameraName(cam))}"></span> (${count})
-                  </button>
-                `;
-              }).join('')}
-            </div>
-          ` : ''}
+        ${cameras.length > 1 ? `
+          <div class="mask-filter-tabs" role="tablist">
+            <button type="button" role="tab" aria-selected="${filterCamera === 'all'}" class="mask-filter-tab ${filterCamera === 'all' ? 'active' : ''}" data-camera-filter="all">
+              All <span class="mask-filter-count">${activeMasks.length + pendingMasks.length}</span>
+            </button>
+            ${cameras.map(cam => {
+              const count = activeMasks.filter((m: any) => m.camera === cam).length +
+                            pendingMasks.filter((m: any) => m.camera === cam).length;
+              return `
+                <button type="button" role="tab" aria-selected="${filterCamera === cam}" class="mask-filter-tab ${filterCamera === cam ? 'active' : ''}" data-camera-filter="${escapeHtml(cam)}">
+                  <span data-safe-text="${escapeHtml(this._formatCameraName(cam))}"></span> <span class="mask-filter-count">${count}</span>
+                </button>
+              `;
+            }).join('')}
+          </div>
+        ` : ''}
 
+        <div class="mask-manager-body">
           ${filteredMasks.length === 0 && filteredPending.length === 0 ? `
             <div class="mask-empty-state">
-              <svg viewBox="0 0 24 24"><path d="M2,2H8V4H16V2H22V8H20V16H22V22H16V20H8V22H2V16H4V8H2V2M4,4V6H6V4H4M18,4V6H20V4H18M20,18V20H18V18H20M4,18V20H6V18H4M8,6V8H6V16H8V18H16V16H18V8H16V6H8M9,9H15V15H9V9Z"/></svg>
-              <h4>No Active Temporary Masks</h4>
-              <p>Apply temporary false-positive masks by right-clicking any event thumbnail below or from actionable notifications.</p>
+              <h4>Nothing is being ignored</h4>
+              <p>Right-click an event thumbnail to ignore a recurring false detection, or use the action button on a mobile notification.</p>
             </div>
           ` : ''}
 
           ${filteredMasks.length > 0 ? `
-            <div class="mask-cards-list">
-              ${filteredMasks.map((mask: any) => {
-                const currentDurationHours = this._getCurrentMaskDurationHours(mask);
-                const isCustom = !durationPresets.some(p => Math.abs(p.hours - currentDurationHours) < 0.01);
-                const remainingText = this._formatMaskRemainingTime(mask.expires_at, currentDurationHours);
-
-                const clientId = this._config?.frigate_client_id || 'frigate';
-                const maskId = String(mask.mask_id || '');
-                const eventId = String(mask.event_id || maskId);
-
-                // Find matching event from card events cache
-                const matchedEvent = this._events?.find(e =>
-                  e.id === eventId ||
-                  e.id.startsWith(maskId) ||
-                  maskId.startsWith(e.id)
-                );
-
-                const objectLabel = escapeHtml((matchedEvent?.label || mask.label || 'Detected Object').toUpperCase());
-                const scoreText = matchedEvent?.top_score ? ` (${Math.round(matchedEvent.top_score * 100)}%)` : '';
-                const timeText = matchedEvent?.start_time ? this._formatTime(matchedEvent.start_time) : '';
-                const cameraName = mask.camera || matchedEvent?.camera || '';
-                const rawTs = matchedEvent?.start_time || (eventId.includes('.') ? parseFloat(eventId.split('-')[0]) : 0);
-                const eventTs = rawTs ? Math.floor(rawTs) : 0;
-
-                const frigateBase = this._config?.frigate_url ? this._config.frigate_url.replace(/\/+$/, '') : '';
-                const directRecordingUrl = (frigateBase && cameraName && eventTs)
-                  ? `${frigateBase}/api/${encodeURIComponent(cameraName)}/recordings/${eventTs}/snapshot.png`
-                  : '';
-                const fallbackSnapshotUrl = getEventSnapshotURL(clientId, matchedEvent ? matchedEvent.id : eventId, {
-                  bbox: false,
-                  crop: false
-                });
-
-                const primaryUrl = directRecordingUrl || fallbackSnapshotUrl;
-
-                // Compute polygon geometry & minimap coordinates
-                const geo = this._getMaskPreviewGeometry(mask, matchedEvent);
-
-                return `
-                  <div class="mask-card" data-mask-id="${escapeHtml(mask.mask_id)}">
-                    <div class="mask-card-main-row">
-                      <div class="mask-visual-preview">
-                        ${primaryUrl ? `
-                          <img
-                            src="${escapeHtml(primaryUrl)}"
-                            class="mask-preview-thumb"
-                            alt="${objectLabel}"
-                            loading="lazy"
-                            data-crop-x="${geo.cropRegion ? geo.cropRegion.x : ''}"
-                            data-crop-y="${geo.cropRegion ? geo.cropRegion.y : ''}"
-                            data-crop-w="${geo.cropRegion ? geo.cropRegion.w : ''}"
-                            data-crop-h="${geo.cropRegion ? geo.cropRegion.h : ''}"
-                            data-fallback-url="${escapeHtml(fallbackSnapshotUrl)}"
-                            onload="((img) => {
-                              var ar = img.naturalWidth / (img.naturalHeight || 1);
-                              if (ar < 1.45 && img.dataset.cropX) {
-                                var x = Math.max(0, Math.min(100, parseFloat(img.dataset.cropX) * 100));
-                                var y = Math.max(0, Math.min(100, parseFloat(img.dataset.cropY) * 100));
-                                var w = Math.max(12, Math.min(100 - x, parseFloat(img.dataset.cropW) * 100));
-                                var h = Math.max(12, Math.min(100 - y, parseFloat(img.dataset.cropH) * 100));
-                                img.style.left = x + '%';
-                                img.style.top = y + '%';
-                                img.style.width = w + '%';
-                                img.style.height = h + '%';
-                                img.style.borderRadius = '3px';
-                                img.style.boxShadow = '0 0 6px rgba(0,0,0,0.7)';
-                              } else {
-                                img.style.left = '0';
-                                img.style.top = '0';
-                                img.style.width = '100%';
-                                img.style.height = '100%';
-                                img.style.borderRadius = '0';
-                                img.style.boxShadow = 'none';
-                              }
-                            })(this)"
-                            onerror="((img) => {
-                              if (!img.dataset.triedFallback && img.dataset.fallbackUrl && img.src !== img.dataset.fallbackUrl) {
-                                img.dataset.triedFallback = 'true';
-                                img.src = img.dataset.fallbackUrl;
-                              } else {
-                                img.style.display = 'none';
-                              }
-                            })(this)"
-                          />
-                        ` : ''}
-                        <div class="mask-preview-minimap">
-                          <svg viewBox="0 0 ${geo.viewBoxW} ${geo.viewBoxH}" preserveAspectRatio="none">
-                            ${geo.polyPts ? `<polygon points="${escapeHtml(geo.polyPts)}" class="minimap-poly" vector-effect="non-scaling-stroke" />` : ''}
-                          </svg>
-                        </div>
-                      </div>
-
-                      <div class="mask-card-info">
-                        <div class="mask-card-header">
-                          <div class="mask-card-title-col">
-                            <span class="mask-object-pill"><span data-safe-text="${objectLabel}"></span>${scoreText}</span>
-                            <span class="mask-camera-pill" data-safe-text="${escapeHtml(this._formatCameraName(mask.camera || 'Camera'))}"></span>
-                            <span class="mask-id-pill">#<span data-safe-text="${escapeHtml(mask.mask_id)}"></span></span>
-                          </div>
-                          <div class="mask-card-time-badge" data-timer-mask-id="${escapeHtml(mask.mask_id)}">
-                            <svg viewBox="0 0 24 24" style="width: 13px; height: 13px; fill: currentColor;"><path d="M12,20A8,8 0 0,0 20,12A8,8 0 0,0 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,2C6.47,22 2,17.5 2,12A10,10 0 0,1 12,2M12.5,7V12.25L17,14.92L16.25,16.15L11,13 V7H12.5Z"/></svg>
-                            <span class="timer-text">${escapeHtml(remainingText)}</span>
-                          </div>
-                        </div>
-
-                        <div class="mask-card-details">
-                          <div class="mask-detail-row">
-                            <span class="detail-label">Location:</span>
-                            <span class="detail-value"><span data-safe-text="${escapeHtml(geo.posName)}"></span> on camera ${geo.maskW > 0 ? `(${Math.round(geo.maskW)} × ${Math.round(geo.maskH)} px)` : ''}</span>
-                          </div>
-                          ${timeText ? `
-                          <div class="mask-detail-row">
-                            <span class="detail-label">Detected:</span>
-                            <span class="detail-value">${escapeHtml(timeText)}</span>
-                          </div>
-                          ` : ''}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div class="mask-card-actions">
-                      <div class="mask-duration-selector">
-                        <span class="duration-title">Duration:</span>
-                        <div class="mask-duration-chips">
-                          ${durationPresets.map(p => {
-                            const isSelected = Math.abs(p.hours - currentDurationHours) < 0.01;
-                            return `
-                              <button class="mask-duration-chip ${isSelected ? 'active' : ''}" data-action="set-duration" data-mask-id="${escapeHtml(mask.mask_id)}" data-camera="${escapeHtml(mask.camera || '')}" data-hours="${p.hours}" data-poly="${escapeHtml(mask.polygon || '')}" data-label="${escapeHtml(mask.label || '')}">
-                                ${p.label}
-                              </button>
-                            `;
-                          }).join('')}
-                          <button class="mask-duration-chip ${isCustom ? 'active' : ''}" data-action="custom-duration" data-mask-id="${escapeHtml(mask.mask_id)}" data-camera="${escapeHtml(mask.camera || '')}" data-poly="${escapeHtml(mask.polygon || '')}" data-label="${escapeHtml(mask.label || '')}">
-                            ${isCustom ? `Custom (${currentDurationHours}h)` : 'Custom...'}
-                          </button>
-                        </div>
-                      </div>
-                      <button class="mask-remove-btn" data-action="remove-mask" data-mask-id="${escapeHtml(mask.mask_id)}" data-camera="${escapeHtml(mask.camera || '')}">
-                        <svg viewBox="0 0 24 24" style="width: 14px; height: 14px; fill: currentColor;"><path d="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z"/></svg>
-                        <span>Remove</span>
-                      </button>
-                    </div>
-                  </div>
-                `;
-              }).join('')}
+            <div class="mask-list">
+              ${filteredMasks.map(buildActiveRow).join('')}
             </div>
           ` : ''}
 
           ${filteredPending.length > 0 ? `
-            <div class="pending-masks-section">
-              <div class="pending-section-title">
-                <span>Removed</span>
-                ${filteredPending.length > 1 ? `
-                  <button class="mask-section-dismiss-all-btn" data-action="dismiss-all-pending" title="Dismiss all pending restart notifications">
-                    Dismiss All
-                  </button>
-                ` : ''}
+            <div class="mask-pending-section">
+              <div class="mask-section-heading">
+                <span>Waiting for Frigate restart</span>
+                ${filteredPending.length > 1 ? `<button type="button" class="mask-text-btn" data-action="dismiss-all-pending">Dismiss all</button>` : ''}
               </div>
-              <div class="mask-cards-list">
-                ${filteredPending.map((mask: any) => {
-                  const clientId = this._config?.frigate_client_id || 'frigate';
-                  const maskId = String(mask.mask_id || '');
-                  const eventId = String(mask.event_id || maskId);
-                  const matchedEvent = this._events?.find(e => e.id === eventId || e.id.startsWith(maskId) || maskId.startsWith(e.id));
-                const objectLabel = escapeHtml((matchedEvent?.label || mask.label || 'Detected Object').toUpperCase());
-                  
-                  const cameraName = mask.camera || matchedEvent?.camera || '';
-                  const rawTs = matchedEvent?.start_time || (eventId.includes('.') ? parseFloat(eventId.split('-')[0]) : 0);
-                  const eventTs = rawTs ? Math.floor(rawTs) : 0;
-
-                  const frigateBase = this._config?.frigate_url ? this._config.frigate_url.replace(/\/+$/, '') : '';
-                  const directRecordingUrl = (frigateBase && cameraName && eventTs)
-                    ? `${frigateBase}/api/${encodeURIComponent(cameraName)}/recordings/${eventTs}/snapshot.png`
-                    : '';
-                  const fallbackSnapshotUrl = getEventSnapshotURL(clientId, matchedEvent ? matchedEvent.id : eventId, { bbox: false, crop: false });
-                  const primaryUrl = directRecordingUrl || fallbackSnapshotUrl;
-                  const geo = this._getMaskPreviewGeometry(mask, matchedEvent);
-
-                  return `
-                    <div class="mask-card pending-restart" data-mask-id="${escapeHtml(mask.mask_id)}">
-                      <div class="mask-card-main-row">
-                        <div class="mask-visual-preview">
-                          ${primaryUrl ? `
-                            <img
-                              src="${escapeHtml(primaryUrl)}"
-                              class="mask-preview-thumb"
-                              alt="${objectLabel}"
-                              loading="lazy"
-                              data-crop-x="${geo.cropRegion ? geo.cropRegion.x : ''}"
-                              data-crop-y="${geo.cropRegion ? geo.cropRegion.y : ''}"
-                              data-crop-w="${geo.cropRegion ? geo.cropRegion.w : ''}"
-                              data-crop-h="${geo.cropRegion ? geo.cropRegion.h : ''}"
-                              data-fallback-url="${escapeHtml(fallbackSnapshotUrl)}"
-                              onload="((img) => {
-                                var ar = img.naturalWidth / (img.naturalHeight || 1);
-                                if (ar < 1.45 && img.dataset.cropX) {
-                                  var x = Math.max(0, Math.min(100, parseFloat(img.dataset.cropX) * 100));
-                                  var y = Math.max(0, Math.min(100, parseFloat(img.dataset.cropY) * 100));
-                                  var w = Math.max(12, Math.min(100 - x, parseFloat(img.dataset.cropW) * 100));
-                                  var h = Math.max(12, Math.min(100 - y, parseFloat(img.dataset.cropH) * 100));
-                                  img.style.left = x + '%';
-                                  img.style.top = y + '%';
-                                  img.style.width = w + '%';
-                                  img.style.height = h + '%';
-                                  img.style.borderRadius = '3px';
-                                  img.style.boxShadow = '0 0 6px rgba(0,0,0,0.7)';
-                                } else {
-                                  img.style.left = '0';
-                                  img.style.top = '0';
-                                  img.style.width = '100%';
-                                  img.style.height = '100%';
-                                  img.style.borderRadius = '0';
-                                  img.style.boxShadow = 'none';
-                                }
-                              })(this)"
-                              onerror="((img) => {
-                                if (!img.dataset.triedFallback && img.dataset.fallbackUrl && img.src !== img.dataset.fallbackUrl) {
-                                  img.dataset.triedFallback = 'true';
-                                  img.src = img.dataset.fallbackUrl;
-                                } else {
-                                  img.style.display = 'none';
-                                }
-                              })(this)"
-                            />
-                          ` : ''}
-                          <div class="mask-preview-minimap">
-                            <svg viewBox="0 0 ${geo.viewBoxW} ${geo.viewBoxH}" preserveAspectRatio="none">
-                              ${geo.polyPts ? `<polygon points="${escapeHtml(geo.polyPts)}" class="minimap-poly" vector-effect="non-scaling-stroke" />` : ''}
-                            </svg>
-                          </div>
-                        </div>
-                        <div class="mask-card-info">
-                          <div class="mask-card-header">
-                            <div class="mask-card-title-col">
-                              <span class="mask-object-pill"><span data-safe-text="${objectLabel}"></span></span>
-                              <span class="mask-camera-pill" data-safe-text="${escapeHtml(this._formatCameraName(mask.camera || 'Camera'))}"></span>
-                              <span class="mask-id-pill">#<span data-safe-text="${escapeHtml(mask.mask_id)}"></span></span>
-                            </div>
-                          </div>
-                          <div class="mask-card-details">
-                            <div class="mask-detail-row">
-                              <span class="detail-label">Status:</span>
-                              <span class="detail-value" style="color: #94a3b8; font-size: 11px;">Removed</span>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                      <div class="mask-card-actions mask-card-pending-actions">
-                        <button class="mask-pending-dismiss-action" data-action="dismiss-pending" data-mask-id="${escapeHtml(mask.mask_id)}" title="Dismiss">
-                          <svg viewBox="0 0 24 24"><path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"/></svg>
-                          <span>Dismiss</span>
-                        </button>
-                      </div>
-                    </div>
-                  `;
-                }).join('')}
+              <div class="mask-list">
+                ${filteredPending.map(buildPendingRow).join('')}
               </div>
             </div>
           ` : ''}
         </div>
       </div>
     `;
+
+    const nextBody = container.querySelector<HTMLElement>('.mask-manager-body');
+    if (nextBody) nextBody.scrollTop = previousScroll;
 
     container.querySelectorAll<HTMLElement>('[data-safe-text]').forEach((element) => {
       element.textContent = element.getAttribute('data-safe-text') || '';
@@ -4316,6 +4299,35 @@ export class FrigateEventsCard extends LitElement {
         e.stopPropagation();
         this._maskManagerSelectedCamera = (tab as HTMLElement).getAttribute('data-camera-filter') || 'all';
         this._renderMaskManagerContent(container);
+      });
+    });
+
+    container.querySelectorAll('[data-action="toggle-mask"]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const row = (btn as HTMLElement).closest('.mask-row');
+        if (!row) return;
+        const willExpand = !row.classList.contains('expanded');
+        container.querySelectorAll('.mask-row.expanded').forEach(r => {
+          r.classList.remove('expanded');
+          r.querySelector('[data-action="toggle-mask"]')?.setAttribute('aria-expanded', 'false');
+        });
+        if (willExpand) {
+          row.classList.add('expanded');
+          btn.setAttribute('aria-expanded', 'true');
+          row.scrollIntoView({ block: 'nearest' });
+        }
+        this._maskManagerExpandedId = willExpand ? ((btn as HTMLElement).getAttribute('data-mask-id') || '') : '';
+      });
+    });
+
+    container.querySelectorAll('[data-action="toggle-more"]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const more = (btn as HTMLElement).closest('.mask-row-detail')?.querySelector<HTMLElement>('.mask-more');
+        if (!more) return;
+        more.hidden = !more.hidden;
+        btn.setAttribute('aria-expanded', String(!more.hidden));
       });
     });
 
@@ -4408,7 +4420,7 @@ export class FrigateEventsCard extends LitElement {
   private async _executeRemoveMask(maskId: string, camera?: string): Promise<void> {
     if (!this.hass) return;
     try {
-      const sensorAttrs = this.hass?.states?.['sensor.frigate_active_masks']?.attributes;
+      const sensorAttrs = this._getTemporaryMaskSensor(this.hass?.states)?.attributes;
       const activeMasks = (sensorAttrs?.masks as any[]) || [];
       const supportsDynamic = sensorAttrs?.supports_dynamic_toggle === true;
       const existing = activeMasks.find((m: any) => String(m.mask_id) === String(maskId));
@@ -4439,7 +4451,7 @@ export class FrigateEventsCard extends LitElement {
       // Post-call: re-check supports_dynamic_toggle. The backend fetches and caches
       // the Frigate version during remove_mask, so the sensor may now report true
       // even if it was false at click time. Clear the pending entry if so.
-      const postAttrs = this.hass?.states?.['sensor.frigate_active_masks']?.attributes;
+      const postAttrs = this._getTemporaryMaskSensor(this.hass?.states)?.attributes;
       if (postAttrs?.supports_dynamic_toggle === true) {
         this._localPendingMasks = this._localPendingMasks.filter(m => String(m.mask_id) !== String(maskId));
       }
@@ -4457,7 +4469,7 @@ export class FrigateEventsCard extends LitElement {
         // Second pass: by 600ms HA state has definitely propagated.
         // If supports_dynamic_toggle is true (0.18+), ensure no pending entry lingers.
         setTimeout(() => {
-          const lateAttrs = this.hass?.states?.['sensor.frigate_active_masks']?.attributes;
+          const lateAttrs = this._getTemporaryMaskSensor(this.hass?.states)?.attributes;
           if (lateAttrs?.supports_dynamic_toggle === true) {
             this._localPendingMasks = this._localPendingMasks.filter(m => String(m.mask_id) !== String(maskId));
             if (this._maskManagerContainer) this._renderMaskManagerContent(this._maskManagerContainer);
@@ -4694,13 +4706,11 @@ export class FrigateEventsCard extends LitElement {
       ? Math.max(0, v.duration - 0.5)
       : duration;
 
-    // If play is triggered while sitting at the end of the window, roll into the next block
-    if (v.currentTime >= maxSeek) {
-      const now = Math.floor(Date.now() / 1000);
-      if (this._timelineEndTs < now) {
-        this._advanceToNextTimelineWindow();
-        return;
-      }
+    // If play is triggered while sitting at the end of the loaded VOD chunk,
+    // page to the next chunk (or next window) instead of doing nothing.
+    if (v.currentTime >= maxSeek && v.paused) {
+      this._advanceToNextTimelineWindow();
+      return;
     }
 
     if (this._timelinePlaybackRate > 16) {
@@ -4723,16 +4733,6 @@ export class FrigateEventsCard extends LitElement {
     if (this._isAdvancingTimeline || !this._timelineContainer || !this._timelineCamera) return;
 
     const now = Math.floor(Date.now() / 1000);
-    // If we've reached or passed real-time, stop playback
-    if (this._timelineEndTs >= now) {
-      this._clearTimelineSpeedInterval();
-      if (this._timelineVideoEl) {
-        this._timelineVideoEl.pause();
-      }
-      this._updateTimelinePlayheadUI();
-      return;
-    }
-
     this._isAdvancingTimeline = true;
     this._clearTimelineSpeedInterval();
 
@@ -4747,74 +4747,118 @@ export class FrigateEventsCard extends LitElement {
       }
     }, 8000);
 
+    const clearAdvance = () => {
+      this._isAdvancingTimeline = false;
+      if (this._timelineAdvanceTimeout) {
+        clearTimeout(this._timelineAdvanceTimeout);
+        this._timelineAdvanceTimeout = undefined;
+      }
+    };
+    const stopAdvance = () => {
+      clearAdvance();
+      if (this._timelineVideoEl) {
+        this._timelineVideoEl.pause();
+      }
+      this._updateTimelinePlayheadUI();
+    };
+
     try {
-      const windowDuration = this._timelineWindowDurationSec || (this._timelineEndTs - this._timelineStartTs) || 3600;
-      let nextStart = this._timelineEndTs;
-      let nextEnd = nextStart + windowDuration;
-      if (nextEnd > now) {
-        nextEnd = now;
+      // Page within the visible window first. Long windows (e.g. 24h) are split
+      // into VOD chunks, so there may be more footage without moving the window.
+      if (this._timelineVodEndTs > 0 && this._timelineVodEndTs < this._timelineEndTs) {
+        const nextRec = this._timelineRecordings.find(
+          rec => rec.end_time > this._timelineVodEndTs + 0.5 && rec.start_time >= this._timelineVodEndTs - 0.5
+        );
+        if (nextRec) {
+          this._loadTimelineVideo(Math.max(this._timelineVodStartTs, nextRec.start_time), true);
+          return;
+        }
       }
 
-      // Stop if less than 5 seconds remaining up to real-time now
-      if (nextEnd - nextStart < 5) {
-        this._isAdvancingTimeline = false;
-        if (this._timelineAdvanceTimeout) {
-          clearTimeout(this._timelineAdvanceTimeout);
-          this._timelineAdvanceTimeout = undefined;
-        }
-        if (this._timelineVideoEl) {
-          this._timelineVideoEl.pause();
-        }
-        this._updateTimelinePlayheadUI();
+      // No more footage in this window; stop once we reach real-time.
+      if (this._timelineEndTs >= now) {
+        stopAdvance();
         return;
       }
 
-    this._timelineStartTs = nextStart;
-    this._timelineEndTs = nextEnd;
-    const requestId = ++this._timelineWindowRequestId;
+      const windowDuration = this._timelineWindowDurationSec || (this._timelineEndTs - this._timelineStartTs) || 3600;
+      const nextStart = this._timelineEndTs;
+      const nextEnd = Math.min(now, nextStart + windowDuration);
+
+      // Stop if less than 5 seconds remaining up to real-time now
+      if (nextEnd - nextStart < 5) {
+        stopAdvance();
+        return;
+      }
+
+      this._timelineStartTs = nextStart;
+      this._timelineEndTs = nextEnd;
+      this._timelineVodStartTs = 0;
+      this._timelineVodEndTs = 0;
+      const requestId = ++this._timelineWindowRequestId;
 
       const container = this._timelineContainer;
-      if (!container) return;
+      if (!container) {
+        clearAdvance();
+        return;
+      }
 
       this._updateTimelineWindowUI();
-      // Load next video stream immediately and silently in auto-advance mode (parallel, no lag)
-      this._loadTimelineVideo(this._timelineStartTs, true);
+      // Fetch recordings for the new window before loading, since the VOD chunk
+      // is chosen from the available footage (and gaps are skipped).
+      await this._fetchTimelineEvents();
+      if (requestId !== this._timelineWindowRequestId ||
+          this._timelineStartTs !== nextStart || this._timelineEndTs !== nextEnd) {
+        clearAdvance();
+        return;
+      }
+      this._updateTimelineScrubberEvents();
 
-      // Fetch event markers and check recordings concurrently in background
-      this._fetchTimelineEvents().then(async () => {
-        // A later window may already be playing while this request was in flight.
-        // Ignore stale results so they cannot change its recordings or window.
-        if (requestId !== this._timelineWindowRequestId ||
-            this._timelineStartTs !== nextStart || this._timelineEndTs !== nextEnd) {
-          return;
-        }
-        this._updateTimelineScrubberEvents();
-        // If this window had a recording gap (0 recordings), look ahead and leap to next available footage
-        if (this._timelineRecordings.length === 0 && this.hass && this._timelineCamera) {
-          try {
-            const clientId = this._config?.frigate_client_id || 'frigate';
-            const futureRecs = await getRecordings(this.hass, clientId, this._timelineCamera, nextEnd, now);
+      // If this window had a recording gap (0 recordings), look ahead and leap to next available footage
+      if (this._timelineRecordings.length === 0 && this.hass && this._timelineCamera) {
+        try {
+          const clientId = this._config?.frigate_client_id || 'frigate';
+          const futureRecs = await getRecordings(this.hass, clientId, this._timelineCamera, nextEnd, now);
+          if (requestId !== this._timelineWindowRequestId ||
+              this._timelineStartTs !== nextStart || this._timelineEndTs !== nextEnd) {
+            clearAdvance();
+            return;
+          }
+          if (Array.isArray(futureRecs) && futureRecs.length > 0) {
+            futureRecs.sort((a, b) => a.start_time - b.start_time);
+            const nextRecStart = futureRecs[0].start_time;
+            this._timelineStartTs = nextRecStart;
+            this._timelineEndTs = Math.min(now, Math.floor(nextRecStart + windowDuration));
+            this._updateTimelineWindowUI();
+            await this._fetchTimelineEvents();
             if (requestId !== this._timelineWindowRequestId ||
-                this._timelineStartTs !== nextStart || this._timelineEndTs !== nextEnd) {
+                this._timelineStartTs !== nextRecStart) {
+              clearAdvance();
               return;
             }
-            if (Array.isArray(futureRecs) && futureRecs.length > 0) {
-              futureRecs.sort((a, b) => a.start_time - b.start_time);
-              const nextRecStart = futureRecs[0].start_time;
-              this._timelineStartTs = nextRecStart;
-              this._timelineEndTs = Math.min(now, Math.floor(nextRecStart + windowDuration));
-              this._updateTimelineWindowUI();
-              this._loadTimelineVideo(this._timelineStartTs, true);
-              this._fetchTimelineEvents().then(() => this._updateTimelineScrubberEvents());
-            }
-          } catch (e) {
-            console.debug('Failed to check recordings ahead:', e);
+            this._updateTimelineScrubberEvents();
+          } else {
+            // Nothing to play; stop gracefully instead of showing an error.
+            stopAdvance();
+            return;
           }
+        } catch (e) {
+          console.debug('Failed to check recordings ahead:', e);
         }
-      });
+      }
+
+      // Start at the first recording in the new window, skipping any leading gap.
+      let loadSeek = this._timelineStartTs;
+      if (this._timelineRecordings.length > 0) {
+        const first = this._timelineRecordings.find(rec => rec.end_time > this._timelineStartTs);
+        loadSeek = first
+          ? Math.max(this._timelineStartTs, first.start_time)
+          : this._timelineRecordings[this._timelineRecordings.length - 1].start_time;
+      }
+      this._loadTimelineVideo(loadSeek, true);
     } catch (err) {
       console.warn('Failed to auto-advance timeline window:', err);
-      this._isAdvancingTimeline = false;
+      clearAdvance();
     }
   }
 
@@ -4957,7 +5001,7 @@ export class FrigateEventsCard extends LitElement {
           cameras: [camera],
           after: startTs,
           before: endTs,
-          limit: 100,
+          limit: 500,
         }),
         getRecordings(this.hass, clientId, camera, startTs, endTs).catch(() => []),
       ]);
@@ -4972,14 +5016,70 @@ export class FrigateEventsCard extends LitElement {
     }
   }
 
+  /**
+   * Resolve the chunk of recordings the video element should load for the
+   * visible timeline window. Frigate's nginx-vod module rejects playlists with
+   * more than 1080 clips, so long windows (e.g. 24h) must be paged in chunks.
+   *
+   * Returns the VOD chunk bounds and the closest wall-clock seek position that
+   * actually has footage, skipping gaps such as overnight periods.
+   */
+  private _resolveTimelineVodWindow(seekTargetTs?: number, isAutoAdvance = false): { startTs: number; endTs: number; seekTs: number } {
+    const windowStart = this._timelineStartTs;
+    const windowEnd = this._timelineEndTs;
+    const recordings = this._timelineRecordings.filter(
+      rec => rec.end_time > windowStart && rec.start_time < windowEnd
+    );
+
+    if (!recordings.length) {
+      return {
+        startTs: windowStart,
+        endTs: windowEnd,
+        seekTs: seekTargetTs ?? windowStart,
+      };
+    }
+
+    const requestedSeek = Math.max(windowStart, Math.min(windowEnd, seekTargetTs ?? windowStart));
+
+    // Find the recording covering the requested time, the next one after a
+    // gap, or the last one when the requested time is past all recordings.
+    let targetIdx = recordings.findIndex(rec => rec.end_time > requestedSeek);
+    let seekTs = requestedSeek;
+    if (targetIdx === -1) {
+      targetIdx = recordings.length - 1;
+      seekTs = recordings[targetIdx].start_time;
+    } else if (requestedSeek < recordings[targetIdx].start_time) {
+      seekTs = recordings[targetIdx].start_time;
+    }
+
+    // Include some footage before the target so small backwards scrubs do not
+    // immediately trigger another chunk load. Auto-advance must not backtrack,
+    // otherwise it would replay the tail of the previous chunk.
+    const backtrack = isAutoAdvance ? 0 : Math.floor(TIMELINE_VOD_MAX_CLIPS / 4);
+    const startIdx = Math.max(0, targetIdx - backtrack);
+    const endIdx = Math.min(recordings.length, startIdx + TIMELINE_VOD_MAX_CLIPS);
+    const chunk = recordings.slice(startIdx, endIdx);
+
+    const startTs = Math.max(windowStart, Math.floor(chunk[0].start_time));
+    const endTs = Math.min(windowEnd, Math.ceil(chunk[chunk.length - 1].end_time));
+
+    return {
+      startTs,
+      endTs,
+      seekTs: Math.max(startTs, Math.min(endTs, seekTs)),
+    };
+  }
+
   private _wallClockToVideoOffset(targetTs: number): number {
+    const vodStart = this._timelineVodStartTs || this._timelineStartTs;
+    const vodEnd = this._timelineVodEndTs || this._timelineEndTs;
     if (!this._timelineRecordings.length) {
-      return Math.max(0, targetTs - this._timelineStartTs);
+      return Math.max(0, targetTs - vodStart);
     }
     let videoSeconds = 0;
     for (const rec of this._timelineRecordings) {
-      const recStart = Math.max(this._timelineStartTs, rec.start_time);
-      const recEnd = Math.min(this._timelineEndTs, rec.end_time);
+      const recStart = Math.max(vodStart, rec.start_time);
+      const recEnd = Math.min(vodEnd, rec.end_time);
       if (recEnd <= recStart) continue;
 
       if (recEnd <= targetTs) {
@@ -4995,14 +5095,18 @@ export class FrigateEventsCard extends LitElement {
   }
 
   private _videoOffsetToWallClock(videoOffset: number): number {
+    const vodStart = this._timelineVodStartTs || this._timelineStartTs;
+    const vodEnd = this._timelineVodEndTs || this._timelineEndTs;
     if (!this._timelineRecordings.length) {
-      return this._timelineStartTs + videoOffset;
+      return vodStart + videoOffset;
     }
     let accumulated = 0;
+    let lastEnd = vodStart;
     for (const rec of this._timelineRecordings) {
-      const recStart = Math.max(this._timelineStartTs, rec.start_time);
-      const recEnd = Math.min(this._timelineEndTs, rec.end_time);
+      const recStart = Math.max(vodStart, rec.start_time);
+      const recEnd = Math.min(vodEnd, rec.end_time);
       if (recEnd <= recStart) continue;
+      lastEnd = recEnd;
 
       const dur = recEnd - recStart;
       if (accumulated + dur >= videoOffset) {
@@ -5010,14 +5114,19 @@ export class FrigateEventsCard extends LitElement {
       }
       accumulated += dur;
     }
-    return this._timelineRecordings.length > 0
-      ? Math.min(this._timelineEndTs, this._timelineRecordings[this._timelineRecordings.length - 1].end_time)
-      : (this._timelineStartTs + videoOffset);
+    return lastEnd;
   }
 
   private _loadTimelineVideo(seekTargetTs?: number, isAutoAdvance = false): void {
     if (!this._timelineContainer || !this._timelineCamera) return;
     if (!isAutoAdvance) this._timelineWindowRequestId++;
+
+    // Long windows are split into VOD chunks so Frigate's nginx-vod clip limit
+    // is never exceeded. Snap the seek target into the chunk that has footage.
+    const vodWindow = this._resolveTimelineVodWindow(seekTargetTs, isAutoAdvance);
+    this._timelineVodStartTs = vodWindow.startTs;
+    this._timelineVodEndTs = vodWindow.endTs;
+    seekTargetTs = vodWindow.seekTs;
 
     // In auto-advance, load the incoming footage into the standby video slot
     const slot = isAutoAdvance
@@ -5089,10 +5198,10 @@ export class FrigateEventsCard extends LitElement {
 
     const clientId = this._config?.frigate_client_id || 'frigate';
     const frigateUrl = this._config?.frigate_url;
-    const hlsUrl = getVodHlsURL(clientId, this._timelineCamera, this._timelineStartTs, this._timelineEndTs, frigateUrl);
-    const mp4Url = getVodClipURL(clientId, this._timelineCamera, this._timelineStartTs, this._timelineEndTs, frigateUrl);
+    const hlsUrl = getVodHlsURL(clientId, this._timelineCamera, this._timelineVodStartTs, this._timelineVodEndTs, frigateUrl);
+    const mp4Url = getVodClipURL(clientId, this._timelineCamera, this._timelineVodStartTs, this._timelineVodEndTs, frigateUrl);
 
-    const initialOffset = (seekTargetTs && seekTargetTs >= this._timelineStartTs && seekTargetTs <= this._timelineEndTs)
+    const initialOffset = (seekTargetTs && seekTargetTs >= this._timelineVodStartTs && seekTargetTs <= this._timelineVodEndTs)
       ? this._wallClockToVideoOffset(seekTargetTs)
       : 0;
 
@@ -5227,72 +5336,107 @@ export class FrigateEventsCard extends LitElement {
       }
     };
 
-    console.log('Frigate Events Card: VOD requested:', { slot, hlsUrl, mp4Url, start: this._timelineStartTs, end: this._timelineEndTs });
+    console.log('Frigate Events Card: VOD requested:', { slot, hlsUrl, mp4Url, start: this._timelineVodStartTs, end: this._timelineVodEndTs });
 
-    const fallbackToMp4 = () => {
-      console.warn('Frigate Events Card: HLS failed or unsupported, trying MP4 clip:', mp4Url);
-      video.onerror = (e) => {
-        this._isAdvancingTimeline = false;
-        if (this._timelineLoadingTimeout) {
-          clearTimeout(this._timelineLoadingTimeout);
-          this._timelineLoadingTimeout = undefined;
+    // Signed paths (authSig) are required by the Frigate integration's VOD views.
+    // hls.js can send a Bearer header, but native HLS (iOS Safari / HA companion app)
+    // and direct <video> MP4 fallbacks cannot, so sign the URLs up front.
+    // Only sign HA-proxied URLs; a direct Frigate URL must not be rewritten to a relative path.
+    const requestId = this._timelineWindowRequestId;
+    const vodStart = this._timelineVodStartTs;
+    const vodEnd = this._timelineVodEndTs;
+    const isStale = () =>
+      requestId !== this._timelineWindowRequestId ||
+      vodStart !== this._timelineVodStartTs ||
+      vodEnd !== this._timelineVodEndTs;
+
+    const startStream = async () => {
+      let signedHlsUrl = hlsUrl;
+      let signedMp4Url = mp4Url;
+      const hass = this.hass;
+      if (hass && !frigateUrl) {
+        try {
+          [signedHlsUrl, signedMp4Url] = await Promise.all([
+            signPath(hass, hlsUrl),
+            signPath(hass, mp4Url),
+          ]);
+        } catch (e) {
+          console.warn('Frigate Events Card: Failed to sign VOD URLs:', e);
         }
-        if (loadingEl) {
-          loadingEl.classList.remove('subtle');
-        }
-        console.error('Frigate Events Card: MP4 playback failed:', e, mp4Url);
-        if (loadingEl) {
-          loadingEl.innerHTML = `
-            <div style="display:flex; flex-direction:column; align-items:center; gap:8px; text-align:center; padding:16px;">
-              <span>No continuous footage stream available for this time window.</span>
-              <span style="font-size:11px; opacity:0.6;">Tested URLs: <a href="${escapeHtml(hlsUrl)}" target="_blank" style="color:var(--primary-color, #03a9f4);">HLS</a> | <a href="${escapeHtml(mp4Url)}" target="_blank" style="color:var(--primary-color, #03a9f4);">MP4</a></span>
-            </div>
-          `;
-        }
+      }
+      if (isStale()) return;
+
+      const fallbackToMp4 = () => {
+        console.warn('Frigate Events Card: HLS failed or unsupported, trying MP4 clip:', signedMp4Url);
+        video.onerror = (e) => {
+          this._isAdvancingTimeline = false;
+          if (this._timelineLoadingTimeout) {
+            clearTimeout(this._timelineLoadingTimeout);
+            this._timelineLoadingTimeout = undefined;
+          }
+          if (this._timelineAdvanceTimeout) {
+            clearTimeout(this._timelineAdvanceTimeout);
+            this._timelineAdvanceTimeout = undefined;
+          }
+          if (loadingEl) {
+            loadingEl.classList.remove('subtle');
+          }
+          console.error('Frigate Events Card: MP4 playback failed:', e, signedMp4Url);
+          if (loadingEl) {
+            loadingEl.innerHTML = `
+              <div style="display:flex; flex-direction:column; align-items:center; gap:8px; text-align:center; padding:16px;">
+                <span>No continuous footage stream available for this time window.</span>
+                <span style="font-size:11px; opacity:0.6;">Tested URLs: <a href="${escapeHtml(signedHlsUrl)}" target="_blank" style="color:var(--primary-color, #03a9f4);">HLS</a> | <a href="${escapeHtml(signedMp4Url)}" target="_blank" style="color:var(--primary-color, #03a9f4);">MP4</a></span>
+              </div>
+            `;
+          }
+        };
+        video.src = signedMp4Url;
+        video.load();
       };
-      video.src = mp4Url;
-      video.load();
+
+      // If Hls.js is supported (Chrome, Edge, Firefox, modern browsers)
+      if (Hls.isSupported()) {
+        const token = (this.hass as any)?.auth?.data?.access_token;
+        const hls = new Hls({
+          startPosition: initialOffset >= 0 ? initialOffset : -1,
+          enableWorker: true,
+          lowLatencyMode: false,
+          xhrSetup: (xhr: XMLHttpRequest, url: string) => {
+            if (token && !url.includes('authSig=')) {
+              xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+            }
+          },
+        });
+        if (slot === 'a') {
+          this._timelineHlsA = hls;
+        } else {
+          this._timelineHlsB = hls;
+        }
+        hls.loadSource(signedHlsUrl);
+        hls.attachMedia(video);
+
+        hls.on(Hls.Events.ERROR, (_event, data) => {
+          console.warn('Frigate Events Card: Hls.js error event:', data.type, data.details, data.fatal);
+          if (data.fatal) {
+            hls.destroy();
+            if (slot === 'a') this._timelineHlsA = null;
+            else this._timelineHlsB = null;
+            fallbackToMp4();
+          }
+        });
+      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        video.onerror = () => {
+          fallbackToMp4();
+        };
+        video.src = signedHlsUrl;
+        video.load();
+      } else {
+        fallbackToMp4();
+      }
     };
 
-    // If Hls.js is supported (Chrome, Edge, Firefox, modern browsers)
-    if (Hls.isSupported()) {
-      const token = (this.hass as any)?.auth?.data?.access_token;
-      const hls = new Hls({
-        startPosition: initialOffset >= 0 ? initialOffset : -1,
-        enableWorker: true,
-        lowLatencyMode: false,
-        xhrSetup: (xhr: XMLHttpRequest, url: string) => {
-          if (token && !url.includes('authSig=')) {
-            xhr.setRequestHeader('Authorization', `Bearer ${token}`);
-          }
-        },
-      });
-      if (slot === 'a') {
-        this._timelineHlsA = hls;
-      } else {
-        this._timelineHlsB = hls;
-      }
-      hls.loadSource(hlsUrl);
-      hls.attachMedia(video);
-
-      hls.on(Hls.Events.ERROR, (_event, data) => {
-        console.warn('Frigate Events Card: Hls.js error event:', data.type, data.details, data.fatal);
-        if (data.fatal) {
-          hls.destroy();
-          if (slot === 'a') this._timelineHlsA = null;
-          else this._timelineHlsB = null;
-          fallbackToMp4();
-        }
-      });
-    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-      video.onerror = () => {
-        fallbackToMp4();
-      };
-      video.src = hlsUrl;
-      video.load();
-    } else {
-      fallbackToMp4();
-    }
+    void startStream();
 
     this._startTimelineTimeUpdates();
   }
@@ -5398,6 +5542,14 @@ export class FrigateEventsCard extends LitElement {
         const seekOffset = this._getEventSeekOffset(ev);
         if (baseTs > 0 && this._timelineVideoEl) {
           const targetTs = Math.max(this._timelineStartTs, Math.min(this._timelineEndTs, baseTs + seekOffset));
+
+          // The event may be outside the currently loaded VOD chunk; load a new
+          // chunk around it instead of clamping the seek to the chunk edge.
+          if (targetTs < this._timelineVodStartTs || targetTs > this._timelineVodEndTs) {
+            this._loadTimelineVideo(targetTs);
+            return;
+          }
+
           const targetOffset = this._wallClockToVideoOffset(targetTs);
           const maxSeek = (Number.isFinite(this._timelineVideoEl.duration) && this._timelineVideoEl.duration > 0)
             ? Math.max(0, this._timelineVideoEl.duration - 0.5)
@@ -5485,17 +5637,12 @@ export class FrigateEventsCard extends LitElement {
     const mutePosition = this._config?.live_view_mute_position === 'top-left' ? 'top-left' : 'top-right';
 
     container.innerHTML = `
-      <div class="frigate-events-modal-content">
+      <div class="frigate-events-modal-content" role="dialog" aria-modal="true" aria-label="Timeline">
         <div class="timeline-modal-header">
-          <div class="timeline-modal-header-left">
-            <h3 class="timeline-modal-title">
-              <svg viewBox="0 0 24 24"><path d="M12,20A8,8 0 0,0 20,12A8,8 0 0,0 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,2C6.47,2 2,6.48 2,12A10,10 0 0,1 12,2M12.5,7V12.25L17,14.92L16.25,16.15L11,13V7H12.5Z"/></svg>
-              <span>Timeline</span>
-            </h3>
-            <span class="timeline-camera-badge" data-safe-text="${escapeHtml(this._formatCameraName(currentCamera))}"></span>
-          </div>
-          <button class="frigate-events-modal-close" data-action="close" title="Close">
-            <svg viewBox="0 0 24 24"><path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"/></svg>
+          <h2 class="timeline-modal-title">Timeline</h2>
+          <span class="timeline-camera-badge" data-safe-text="${escapeHtml(this._formatCameraName(currentCamera))}"></span>
+          <button class="frigate-events-modal-close" data-action="close" title="Close" aria-label="Close">
+            <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
           </button>
         </div>
 
@@ -5513,7 +5660,7 @@ export class FrigateEventsCard extends LitElement {
           <!-- Controls: DateTime picker, Quick jumps, Window duration -->
           <div class="timeline-controls-bar">
             <div class="timeline-datetime-group">
-              <span class="timeline-datetime-label">Start Time:</span>
+              <span class="timeline-datetime-label">Start time</span>
               <input type="datetime-local" class="timeline-datetime-input" value="${dtValue}" />
               <div class="timeline-quick-jumps">
                 <button class="timeline-quick-btn" data-jump="now">Now</button>
@@ -5521,18 +5668,18 @@ export class FrigateEventsCard extends LitElement {
                 <button class="timeline-quick-btn" data-jump="-1h">-1h</button>
                 <button class="timeline-quick-btn" data-jump="-3h">-3h</button>
                 <button class="timeline-quick-btn" data-jump="-12h">-12h</button>
-                <button class="timeline-quick-btn" data-jump="day-start">Start of Day</button>
+                <button class="timeline-quick-btn" data-jump="day-start">Start of day</button>
               </div>
             </div>
 
             <div class="timeline-window-group">
-              <span class="timeline-datetime-label">Window:</span>
+              <span class="timeline-datetime-label">Window</span>
               <div class="timeline-window-pills">
                 <button class="timeline-window-pill ${windowMinutes === 15 ? 'active' : ''}" data-window="15">15m</button>
                 <button class="timeline-window-pill ${windowMinutes === 30 ? 'active' : ''}" data-window="30">30m</button>
                 <button class="timeline-window-pill ${windowMinutes === 60 ? 'active' : ''}" data-window="60">1h</button>
-                <button class="timeline-window-pill ${windowMinutes === 120 ? 'active' : ''}" data-window="120">2h</button>
                 <button class="timeline-window-pill ${windowMinutes === 180 ? 'active' : ''}" data-window="180">3h</button>
+                <button class="timeline-window-pill ${windowMinutes === 1440 ? 'active' : ''}" data-window="1440">24h</button>
               </div>
             </div>
           </div>
@@ -5803,21 +5950,23 @@ export class FrigateEventsCard extends LitElement {
     // Scrubber track click / drag scrubbing
     const track = container.querySelector('.timeline-track-container') as HTMLElement | null;
     if (track) {
-      const handleSeek = (clientX: number) => {
+      let lastCommitAt = 0;
+
+      const getTargetTs = (clientX: number): number | null => {
         const rect = track.getBoundingClientRect();
-        if (rect.width <= 0) return;
+        if (rect.width <= 0) return null;
         const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
         const duration = this._timelineEndTs - this._timelineStartTs;
-        if (duration <= 0) return;
+        if (duration <= 0) return null;
+        return this._timelineStartTs + (ratio * duration);
+      };
 
-        const targetTs = this._timelineStartTs + (ratio * duration);
-        const targetOffset = this._wallClockToVideoOffset(targetTs);
-        if (this._timelineVideoEl) {
-          const maxSeek = (Number.isFinite(this._timelineVideoEl.duration) && this._timelineVideoEl.duration > 0)
-            ? Math.max(0, this._timelineVideoEl.duration - 0.5)
-            : targetOffset;
-          this._timelineVideoEl.currentTime = Math.max(0, Math.min(targetOffset, maxSeek));
-        }
+      const handleSeek = (clientX: number, commit = false) => {
+        const targetTs = getTargetTs(clientX);
+        if (targetTs === null) return;
+
+        const windowDuration = this._timelineEndTs - this._timelineStartTs;
+        const ratio = Math.max(0, Math.min(1, (targetTs - this._timelineStartTs) / windowDuration));
 
         // Immediately reflect position visually on track even before video timeupdate fires
         const playhead = container.querySelector('.timeline-playhead') as HTMLElement | null;
@@ -5828,6 +5977,23 @@ export class FrigateEventsCard extends LitElement {
         if (currentBadge) {
           const curDate = new Date(targetTs * 1000);
           currentBadge.textContent = curDate.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+        }
+
+        // Seeking outside the loaded VOD chunk requires loading a new chunk.
+        if (targetTs < this._timelineVodStartTs || targetTs > this._timelineVodEndTs) {
+          if (commit) {
+            lastCommitAt = Date.now();
+            this._loadTimelineVideo(targetTs);
+          }
+          return;
+        }
+
+        const targetOffset = this._wallClockToVideoOffset(targetTs);
+        if (this._timelineVideoEl) {
+          const maxSeek = (Number.isFinite(this._timelineVideoEl.duration) && this._timelineVideoEl.duration > 0)
+            ? Math.max(0, this._timelineVideoEl.duration - 0.5)
+            : targetOffset;
+          this._timelineVideoEl.currentTime = Math.max(0, Math.min(targetOffset, maxSeek));
         }
       };
 
@@ -5855,6 +6021,7 @@ export class FrigateEventsCard extends LitElement {
           track.removeEventListener('pointermove', onMove);
           track.removeEventListener('pointerup', onUp);
           track.removeEventListener('pointercancel', onUp);
+          handleSeek(ev.clientX, true);
           // Sync final playhead UI after drag release
           this._updateTimelinePlayheadUI();
         };
@@ -5867,7 +6034,9 @@ export class FrigateEventsCard extends LitElement {
       track.addEventListener('click', (e: MouseEvent) => {
         if ((e.target as HTMLElement)?.closest('.timeline-event-marker')) return;
         e.stopPropagation();
-        handleSeek(e.clientX);
+        // Avoid reloading twice when pointerup already committed the seek.
+        if (Date.now() - lastCommitAt < 400) return;
+        handleSeek(e.clientX, true);
       });
     }
   }
@@ -6304,7 +6473,7 @@ export class FrigateEventsCard extends LitElement {
 
     let renderedEvents = eventsToShow.map(event => this._renderEvent(event));
     const hasTempMask = !!(this._config?.show_temp_mask !== false &&
-      (this.hass?.services?.['frigate_temp_mask'] || this.hass?.states?.['sensor.frigate_active_masks']));
+      (this.hass?.services?.['frigate_temp_mask'] || this._getTemporaryMaskSensor(this.hass?.states)));
     const hasTimeline = this._isTimelineEnabled();
     let renderedPlaceholders = Array(placeholderCount).fill(0).map(() =>
       html`<div

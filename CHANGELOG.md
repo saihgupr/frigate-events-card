@@ -1,6 +1,25 @@
 # Changelog
 
+## [2.6.1] - 2026-10-27
+- Improved: **Timeline UI Redesign** — Modernized timeline player layout, scrubber track, event markers, and controls.
+- Improved: **Temporary Mask Manager UI** — Redesigned mask management cards, countdown indicators, and polygon preview overlays.
+- Added: **24-Hour Timeline Window Preset & Auto-Chunking** — Preset 24h window option with intelligent chunked loading to handle Frigate's nginx-vod playlist limits (~3h/1080 clips) and skip empty overnight gaps seamlessly.
+- Fixed: **Timeline continuous playback on iOS Safari and the HA Companion App** — VOD HLS playlists and MP4 fallbacks are now signed with `authSig` before loading, so the Frigate integration's segment proxy no longer returns 401 Unauthorized. This also fixes timeline playback behind Nabu Casa/authenticated proxies on all browsers.
+- Improved: Timeline window playback pages seamlessly through recordings, and seeking or clicking an event outside the loaded chunk loads the correct footage. Event marker loading now supports up to 500 events for wider windows.
+
+## [2.6.0] - 2026-10-25
+- Added: **Active Masks sensor** — `sensor.frigate_active_masks` diagnostic entity exposing the active mask count, mask details, pending-restart state, and detected Frigate version for dashboards and automations.
+- Added: **Live mask previews** — the Mask Manager captures a fresh camera snapshot when opened and overlays each mask polygon, so you can see exactly what is currently being masked. Falls back to the event snapshot when no camera entity is available.
+- Improved: **Temporary mask lifecycle** — expired and orphaned masks are now cleaned up reliably, including masks discovered after Frigate reconnects from an outage. Masks are retained across restarts, and per-mask duration changes apply without restarting Frigate.
+- Improved: Thinner, cleaner mask polygon outlines in the Mask Manager previews.
+- Improved: Timeline and Mask Manager integration is more resilient when opened from the live feed or an event's context menu.
+- Fixed: `auth/sign_path` WebSocket calls now use the correct `expires` parameter (previously `expires_ticks` was rejected by Home Assistant), so signed snapshots and camera previews load reliably instead of showing the fallback background.
+- Fixed: Temporary mask save, config, and duration errors, including the admin service input schema and Frigate 0.13/0.14/0.18 configuration formats.
+- Security: Event deletion now goes through the admin-only `frigate_temp_mask.delete_event` service, `frigate_temp_mask` proxy views require authentication, hard-coded Frigate URL and camera fallbacks were removed, and event/mask details are rendered with `textContent` to prevent HTML injection.
+- Note: Update the companion `custom_components/frigate_temp_mask` integration and restart Home Assistant to enable the new sensor and admin-only event deletion.
+
 ## [2.5.0] - 2026-10-08
+- Fixed: Expired temporary masks are now removed when Frigate reconnects after being offline, including masks discovered in its configuration.
 - Added: **Timeline & Continuous Playback (Frigate 0.13+ VOD)** — Stream continuous video recordings directly in a dedicated player with an interactive visual scrubber track, color-coded event markers, quick jump intervals (`-15m`, `-1h`, `-3h`, `-12h`, `Start of Day`), and variable playback speeds (up to 8x/16x).
 - Added: **Click to Timeline Navigation** — Clicking an event thumbnail opens directly into the Timeline centered on the event's start time (`timeline_on_click: true`).
 - Added: **Timeline Auto-Advance & Gapless Playback** — Reduced black flashes between clips and auto-advances smoothly across hour recording chunks.
