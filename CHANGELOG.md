@@ -1,5 +1,8 @@
 # Changelog
 
+## [2.6.19] - 2026-10-27
+- Improved: **Android TV now uses the same timeline popup as iPad** — TV no longer gets the separate full-bleed scrim design (`is-tv`). It renders the compact card: solid header, footage at full width, deck with the scrubber underneath. D-pad focus is anchored on the scrubber so arrows still seek and Enter/Space toggles playback.
+
 ## [2.6.18] - 2026-10-27
 - Improved: **Clicking an event on a phone or tablet opens the Timeline on a 15-minute window** instead of the hour default, so the event fills the scrubber. Desktop and TV keep `timeline_default_window_hours`, and a window you pick by hand is remembered for later opens.
 

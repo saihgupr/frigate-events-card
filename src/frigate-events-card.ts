@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.6.18';
+const CARD_VERSION = '2.6.19';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -5868,8 +5868,10 @@ export class FrigateEventsCard extends LitElement {
     }
 
     const container = document.createElement('div');
+    // TV renders the same compact card as iPad/phone now; `timelineLayout`
+    // still marks the device for focus handling.
     container.className = 'frigate-events-modal frigate-timeline-modal'
-      + (layoutMode === 'compact' ? ' is-compact' : layoutMode === 'tv' ? ' is-tv' : '');
+      + (layoutMode === 'desktop' ? '' : ' is-compact');
     container.dataset.timelineLayout = layoutMode;
     this._timelineContainer = container;
     this._isTimelineMuted = this._config?.muted !== false;
@@ -5907,8 +5909,10 @@ export class FrigateEventsCard extends LitElement {
 
     document.body.appendChild(container);
     if (layoutMode === 'tv') {
-      const playBtn = container.querySelector('[data-action="toggle-play"]') as HTMLElement | null;
-      playBtn?.focus({ preventScroll: true });
+      // On-stage transport is hidden by the compact layout, so anchor the
+      // D-pad on the scrubber (arrows seek, Enter/Space toggles playback).
+      const track = container.querySelector('.timeline-track-container[role="slider"]') as HTMLElement | null;
+      track?.focus({ preventScroll: true });
     }
 
     // Initial fetch of events & video load
@@ -6928,10 +6932,8 @@ export class FrigateEventsCard extends LitElement {
     } else {
       const tabsMarkup = this._timelineCameraTabsMarkup(availableCameras, currentCamera);
       const isTvLayout = layoutMode === 'tv';
-      // Compact: transport lives only in the settings sheet Playback section
-      // (full skip set, play/pause, speed). The body transport markup stays
-      // for TV's on-screen bar and is hidden for compact by CSS. TV keeps its
-      // on-screen transport bar and heading-free sheet.
+      // Compact (phones, tablets and TV): transport lives only in the settings
+      // sheet Playback section. The body transport markup below is hidden by CSS.
       const compactSheetInner = `<div class="timeline-sheet-section"><div class="timeline-sheet-heading">Playback</div>${this._timelineTransportMarkup(true)}</div>${this._timelineControlsMarkup(dtValue, windowMinutes, true)}`;
       container.innerHTML = `
       <div class="frigate-events-modal-content" role="dialog" aria-modal="true" aria-label="Timeline">
