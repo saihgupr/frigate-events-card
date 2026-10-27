@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.6.4] - 2026-10-27
+- Fixed: **iPad no longer falls back to the desktop layout** — detection now treats touch support as authoritative, so iPadOS (including the HA companion app WebView) gets the mobile timeline in both orientations.
+- Fixed: **Android TV / TVBro sizing** — TV chrome now scales with viewport height instead of fixed pixels, since TVBro reports a ~960x540 logical viewport for a 1080p panel. Icons, scrubber, transport and topbar are roughly half their previous visual size and the video gets ~70% of the screen.
+- Fixed: **iPhone portrait spacing** — the player no longer stretches into black bars, the stack is centered, controls are a size smaller, and transport + speed stay on one row at 375px wide.
+
 ## [2.6.3] - 2026-10-27
 - Added: **Mobile & TV timeline layout** — the timeline modal now detects the device and switches to a dedicated fullscreen layout on phones, tablets and TV browsers (including TVBro / Android TV) while the desktop layout stays exactly as it was.
 - Added: **Video-first mobile layout** — the player takes all available height, the scrubber sits directly under it with a taller track and larger event markers, and the transport buttons are sized for touch.

@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.6.3';
+const CARD_VERSION = '2.6.4';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -2810,6 +2810,24 @@ export class FrigateEventsCard extends LitElement {
         -webkit-overflow-scrolling: auto;
       }
 
+      /* TV metrics are viewport-relative: TVBro reports ~960x540 logical for a
+         1920x1080 panel, so fixed px chrome would render at double size. */
+      .frigate-timeline-modal.is-tv {
+        --tl-tv-icon: clamp(26px, 3.6vh, 40px);
+        --tl-tv-topbar-h: clamp(44px, 6vh, 64px);
+        --tl-tv-topbar-pad: clamp(6px, 1.2vh, 14px);
+        --tl-tv-btn: clamp(32px, 4.6vh, 48px);
+        --tl-tv-track: clamp(34px, 5.5vh, 56px);
+        --tl-tv-marker: calc(var(--tl-tv-track) * 0.14);
+        --tl-tv-labels: clamp(12px, 1.6vh, 15px);
+        --tl-tv-badge: clamp(15px, 2.2vh, 20px);
+        --tl-tv-btn-h: clamp(36px, 4.6vh, 48px);
+        --tl-tv-play: clamp(46px, 6vh, 60px);
+        --tl-tv-stepper: clamp(30px, 3.6vh, 40px);
+        --tl-tv-bar-pad: clamp(4px, 1vh, 12px);
+        --tl-tv-scrim-top: clamp(10px, 2.4vh, 24px);
+      }
+
       .frigate-timeline-modal.is-compact .frigate-events-modal-content,
       .frigate-timeline-modal.is-tv .frigate-events-modal-content {
         width: 100% !important;
@@ -2842,7 +2860,7 @@ export class FrigateEventsCard extends LitElement {
         padding-left: max(12px, env(safe-area-inset-left, 0px));
         border-bottom: 1px solid var(--tl-line);
         background: var(--card-background-color, #1c1c1e);
-        min-height: 60px;
+        min-height: 52px;
         box-sizing: border-box;
       }
 
@@ -2868,8 +2886,8 @@ export class FrigateEventsCard extends LitElement {
 
       .frigate-timeline-modal.is-compact .timeline-compact-topbar .timeline-camera-tab,
       .frigate-timeline-modal.is-tv .timeline-compact-topbar .timeline-camera-tab {
-        min-height: 44px;
-        padding: 10px 12px;
+        min-height: 40px;
+        padding: 8px 10px;
         font-size: 14px;
         flex-shrink: 0;
       }
@@ -2887,8 +2905,8 @@ export class FrigateEventsCard extends LitElement {
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        width: 44px;
-        height: 44px;
+        width: 40px;
+        height: 40px;
         border-radius: 12px;
         border: 1px solid transparent;
         background: var(--tl-fill);
@@ -2911,8 +2929,8 @@ export class FrigateEventsCard extends LitElement {
         position: static;
         top: auto;
         right: auto;
-        width: 44px;
-        height: 44px;
+        width: 40px;
+        height: 40px;
         flex-shrink: 0;
         background: var(--tl-fill);
         color: var(--tl-text);
@@ -2988,7 +3006,7 @@ export class FrigateEventsCard extends LitElement {
 
       .frigate-timeline-modal.is-compact .timeline-track-container,
       .frigate-timeline-modal.is-tv .timeline-track-container {
-        height: 60px;
+        height: 52px;
         border-radius: 12px;
         touch-action: none;
         -webkit-touch-callout: none;
@@ -3021,7 +3039,7 @@ export class FrigateEventsCard extends LitElement {
 
       .frigate-timeline-modal.is-compact .timeline-time-badge,
       .frigate-timeline-modal.is-tv .timeline-time-badge {
-        font-size: 17px;
+        font-size: 16px;
         font-variant-numeric: tabular-nums;
       }
 
@@ -3045,17 +3063,17 @@ export class FrigateEventsCard extends LitElement {
 
       .frigate-timeline-modal.is-compact .timeline-transport-btn,
       .frigate-timeline-modal.is-tv .timeline-transport-btn {
-        min-width: 48px;
-        height: 52px;
-        padding: 0 12px;
+        min-width: 42px;
+        height: 46px;
+        padding: 0 8px;
         font-size: 14px;
         border-radius: 12px;
       }
 
       .frigate-timeline-modal.is-compact .timeline-transport-btn.play-btn,
       .frigate-timeline-modal.is-tv .timeline-transport-btn.play-btn {
-        width: 60px;
-        height: 60px;
+        width: 54px;
+        height: 54px;
         margin: 0 6px;
       }
 
@@ -3073,8 +3091,8 @@ export class FrigateEventsCard extends LitElement {
 
       .frigate-timeline-modal.is-compact .timeline-stepper-btn,
       .frigate-timeline-modal.is-tv .timeline-stepper-btn {
-        width: 44px;
-        height: 40px;
+        width: 40px;
+        height: 34px;
         font-size: 18px;
       }
 
@@ -3086,6 +3104,54 @@ export class FrigateEventsCard extends LitElement {
         align-items: center;
         justify-content: center;
         font-size: 14px;
+      }
+
+      /* Compact: transport + speed cluster fit on ONE line at 375px CSS width. */
+      .frigate-timeline-modal.is-compact .timeline-transport-bar {
+        flex-wrap: nowrap;
+        gap: 4px;
+        padding: 6px 8px max(8px, env(safe-area-inset-bottom, 8px));
+        overflow-x: auto;
+        scrollbar-width: none;
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-transport-bar::-webkit-scrollbar {
+        display: none;
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-transport-controls {
+        flex-wrap: nowrap;
+        gap: 2px;
+        flex-shrink: 0;
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-speed-controls {
+        flex-shrink: 0;
+        gap: 2px;
+        padding: 2px;
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-stepper-btn {
+        width: 30px;
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-speed-display {
+        min-width: 32px;
+        min-height: 34px;
+        font-size: 13px;
+      }
+
+      /* Compact portrait: player keeps 16:9 (no flex-grow black bars), the whole
+         stack centers so spare space is symmetric. Landscape keeps fill-height. */
+      @media (orientation: portrait) {
+        .frigate-timeline-modal.is-compact .timeline-modal-body {
+          justify-content: center;
+        }
+        .frigate-timeline-modal.is-compact .timeline-player-container {
+          flex: 0 0 auto;
+          aspect-ratio: 16 / 9;
+          width: 100%;
+        }
       }
 
       /* Time controls live in a bottom sheet behind the gear button. */
@@ -3257,45 +3323,111 @@ export class FrigateEventsCard extends LitElement {
         }
       }
 
-      /* TV: scrubber always overlays the video bottom edge; transport stays beneath. */
+      /* TV: scrubber always overlays the video bottom edge; transport stays beneath.
+         Pull-back is derived from the viewport-relative heights above. */
       .frigate-timeline-modal.is-tv .timeline-scrubber-wrapper {
-        margin-top: -96px;
-        padding: 28px 16px 8px;
+        margin-top: calc(-1 * (var(--tl-tv-scrim-top) + var(--tl-tv-track) + 6px + var(--tl-tv-badge) + 6px + var(--tl-tv-bar-pad)));
+        padding: var(--tl-tv-scrim-top) 16px var(--tl-tv-bar-pad);
         background: linear-gradient(to top, rgba(0, 0, 0, 0.9) 62%, rgba(0, 0, 0, 0));
         border-top: none;
         z-index: 6;
       }
 
+      .frigate-timeline-modal.is-tv .timeline-track-container {
+        height: var(--tl-tv-track);
+      }
+
+      .frigate-timeline-modal.is-tv .timeline-event-marker {
+        top: var(--tl-tv-marker);
+        bottom: var(--tl-tv-marker);
+      }
+
       .frigate-timeline-modal.is-tv .timeline-track-labels {
+        font-size: var(--tl-tv-labels);
         color: rgba(255, 255, 255, 0.9);
       }
 
       .frigate-timeline-modal.is-tv .timeline-time-badge {
+        font-size: var(--tl-tv-badge);
         color: #ffffff;
       }
 
-      /* TV: no hover reliance — always-visible focus rings, 48px+ targets, generous spacing. */
+      /* TV: no hover reliance — always-visible focus rings, generous spacing. */
+      .frigate-timeline-modal.is-tv .timeline-compact-topbar {
+        min-height: var(--tl-tv-topbar-h);
+        padding-top: max(var(--tl-tv-topbar-pad), env(safe-area-inset-top, 0px));
+        padding-bottom: var(--tl-tv-topbar-pad);
+        gap: var(--tl-tv-topbar-pad);
+      }
+
+      /* Single-camera spacer must not add height; the bar sizes to its content. */
+      .frigate-timeline-modal.is-tv .timeline-compact-topbar > div:not(.timeline-camera-tabs):not(.timeline-compact-actions) {
+        min-height: 0;
+        height: auto;
+        align-self: center;
+      }
+
       .frigate-timeline-modal.is-tv .timeline-mute-btn {
         opacity: 1;
-        width: 48px;
-        height: 48px;
+        width: var(--tl-tv-btn);
+        height: var(--tl-tv-btn);
+      }
+
+      .frigate-timeline-modal.is-tv .timeline-mute-btn svg {
+        width: var(--tl-tv-icon);
+        height: var(--tl-tv-icon);
       }
 
       .frigate-timeline-modal.is-tv .timeline-settings-btn,
       .frigate-timeline-modal.is-tv .timeline-compact-topbar .frigate-events-modal-close {
-        width: 48px;
-        height: 48px;
+        width: var(--tl-tv-btn);
+        height: var(--tl-tv-btn);
+      }
+
+      .frigate-timeline-modal.is-tv .timeline-settings-btn svg,
+      .frigate-timeline-modal.is-tv .timeline-compact-topbar .frigate-events-modal-close svg {
+        width: var(--tl-tv-icon);
+        height: var(--tl-tv-icon);
       }
 
       .frigate-timeline-modal.is-tv .timeline-compact-topbar .timeline-camera-tab {
-        min-height: 48px;
-        min-width: 48px;
-        font-size: 15px;
+        min-height: var(--tl-tv-btn);
+        min-width: var(--tl-tv-btn);
+        font-size: var(--tl-tv-labels);
+        padding: 8px 10px;
       }
 
       .frigate-timeline-modal.is-tv .timeline-transport-bar {
-        gap: 12px;
-        padding: 10px 16px max(16px, env(safe-area-inset-bottom, 16px));
+        flex-wrap: nowrap;
+        gap: var(--tl-tv-bar-pad);
+        padding: var(--tl-tv-bar-pad) 16px max(var(--tl-tv-bar-pad), env(safe-area-inset-bottom, 16px));
+      }
+
+      .frigate-timeline-modal.is-tv .timeline-transport-controls {
+        flex-wrap: nowrap;
+        gap: calc(var(--tl-tv-bar-pad) * 0.75);
+      }
+
+      .frigate-timeline-modal.is-tv .timeline-transport-btn {
+        min-width: var(--tl-tv-btn);
+        height: var(--tl-tv-btn-h);
+        padding: 0 10px;
+      }
+
+      .frigate-timeline-modal.is-tv .timeline-transport-btn.play-btn {
+        width: var(--tl-tv-play);
+        height: var(--tl-tv-play);
+        margin: 0 4px;
+      }
+
+      .frigate-timeline-modal.is-tv .timeline-transport-btn svg {
+        width: var(--tl-tv-icon);
+        height: var(--tl-tv-icon);
+      }
+
+      .frigate-timeline-modal.is-tv .timeline-stepper-btn {
+        width: var(--tl-tv-stepper);
+        height: var(--tl-tv-stepper);
       }
 
       .frigate-timeline-modal.is-tv .timeline-camera-tab:focus-visible,
@@ -5130,11 +5262,34 @@ export class FrigateEventsCard extends LitElement {
         if (noHover && !coarse && !fine && wide) return 'tv';
       } catch (_) {}
 
-      // iPhone / iPad / iPod, including iPadOS masquerading as Mac.
+      // iPhone / iPad / iPod, including iPadOS masquerading as Mac (fast paths).
       if (/iPhone|iPad|iPod/i.test(ua)) return 'compact';
       if (platform === 'MacIntel' && maxTouchPoints > 1) return 'compact';
       // Android phones and tablets (Android TV was already handled above).
       if (/Android/i.test(ua)) return 'compact';
+
+      // Touch is authoritative: any phone/tablet reporting touch gets compact,
+      // unless it is a genuine mouse-driven desktop (fine pointer + hover + wide).
+      try {
+        const touchPoints = Number((nav as any)?.maxTouchPoints || 0);
+        const touch = touchPoints > 0 || (typeof w !== 'undefined' && 'ontouchstart' in w);
+        if (touch) {
+          let isFineHoverDesktop = false;
+          try {
+            if (matchMediaFn) {
+              const fine = matchMediaFn('(pointer: fine)').matches;
+              const canHover = matchMediaFn('(hover: hover)').matches;
+              const wide = typeof w.innerWidth === 'number'
+                ? w.innerWidth > 1200
+                : matchMediaFn('(min-width: 1201px)').matches;
+              isFineHoverDesktop = fine && canHover && wide;
+            } else if (typeof w.innerWidth === 'number') {
+              isFineHoverDesktop = w.innerWidth > 1200;
+            }
+          } catch (_) {}
+          if (!isFineHoverDesktop) return 'compact';
+        }
+      } catch (_) {}
 
       try {
         if (matchMediaFn) {
