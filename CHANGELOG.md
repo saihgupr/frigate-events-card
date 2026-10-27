@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.6.6] - 2026-10-27
+- Fixed: Tablet detection no longer gets demoted to the desktop layout. Any device reporting a touch digitizer or a coarse pointer now gets the mobile timeline; previously an iPad with a trackpad/mouse attached (or a WebView reporting `pointer: fine` + `hover: hover`) could fall through to desktop.
+
+## [2.6.5] - 2026-10-27
+- Fixed: Stray `}} />` text rendered at the bottom of every event thumbnail. A duplicated fragment of the tile template was being emitted as literal text (present since 2.6.x, most visible on wide/iPad layouts).
+
 ## [2.6.4] - 2026-10-27
 - Fixed: **iPad no longer falls back to the desktop layout** — detection now treats touch support as authoritative, so iPadOS (including the HA companion app WebView) gets the mobile timeline in both orientations.
 - Fixed: **Android TV / TVBro sizing** — TV chrome now scales with viewport height instead of fixed pixels, since TVBro reports a ~960x540 logical viewport for a 1080p panel. Icons, scrubber, transport and topbar are roughly half their previous visual size and the video gets ~70% of the screen.

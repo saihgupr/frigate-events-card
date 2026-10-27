@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.6.4';
+const CARD_VERSION = '2.6.6';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -5268,27 +5268,17 @@ export class FrigateEventsCard extends LitElement {
       // Android phones and tablets (Android TV was already handled above).
       if (/Android/i.test(ua)) return 'compact';
 
-      // Touch is authoritative: any phone/tablet reporting touch gets compact,
-      // unless it is a genuine mouse-driven desktop (fine pointer + hover + wide).
+      // Touch is authoritative: any device that reports a touch digitizer or a
+      // coarse pointer anywhere gets the mobile layout. Tablets report hover/fine
+      // as soon as a trackpad or mouse is attached (iPad + Magic Keyboard), so
+      // hover/pointer type must not be allowed to demote them back to desktop.
       try {
         const touchPoints = Number((nav as any)?.maxTouchPoints || 0);
-        const touch = touchPoints > 0 || (typeof w !== 'undefined' && 'ontouchstart' in w);
-        if (touch) {
-          let isFineHoverDesktop = false;
-          try {
-            if (matchMediaFn) {
-              const fine = matchMediaFn('(pointer: fine)').matches;
-              const canHover = matchMediaFn('(hover: hover)').matches;
-              const wide = typeof w.innerWidth === 'number'
-                ? w.innerWidth > 1200
-                : matchMediaFn('(min-width: 1201px)').matches;
-              isFineHoverDesktop = fine && canHover && wide;
-            } else if (typeof w.innerWidth === 'number') {
-              isFineHoverDesktop = w.innerWidth > 1200;
-            }
-          } catch (_) {}
-          if (!isFineHoverDesktop) return 'compact';
-        }
+        const touch = touchPoints > 0
+          || (typeof w !== 'undefined' && 'ontouchstart' in w)
+          || (typeof w !== 'undefined' && 'onmsgesturechange' in w);
+        const anyCoarse = matchMediaFn ? matchMediaFn('(any-pointer: coarse)').matches : false;
+        if (touch || anyCoarse) return 'compact';
       } catch (_) {}
 
       try {
@@ -7682,8 +7672,6 @@ export class FrigateEventsCard extends LitElement {
               img.src = thumb;
               return;
             }
-          }}
-        />
           }}
         />
         ${playVideoOnHover && isHovered
