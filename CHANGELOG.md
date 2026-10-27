@@ -1,14 +1,11 @@
 # Changelog
 
-## [2.6.5] - 2026-10-26
-- Fixed: **Long timeline windows (24h) failing with "No continuous footage stream available"** — Frigate's nginx-vod module caps each playlist at 1080 recording clips (~3h), so large windows now load footage in smaller chunks and page through them automatically. Night-time gaps with no recordings are skipped instead of requesting an empty window.
-- Improved: Timeline window playback pages seamlessly through recordings, and seeking or clicking an event outside the loaded chunk loads the correct footage. Event marker loading now supports up to 500 events for wider windows.
-
-## [2.6.2] - 2026-10-26
-- Changed: Timeline window presets now offer 24h instead of 2h, making longer playback ranges easier to select.
-
-## [2.6.1] - 2026-10-25
+## [2.6.1] - 2026-10-27
+- Improved: **Timeline UI Redesign** — Modernized timeline player layout, scrubber track, event markers, and controls.
+- Improved: **Temporary Mask Manager UI** — Redesigned mask management cards, countdown indicators, and polygon preview overlays.
+- Added: **24-Hour Timeline Window Preset & Auto-Chunking** — Preset 24h window option with intelligent chunked loading to handle Frigate's nginx-vod playlist limits (~3h/1080 clips) and skip empty overnight gaps seamlessly.
 - Fixed: **Timeline continuous playback on iOS Safari and the HA Companion App** — VOD HLS playlists and MP4 fallbacks are now signed with `authSig` before loading, so the Frigate integration's segment proxy no longer returns 401 Unauthorized. This also fixes timeline playback behind Nabu Casa/authenticated proxies on all browsers.
+- Improved: Timeline window playback pages seamlessly through recordings, and seeking or clicking an event outside the loaded chunk loads the correct footage. Event marker loading now supports up to 500 events for wider windows.
 
 ## [2.6.0] - 2026-10-25
 - Added: **Active Masks sensor** — `sensor.frigate_active_masks` diagnostic entity exposing the active mask count, mask details, pending-restart state, and detected Frigate version for dashboards and automations.
