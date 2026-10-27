@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.6.6';
+const CARD_VERSION = '2.6.7';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -2285,113 +2285,151 @@ export class FrigateEventsCard extends LitElement {
         fill: currentColor;
       }
 
-      /* ─── Timeline Modal Styles ─── */
+      /* ─── Timeline ───
+         Same quiet surface as the mask manager: inherits the Home Assistant theme, 4/8px spacing.
+         The only saturated colors are data: event markers and the playhead. */
+      .frigate-timeline-modal {
+        --tl-text: var(--primary-text-color, #f2f2f7);
+        --tl-text-2: var(--secondary-text-color, #9a9aa2);
+        --tl-line: var(--divider-color, rgba(255, 255, 255, 0.12));
+        --tl-accent: var(--primary-color, #0a84ff);
+        --tl-warn: #ff9f0a;
+        --tl-ok: #30d158;
+        --tl-playhead: #ff453a;
+        --tl-fill: color-mix(in srgb, var(--tl-text) 7%, transparent);
+        --tl-fill-hover: color-mix(in srgb, var(--tl-text) 12%, transparent);
+      }
+
       .frigate-timeline-modal .frigate-events-modal-content {
         width: min(860px, 95vw);
-        min-width: min(860px, 95vw);
-        max-width: 900px;
-        max-height: 92vh;
-        border: 1px solid rgba(255, 255, 255, 0.12);
-        box-shadow: 0 24px 48px rgba(0, 0, 0, 0.8);
-        background: #161616;
+        min-width: 0;
+        max-width: 860px;
+        max-height: min(92vh, calc(100dvh - 32px));
+        border: 1px solid var(--tl-line);
+        border-radius: 16px;
+        box-shadow: 0 24px 48px rgba(0, 0, 0, 0.5);
+        background: var(--card-background-color, #1c1c1e);
+        color: var(--tl-text);
         display: flex;
         flex-direction: column;
+      }
+
+      .frigate-timeline-modal .frigate-events-modal-close {
+        top: 12px;
+        right: 12px;
+        width: 32px;
+        height: 32px;
+        background: var(--tl-fill);
+        color: var(--tl-text-2);
+      }
+
+      .frigate-timeline-modal .frigate-events-modal-close:hover {
+        background: var(--tl-fill-hover);
+        color: var(--tl-text);
+        transform: none;
       }
 
       .timeline-modal-header {
         display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 14px 20px;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-        background: rgba(24, 24, 24, 0.98);
-      }
-
-      .timeline-modal-header-left {
-        display: flex;
-        align-items: center;
-        gap: 10px;
+        align-items: baseline;
+        gap: 8px;
+        flex-shrink: 0;
+        padding: 20px 56px 12px 24px;
       }
 
       .timeline-modal-title {
-        font-size: 16px;
-        font-weight: 600;
-        color: #ffffff;
-        display: flex;
-        align-items: center;
-        gap: 8px;
         margin: 0;
-      }
-
-      .timeline-modal-title svg {
-        width: 18px;
-        height: 18px;
-        fill: #60a5fa;
+        font-size: 20px;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+        color: var(--tl-text);
       }
 
       .timeline-camera-badge {
-        font-size: 11px;
-        padding: 2px 8px;
-        border-radius: 10px;
-        background: rgba(59, 130, 246, 0.2);
-        color: #93c5fd;
-        border: 1px solid rgba(59, 130, 246, 0.35);
-        font-weight: 600;
+        font-size: 13px;
+        color: var(--tl-text-2);
       }
 
       .timeline-modal-body {
-        padding: 16px 20px;
+        flex: 1;
+        min-height: 0;
         overflow-y: auto;
+        overscroll-behavior: contain;
         display: flex;
         flex-direction: column;
-        gap: 14px;
+        gap: 16px;
+        padding: 16px 24px 24px;
         box-sizing: border-box;
       }
 
       .timeline-camera-tabs {
         display: flex;
-        gap: 6px;
+        gap: 4px;
+        flex-shrink: 0;
+        margin: -16px -24px 0;
+        padding: 0 16px;
         overflow-x: auto;
-        padding-bottom: 4px;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        scrollbar-width: none;
+        border-bottom: 1px solid var(--tl-line);
+      }
+
+      .timeline-camera-tabs::-webkit-scrollbar {
+        display: none;
       }
 
       .timeline-camera-tab {
-        padding: 5px 12px;
-        border-radius: 6px;
-        font-size: 12px;
+        position: relative;
+        padding: 8px 8px 12px;
+        font-size: 13px;
         font-weight: 500;
-        color: #aaa;
-        background: transparent;
-        border: 1px solid rgba(255, 255, 255, 0.12);
-        cursor: pointer;
-        transition: all 0.15s;
         font-family: inherit;
+        color: var(--tl-text-2);
+        background: none;
+        border: none;
         white-space: nowrap;
+        cursor: pointer;
+        transition: color 0.15s ease;
       }
 
-      .timeline-camera-tab:hover {
-        background: rgba(255, 255, 255, 0.08);
-        color: #fff;
-      }
-
+      .timeline-camera-tab:hover,
       .timeline-camera-tab.active {
-        background: rgba(59, 130, 246, 0.25);
-        color: #93c5fd;
-        border-color: #3b82f6;
+        color: var(--tl-text);
       }
 
-      /* Time & Window Controls Row */
+      .timeline-camera-tab.active::after {
+        content: '';
+        position: absolute;
+        left: 8px;
+        right: 8px;
+        bottom: -1px;
+        height: 2px;
+        border-radius: 2px;
+        background: var(--tl-accent);
+      }
+
+      .timeline-camera-tabs + .timeline-controls-bar {
+        margin-top: 0;
+      }
+
+      .timeline-camera-tab:focus-visible,
+      .timeline-quick-btn:focus-visible,
+      .timeline-window-pill:focus-visible,
+      .timeline-transport-btn:focus-visible,
+      .timeline-stepper-btn:focus-visible,
+      .timeline-speed-display:focus-visible,
+      .timeline-datetime-input:focus-visible,
+      .timeline-mute-btn:focus-visible {
+        outline: 2px solid var(--tl-accent);
+        outline-offset: 2px;
+      }
+
+      /* Time & window controls */
       .timeline-controls-bar {
         display: flex;
         flex-wrap: wrap;
-        align-items: center;
+        align-items: flex-end;
         justify-content: space-between;
-        gap: 10px;
-        background: rgba(255, 255, 255, 0.03);
-        padding: 10px 14px;
-        border-radius: 8px;
-        border: 1px solid rgba(255, 255, 255, 0.06);
+        gap: 12px 24px;
       }
 
       .timeline-datetime-group {
@@ -2402,94 +2440,89 @@ export class FrigateEventsCard extends LitElement {
       }
 
       .timeline-datetime-label {
-        font-size: 12px;
-        font-weight: 500;
-        color: #94a3b8;
+        font-size: 13px;
+        color: var(--tl-text-2);
       }
 
       .timeline-datetime-input {
-        background: rgba(0, 0, 0, 0.4);
-        border: 1px solid rgba(255, 255, 255, 0.15);
-        color: #ffffff;
-        padding: 5px 10px;
-        border-radius: 6px;
-        font-size: 12px;
+        background: var(--tl-fill);
+        border: 1px solid transparent;
+        color: var(--tl-text);
+        color-scheme: dark light;
+        height: 32px;
+        padding: 0 10px;
+        border-radius: 8px;
+        font-size: 13px;
         font-family: inherit;
-        outline: none;
-        transition: border-color 0.15s;
+        box-sizing: border-box;
+        transition: background 0.15s ease;
+      }
+
+      .timeline-datetime-input:hover {
+        background: var(--tl-fill-hover);
       }
 
       .timeline-datetime-input:focus {
-        border-color: #3b82f6;
+        outline: none;
+        border-color: var(--tl-accent);
       }
 
-      .timeline-quick-jumps {
-        display: flex;
+      .timeline-quick-jumps,
+      .timeline-window-pills {
+        display: inline-flex;
         align-items: center;
-        gap: 4px;
         flex-wrap: wrap;
+        gap: 2px;
+        padding: 2px;
+        border-radius: 10px;
+        background: var(--tl-fill);
       }
 
-      .timeline-quick-btn {
-        padding: 3px 8px;
-        font-size: 11px;
+      .timeline-quick-btn,
+      .timeline-window-pill {
+        height: 28px;
+        padding: 0 10px;
+        font-size: 13px;
         font-weight: 500;
-        border-radius: 4px;
-        background: rgba(255, 255, 255, 0.06);
-        color: #cbd5e1;
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        cursor: pointer;
-        transition: all 0.15s;
         font-family: inherit;
+        border-radius: 8px;
+        background: none;
+        color: var(--tl-text-2);
+        border: none;
+        cursor: pointer;
+        white-space: nowrap;
+        transition: background 0.15s ease, color 0.15s ease;
       }
 
-      .timeline-quick-btn:hover {
-        background: rgba(255, 255, 255, 0.12);
-        color: #ffffff;
+      .timeline-quick-btn:hover,
+      .timeline-window-pill:hover {
+        background: var(--tl-fill-hover);
+        color: var(--tl-text);
+      }
+
+      .timeline-window-pill.active {
+        background: var(--card-background-color, #1c1c1e);
+        color: var(--tl-text);
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
       }
 
       .timeline-window-group {
         display: flex;
         align-items: center;
-        gap: 6px;
+        gap: 8px;
       }
 
-      .timeline-window-pills {
-        display: flex;
-        gap: 4px;
-      }
-
-      .timeline-window-pill {
-        padding: 3px 8px;
-        font-size: 11px;
-        font-weight: 500;
-        border-radius: 4px;
-        background: transparent;
-        color: #94a3b8;
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        cursor: pointer;
-        transition: all 0.15s;
-        font-family: inherit;
-      }
-
-      .timeline-window-pill.active {
-        background: rgba(59, 130, 246, 0.25);
-        color: #93c5fd;
-        border-color: #3b82f6;
-      }
-
-      /* Video Player Container */
+      /* Video player */
       .timeline-player-container {
         position: relative;
         width: 100%;
         aspect-ratio: 16 / 9;
         background: #000000;
-        border-radius: 10px;
+        border-radius: 12px;
         overflow: hidden;
         display: flex;
         align-items: center;
         justify-content: center;
-        box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.6);
         cursor: pointer;
       }
 
@@ -2525,9 +2558,9 @@ export class FrigateEventsCard extends LitElement {
         flex-direction: column;
         align-items: center;
         justify-content: center;
-        gap: 10px;
+        gap: 12px;
         background: rgba(0, 0, 0, 0.6);
-        color: #94a3b8;
+        color: rgba(255, 255, 255, 0.72);
         font-size: 13px;
         z-index: 5;
         pointer-events: none;
@@ -2539,10 +2572,10 @@ export class FrigateEventsCard extends LitElement {
       }
 
       .timeline-spinner {
-        width: 32px;
-        height: 32px;
-        border: 3px solid rgba(255, 255, 255, 0.1);
-        border-top-color: #3b82f6;
+        width: 28px;
+        height: 28px;
+        border: 2px solid rgba(255, 255, 255, 0.15);
+        border-top-color: #ffffff;
         border-radius: 50%;
         animation: timeline-spin 0.8s linear infinite;
       }
@@ -2551,75 +2584,22 @@ export class FrigateEventsCard extends LitElement {
         to { transform: rotate(360deg); }
       }
 
-      .timeline-mute-btn {
-        position: absolute;
-        top: 10px;
-        right: 10px;
-        z-index: 10;
-        width: 34px;
-        height: 34px;
-        border-radius: 50%;
-        background: rgba(0, 0, 0, 0.55);
-        backdrop-filter: blur(4px);
-        -webkit-backdrop-filter: blur(4px);
-        border: none;
-        color: #ffffff;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        cursor: pointer;
-        padding: 0;
-        opacity: 0;
-        pointer-events: auto;
-        transition: opacity 0.2s ease, background 0.2s ease, transform 0.15s ease;
+      @media (prefers-reduced-motion: reduce) {
+        .timeline-spinner { animation-duration: 2.4s; }
       }
 
-      .timeline-mute-btn.top-left {
-        left: 10px;
-        right: auto;
-      }
-
-      .timeline-mute-btn.top-right {
-        right: 10px;
-        left: auto;
-      }
-
-      .timeline-player-container:hover .timeline-mute-btn {
-        opacity: 0.85;
-      }
-
-      .timeline-mute-btn:hover {
-        opacity: 1 !important;
-        background: rgba(0, 0, 0, 0.8);
-        transform: scale(1.08);
-      }
-
-      .timeline-mute-btn:active {
-        transform: scale(0.95);
-      }
-
-      .timeline-mute-btn svg {
-        width: 18px;
-        height: 18px;
-        fill: currentColor;
-      }
-
-      /* Scrubber Track Area */
+      /* Scrubber */
       .timeline-scrubber-wrapper {
         display: flex;
         flex-direction: column;
-        gap: 6px;
-        background: rgba(255, 255, 255, 0.03);
-        padding: 12px 14px;
-        border-radius: 8px;
-        border: 1px solid rgba(255, 255, 255, 0.06);
+        gap: 8px;
       }
 
       .timeline-track-container {
         position: relative;
-        height: 36px;
-        background: rgba(255, 255, 255, 0.08);
-        border-radius: 6px;
+        height: 40px;
+        background: var(--tl-fill);
+        border-radius: 10px;
         cursor: pointer;
         user-select: none;
         touch-action: none;
@@ -2634,33 +2614,35 @@ export class FrigateEventsCard extends LitElement {
 
       .timeline-event-marker {
         position: absolute;
-        top: 2px;
-        bottom: 2px;
-        background: rgba(59, 130, 246, 0.7);
+        top: 6px;
+        bottom: 6px;
+        min-width: 3px;
+        background: var(--tl-accent);
+        opacity: 0.85;
         border-radius: 3px;
         cursor: pointer;
         pointer-events: auto;
-        transition: transform 0.15s, background 0.15s;
+        transition: opacity 0.15s ease, top 0.15s ease, bottom 0.15s ease;
         z-index: 2;
       }
 
       .timeline-event-marker:hover {
-        background: #60a5fa;
-        transform: scaleY(1.1);
+        opacity: 1;
+        top: 3px;
+        bottom: 3px;
         z-index: 4;
       }
 
-      .timeline-event-marker.person { background: rgba(59, 130, 246, 0.8); }
-      .timeline-event-marker.car { background: rgba(245, 158, 11, 0.8); }
-      .timeline-event-marker.dog, .timeline-event-marker.cat { background: rgba(16, 185, 129, 0.8); }
+      .timeline-event-marker.person { background: var(--tl-accent); }
+      .timeline-event-marker.car { background: var(--tl-warn); }
+      .timeline-event-marker.dog, .timeline-event-marker.cat { background: var(--tl-ok); }
 
       .timeline-playhead {
         position: absolute;
         top: 0;
         bottom: 0;
-        width: 3px;
-        background: #ef4444;
-        box-shadow: 0 0 8px #ef4444;
+        width: 2px;
+        background: var(--tl-playhead);
         z-index: 5;
         pointer-events: none;
         transform: translateX(-50%);
@@ -2669,24 +2651,32 @@ export class FrigateEventsCard extends LitElement {
       .timeline-playhead::after {
         content: '';
         position: absolute;
-        top: 0;
+        top: -1px;
         left: 50%;
         transform: translateX(-50%);
-        width: 9px;
-        height: 9px;
-        background: #ef4444;
+        width: 8px;
+        height: 8px;
+        background: var(--tl-playhead);
         border-radius: 50%;
       }
 
       .timeline-track-labels {
         display: flex;
+        align-items: center;
         justify-content: space-between;
-        font-size: 11px;
-        color: #94a3b8;
-        font-family: monospace;
+        font-size: 12px;
+        color: var(--tl-text-2);
+        font-variant-numeric: tabular-nums;
       }
 
-      /* Transport & Speed Row */
+      .timeline-time-badge {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--tl-text);
+        font-variant-numeric: tabular-nums;
+      }
+
+      /* Transport & speed */
       .timeline-transport-bar {
         display: flex;
         flex-wrap: wrap;
@@ -2698,42 +2688,52 @@ export class FrigateEventsCard extends LitElement {
       .timeline-transport-controls {
         display: flex;
         align-items: center;
-        gap: 6px;
+        gap: 4px;
       }
 
       .timeline-transport-btn {
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        background: rgba(255, 255, 255, 0.06);
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        color: #ffffff;
-        padding: 6px 10px;
-        border-radius: 6px;
-        font-size: 12px;
+        min-width: 44px;
+        height: 36px;
+        background: none;
+        border: none;
+        color: var(--tl-text-2);
+        padding: 0 10px;
+        border-radius: 10px;
+        font-size: 13px;
         font-weight: 500;
-        cursor: pointer;
-        transition: all 0.15s;
         font-family: inherit;
+        font-variant-numeric: tabular-nums;
+        cursor: pointer;
+        transition: background 0.15s ease, color 0.15s ease;
       }
 
       .timeline-transport-btn:hover {
-        background: rgba(255, 255, 255, 0.15);
+        background: var(--tl-fill-hover);
+        color: var(--tl-text);
       }
 
       .timeline-transport-btn.play-btn {
-        background: #3b82f6;
-        border-color: #2563eb;
-        padding: 6px 14px;
+        width: 44px;
+        height: 44px;
+        min-width: 0;
+        padding: 0;
+        margin: 0 4px;
+        border-radius: 50%;
+        background: var(--tl-accent);
+        color: #ffffff;
       }
 
       .timeline-transport-btn.play-btn:hover {
-        background: #2563eb;
+        background: color-mix(in srgb, var(--tl-accent) 85%, #000);
+        color: #ffffff;
       }
 
       .timeline-transport-btn svg {
-        width: 14px;
-        height: 14px;
+        width: 18px;
+        height: 18px;
         fill: currentColor;
         pointer-events: none;
       }
@@ -2742,9 +2742,8 @@ export class FrigateEventsCard extends LitElement {
         display: inline-flex;
         align-items: center;
         gap: 2px;
-        background: rgba(255, 255, 255, 0.05);
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 6px;
+        background: var(--tl-fill);
+        border-radius: 10px;
         padding: 2px;
       }
 
@@ -2752,23 +2751,23 @@ export class FrigateEventsCard extends LitElement {
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        width: 22px;
-        height: 22px;
-        background: transparent;
-        color: #94a3b8;
+        width: 28px;
+        height: 28px;
+        background: none;
+        color: var(--tl-text-2);
         border: none;
-        border-radius: 4px;
+        border-radius: 8px;
         cursor: pointer;
-        font-size: 14px;
-        font-weight: 700;
+        font-size: 16px;
+        font-weight: 500;
         line-height: 1;
-        transition: all 0.15s;
+        transition: background 0.15s ease, color 0.15s ease;
         user-select: none;
       }
 
       .timeline-stepper-btn:hover:not(:disabled) {
-        background: rgba(255, 255, 255, 0.12);
-        color: #ffffff;
+        background: var(--tl-fill-hover);
+        color: var(--tl-text);
       }
 
       .timeline-stepper-btn:disabled {
@@ -2777,31 +2776,27 @@ export class FrigateEventsCard extends LitElement {
       }
 
       .timeline-speed-display {
-        font-size: 11px;
-        font-weight: 700;
-        min-width: 38px;
+        font-size: 13px;
+        font-weight: 600;
+        min-width: 48px;
         text-align: center;
-        color: #93c5fd;
-        padding: 2px 4px;
-        border-radius: 4px;
+        color: var(--tl-text);
+        font-variant-numeric: tabular-nums;
+        padding: 4px;
+        border-radius: 8px;
         cursor: pointer;
         user-select: none;
-        transition: all 0.15s;
+        transition: background 0.15s ease;
       }
 
       .timeline-speed-display:hover {
-        background: rgba(59, 130, 246, 0.2);
-        color: #60a5fa;
+        background: var(--tl-fill-hover);
       }
 
-      .timeline-time-badge {
-        font-size: 12px;
-        font-family: monospace;
-        color: #e2e8f0;
-        background: rgba(0, 0, 0, 0.3);
-        padding: 4px 8px;
-        border-radius: 4px;
-        border: 1px solid rgba(255, 255, 255, 0.06);
+      @media (max-width: 560px) {
+        .timeline-modal-body { padding: 12px 16px 20px; gap: 12px; }
+        .timeline-camera-tabs { margin: -12px -16px 0; }
+        .timeline-transport-bar { justify-content: center; }
       }
     `;
     if (!style.parentNode) {
@@ -5642,17 +5637,12 @@ export class FrigateEventsCard extends LitElement {
     const mutePosition = this._config?.live_view_mute_position === 'top-left' ? 'top-left' : 'top-right';
 
     container.innerHTML = `
-      <div class="frigate-events-modal-content">
+      <div class="frigate-events-modal-content" role="dialog" aria-modal="true" aria-label="Timeline">
         <div class="timeline-modal-header">
-          <div class="timeline-modal-header-left">
-            <h3 class="timeline-modal-title">
-              <svg viewBox="0 0 24 24"><path d="M12,20A8,8 0 0,0 20,12A8,8 0 0,0 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,2C6.47,2 2,6.48 2,12A10,10 0 0,1 12,2M12.5,7V12.25L17,14.92L16.25,16.15L11,13V7H12.5Z"/></svg>
-              <span>Timeline</span>
-            </h3>
-            <span class="timeline-camera-badge" data-safe-text="${escapeHtml(this._formatCameraName(currentCamera))}"></span>
-          </div>
-          <button class="frigate-events-modal-close" data-action="close" title="Close">
-            <svg viewBox="0 0 24 24"><path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"/></svg>
+          <h2 class="timeline-modal-title">Timeline</h2>
+          <span class="timeline-camera-badge" data-safe-text="${escapeHtml(this._formatCameraName(currentCamera))}"></span>
+          <button class="frigate-events-modal-close" data-action="close" title="Close" aria-label="Close">
+            <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
           </button>
         </div>
 
@@ -5670,7 +5660,7 @@ export class FrigateEventsCard extends LitElement {
           <!-- Controls: DateTime picker, Quick jumps, Window duration -->
           <div class="timeline-controls-bar">
             <div class="timeline-datetime-group">
-              <span class="timeline-datetime-label">Start Time:</span>
+              <span class="timeline-datetime-label">Start time</span>
               <input type="datetime-local" class="timeline-datetime-input" value="${dtValue}" />
               <div class="timeline-quick-jumps">
                 <button class="timeline-quick-btn" data-jump="now">Now</button>
@@ -5678,12 +5668,12 @@ export class FrigateEventsCard extends LitElement {
                 <button class="timeline-quick-btn" data-jump="-1h">-1h</button>
                 <button class="timeline-quick-btn" data-jump="-3h">-3h</button>
                 <button class="timeline-quick-btn" data-jump="-12h">-12h</button>
-                <button class="timeline-quick-btn" data-jump="day-start">Start of Day</button>
+                <button class="timeline-quick-btn" data-jump="day-start">Start of day</button>
               </div>
             </div>
 
             <div class="timeline-window-group">
-              <span class="timeline-datetime-label">Window:</span>
+              <span class="timeline-datetime-label">Window</span>
               <div class="timeline-window-pills">
                 <button class="timeline-window-pill ${windowMinutes === 15 ? 'active' : ''}" data-window="15">15m</button>
                 <button class="timeline-window-pill ${windowMinutes === 30 ? 'active' : ''}" data-window="30">30m</button>
