@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.6.9] - 2026-10-27
+- Improved: **Mobile timeline now looks like a popup version of desktop** — the phone timeline is a floating card with a rounded frame, hairline border, desktop shadow, a solid header (camera tabs, settings and close) and a solid control deck with the scrubber and transport, instead of the old edge-to-edge layout with gradient scrims.
+- Improved: **Playback controls are back on screen on phones** — play/pause, 30s skips and the speed stepper sit in a single slim row under the scrubber in portrait; landscape phones keep the chrome over the footage and use the settings sheet so the video keeps its height.
+- Improved: The video still fills the card at full width and takes every leftover pixel between header and deck, never cropped, and the popup is inset by the safe areas on notched devices.
+- Note: Desktop and TV timelines are unchanged.
+
 ## [2.6.8] - 2026-10-27
 - Improved: **Full-bleed timeline on phones in both orientations** — the video now fills the screen with a floating topbar and scrubber over gradient scrims; nothing reserves layout height.
 - Improved: **Playback controls moved into the settings sheet** on mobile — play/pause, the skip jumps and the speed stepper now live alongside Start time and Window under the gear button, leaving just the scrubber on screen (tap the video to play/pause).

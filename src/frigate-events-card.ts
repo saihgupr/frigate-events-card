@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.6.8';
+const CARD_VERSION = '2.6.10';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -3198,92 +3198,236 @@ export class FrigateEventsCard extends LitElement {
         font-size: 13px;
       }
 
-      /* Compact full-bleed (both orientations): body + player fill the screen;
-         the topbar and scrubber float over gradient scrims and reserve zero
-         layout height. The transport lives in the settings sheet. */
-      .frigate-timeline-modal.is-compact .timeline-modal-body {
-        position: absolute;
-        inset: 0;
-        flex: none;
-        gap: 0;
-        padding: 0;
-        overflow: hidden;
+      /* Compact popup card (phone portrait default; tablets too): a floating card
+         inset from the screen edges speaking the desktop timeline language —
+         card surface, 1px hairline border, desktop shadow, solid header and
+         bottom deck, desktop tab/track/button styling at phone proportions.
+         The video fills the card width edge-to-edge and flexes into all
+         leftover height (never cropped). Transport sits on stage in a slim row
+         AND in the settings sheet (the sheet copy serves landscape, where the
+         stage row hides to preserve footage height). */
+      .frigate-timeline-modal.is-compact {
+        padding: max(10px, env(safe-area-inset-top, 0px)) max(10px, env(safe-area-inset-right, 0px)) max(10px, env(safe-area-inset-bottom, 0px)) max(10px, env(safe-area-inset-left, 0px)) !important;
+        align-items: center !important;
+        justify-content: center !important;
       }
 
-      .frigate-timeline-modal.is-compact .timeline-player-container {
-        position: absolute;
-        inset: 0;
-        flex: none;
-        aspect-ratio: auto;
-        width: 100%;
-        border-radius: 0;
-        background: #000000;
+      .frigate-timeline-modal.is-compact .frigate-events-modal-content {
+        position: absolute !important;
+        inset: max(10px, env(safe-area-inset-top, 0px)) max(10px, env(safe-area-inset-right, 0px)) max(10px, env(safe-area-inset-bottom, 0px)) max(10px, env(safe-area-inset-left, 0px)) !important;
+        width: auto !important;
+        height: auto !important;
+        min-width: 0 !important;
+        max-width: none !important;
+        max-height: none !important;
+        margin: 0 !important;
+        border: 1px solid var(--tl-line) !important;
+        border-radius: 20px !important;
+        box-shadow: 0 24px 48px rgba(0, 0, 0, 0.5) !important;
+        overflow: hidden !important;
+        display: flex !important;
+        flex-direction: column !important;
+        background: var(--card-background-color, #1c1c1e);
       }
 
+      /* Solid header row on the card surface with a bottom hairline. */
       .frigate-timeline-modal.is-compact .timeline-compact-topbar {
-        position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
-        z-index: 8;
-        min-height: 0;
-        height: calc(48px + env(safe-area-inset-top, 0px));
-        padding-top: env(safe-area-inset-top, 0px);
-        padding-bottom: 0;
-        padding-left: max(12px, env(safe-area-inset-left, 0px));
-        padding-right: max(8px, env(safe-area-inset-right, 0px));
-        border-bottom: none;
-        background: linear-gradient(to bottom, rgba(0, 0, 0, 0.75), rgba(0, 0, 0, 0));
+        position: static !important;
+        height: auto !important;
+        min-height: 56px !important;
+        padding: 6px 8px 6px 12px !important;
+        border-bottom: 1px solid var(--tl-line) !important;
+        background: var(--card-background-color, #1c1c1e) !important;
+        z-index: auto !important;
       }
 
       .frigate-timeline-modal.is-compact .timeline-compact-topbar .timeline-camera-tab {
-        color: rgba(255, 255, 255, 0.85);
+        min-height: 44px !important;
+        padding: 8px 10px 12px !important;
+        font-size: 13px !important;
+        color: var(--tl-text-2) !important;
+      }
+
+      /* Scrollable tabs read as scrollable: a subtle right-edge fade. It is
+         invisible when tabs fit (empty trailing space shows nothing) and moot
+         for a single camera (no tabs strip is rendered there). */
+      .frigate-timeline-modal.is-compact .timeline-compact-topbar .timeline-camera-tabs {
+        -webkit-mask-image: linear-gradient(to right, #000000 calc(100% - 24px), transparent 100%) !important;
+        mask-image: linear-gradient(to right, #000000 calc(100% - 24px), transparent 100%) !important;
       }
 
       .frigate-timeline-modal.is-compact .timeline-compact-topbar .timeline-camera-tab.active {
-        color: #ffffff;
+        color: var(--tl-text) !important;
       }
 
       .frigate-timeline-modal.is-compact .timeline-compact-camera-name .timeline-camera-badge {
-        color: #ffffff;
+        color: var(--tl-text) !important;
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-settings-btn,
+      .frigate-timeline-modal.is-compact .timeline-compact-topbar .frigate-events-modal-close {
+        width: 44px !important;
+        height: 44px !important;
+      }
+
+      /* In-flow body: the video takes all leftover height between solid chrome. */
+      .frigate-timeline-modal.is-compact .timeline-modal-body {
+        position: static !important;
+        inset: auto !important;
+        flex: 1 1 auto !important;
+        min-height: 0 !important;
+        gap: 0 !important;
+        padding: 0 !important;
+        overflow: hidden !important;
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-player-container {
+        position: relative !important;
+        inset: auto !important;
+        flex: 1 1 auto !important;
+        min-height: 0 !important;
+        aspect-ratio: auto !important;
+        width: 100% !important;
+        border-radius: 0 !important;
+        background: #000000 !important;
       }
 
       .frigate-timeline-modal.is-compact .timeline-mute-btn {
-        top: calc(56px + env(safe-area-inset-top, 0px));
+        width: 44px !important;
+        height: 44px !important;
+        opacity: 1 !important;
       }
 
+      .frigate-timeline-modal.is-compact .timeline-mute-btn:not(.top-left) {
+        top: 10px !important;
+        right: 10px !important;
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-mute-btn.top-left {
+        top: 10px !important;
+        left: 10px !important;
+      }
+
+      /* Bottom control deck on the card surface with a top hairline. */
       .frigate-timeline-modal.is-compact .timeline-scrubber-wrapper {
-        position: absolute;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        z-index: 7;
-        margin-top: 0;
-        padding: 10px 12px max(8px, env(safe-area-inset-bottom, 8px));
-        padding-left: max(12px, env(safe-area-inset-left, 0px));
-        padding-right: max(12px, env(safe-area-inset-right, 0px));
-        gap: 4px;
-        background: linear-gradient(to top, rgba(0, 0, 0, 0.75), rgba(0, 0, 0, 0));
-        border-top: none;
+        position: static !important;
+        z-index: auto !important;
+        margin-top: 0 !important;
+        flex-shrink: 0 !important;
+        padding: 10px 12px 8px !important;
+        gap: 6px !important;
+        background: var(--card-background-color, #1c1c1e) !important;
+        border-top: 1px solid var(--tl-line) !important;
       }
 
       .frigate-timeline-modal.is-compact .timeline-track-container {
-        height: 46px;
+        height: 44px !important;
+        border-radius: 10px !important;
       }
 
       .frigate-timeline-modal.is-compact .timeline-event-marker {
-        top: 7px;
-        bottom: 7px;
+        top: 6px !important;
+        bottom: 6px !important;
+        min-width: 3px !important;
+        border-radius: 3px !important;
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-playhead {
+        width: 2px !important;
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-playhead::after {
+        width: 8px !important;
+        height: 8px !important;
+        top: -1px !important;
       }
 
       .frigate-timeline-modal.is-compact .timeline-track-labels {
-        font-size: 12px;
-        line-height: 1.2;
-        color: rgba(255, 255, 255, 0.85);
+        font-size: 12px !important;
+        line-height: 1.2 !important;
+        color: var(--tl-text-2) !important;
       }
 
       .frigate-timeline-modal.is-compact .timeline-time-badge {
-        color: #ffffff;
+        font-size: 13px !important;
+        font-weight: 600 !important;
+        color: var(--tl-text) !important;
+      }
+
+      /* Slim on-stage transport row: desktop language, phone proportions. */
+      .frigate-timeline-modal.is-compact .timeline-modal-body > .timeline-transport-bar {
+        display: flex !important;
+        flex-shrink: 0 !important;
+        flex-wrap: wrap !important;
+        align-items: center !important;
+        justify-content: center !important;
+        gap: 8px 12px !important;
+        padding: 4px 12px max(12px, env(safe-area-inset-bottom, 12px)) !important;
+        background: var(--card-background-color, #1c1c1e) !important;
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-modal-body > .timeline-transport-bar .timeline-transport-controls {
+        gap: 4px !important;
+        flex-wrap: nowrap !important;
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-modal-body > .timeline-transport-bar .timeline-transport-btn {
+        min-width: 44px !important;
+        height: 44px !important;
+        padding: 0 8px !important;
+        font-size: 13px !important;
+        border-radius: 10px !important;
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-modal-body > .timeline-transport-bar .timeline-transport-btn.play-btn {
+        width: 48px !important;
+        height: 48px !important;
+        margin: 0 4px !important;
+        border-radius: 50% !important;
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-modal-body > .timeline-transport-bar .timeline-speed-controls {
+        padding: 2px !important;
+        gap: 2px !important;
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-modal-body > .timeline-transport-bar .timeline-stepper-btn {
+        width: 32px !important;
+        height: 32px !important;
+        font-size: 16px !important;
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-modal-body > .timeline-transport-bar .timeline-speed-display {
+        min-width: 48px !important;
+        min-height: 32px !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        font-size: 13px !important;
+      }
+
+      /* Phones: keep the on-stage row on one line. The ±1m skips hide on stage
+         (the full skip set stays in the settings sheet); nowrap plus tightened
+         gaps fit -30s / play / +30s / speed down to 320px. Wider compact
+         layouts keep all four skips as above. */
+      @media (max-width: 480px) {
+        .frigate-timeline-modal.is-compact .timeline-modal-body > .timeline-transport-bar {
+          flex-wrap: nowrap !important;
+          gap: 6px 8px !important;
+        }
+        .frigate-timeline-modal.is-compact .timeline-modal-body > .timeline-transport-bar .timeline-transport-controls {
+          gap: 2px !important;
+        }
+        .frigate-timeline-modal.is-compact .timeline-modal-body > .timeline-transport-bar .timeline-transport-btn[data-skip="-60"],
+        .frigate-timeline-modal.is-compact .timeline-modal-body > .timeline-transport-bar .timeline-transport-btn[data-skip="60"] {
+          display: none !important;
+        }
+        .frigate-timeline-modal.is-compact .timeline-modal-body > .timeline-transport-bar .timeline-transport-btn.play-btn {
+          margin: 0 2px !important;
+        }
+        .frigate-timeline-modal.is-compact .timeline-modal-body > .timeline-transport-bar .timeline-speed-display {
+          min-width: 40px !important;
+        }
       }
 
       /* Time controls live in a bottom sheet behind the gear button. */
@@ -3392,36 +3536,96 @@ export class FrigateEventsCard extends LitElement {
         gap: 10px;
       }
 
-      /* Landscape phones: keep the shared full-bleed floating layout, just
-         shrink the chrome. iPad landscape (768px height) and TV are untouched. */
+      /* Landscape phones: keep the popup card framing (inset + radius + border
+         + shadow) but float the chrome over scrims so footage keeps its
+         height. The on-stage transport row hides here; the settings sheet
+         copy serves transport instead. iPad landscape and TV are untouched. */
       @media (orientation: landscape) and (max-height: 500px) {
+        .frigate-timeline-modal.is-compact .frigate-events-modal-content {
+          inset: max(8px, env(safe-area-inset-top, 0px)) max(8px, env(safe-area-inset-right, 0px)) max(8px, env(safe-area-inset-bottom, 0px)) max(8px, env(safe-area-inset-left, 0px)) !important;
+          border-radius: 16px !important;
+        }
+        .frigate-timeline-modal.is-compact .timeline-modal-body {
+          position: absolute !important;
+          inset: 0 !important;
+          flex: none !important;
+        }
+        .frigate-timeline-modal.is-compact .timeline-player-container {
+          position: absolute !important;
+          inset: 0 !important;
+          flex: none !important;
+        }
         .frigate-timeline-modal.is-compact .timeline-compact-topbar {
-          height: calc(44px + env(safe-area-inset-top, 0px));
+          position: absolute !important;
+          top: 0 !important;
+          left: 0 !important;
+          right: 0 !important;
+          z-index: 8 !important;
+          min-height: 0 !important;
+          height: calc(44px + env(safe-area-inset-top, 0px)) !important;
+          padding-top: env(safe-area-inset-top, 0px) !important;
+          padding-bottom: 0 !important;
+          border-bottom: none !important;
+          background: linear-gradient(to bottom, rgba(0, 0, 0, 0.75), rgba(0, 0, 0, 0)) !important;
         }
         .frigate-timeline-modal.is-compact .timeline-compact-topbar .timeline-camera-tab {
-          min-height: 36px;
-          padding: 6px 10px;
+          min-height: 36px !important;
+          padding: 6px 10px !important;
+          color: rgba(255, 255, 255, 0.85) !important;
+        }
+        .frigate-timeline-modal.is-compact .timeline-compact-topbar .timeline-camera-tab.active {
+          color: #ffffff !important;
+        }
+        .frigate-timeline-modal.is-compact .timeline-compact-topbar .timeline-camera-tabs {
+          -webkit-mask-image: none !important;
+          mask-image: none !important;
+        }
+        .frigate-timeline-modal.is-compact .timeline-compact-camera-name .timeline-camera-badge {
+          color: #ffffff !important;
         }
         .frigate-timeline-modal.is-compact .timeline-mute-btn {
-          top: calc(52px + env(safe-area-inset-top, 0px));
-          width: 40px;
-          height: 40px;
+          width: 40px !important;
+          height: 40px !important;
+        }
+        .frigate-timeline-modal.is-compact .timeline-mute-btn:not(.top-left) {
+          top: calc(52px + env(safe-area-inset-top, 0px)) !important;
+          right: 10px !important;
+        }
+        .frigate-timeline-modal.is-compact .timeline-mute-btn.top-left {
+          top: calc(52px + env(safe-area-inset-top, 0px)) !important;
+          left: 10px !important;
+          right: auto !important;
         }
         .frigate-timeline-modal.is-compact .timeline-scrubber-wrapper {
-          padding: 8px 12px 4px;
-          padding-left: max(12px, env(safe-area-inset-left, 0px));
-          padding-right: max(12px, env(safe-area-inset-right, 0px));
-          gap: 2px;
+          position: absolute !important;
+          left: 0 !important;
+          right: 0 !important;
+          bottom: 0 !important;
+          z-index: 7 !important;
+          padding: 8px 12px 4px !important;
+          padding-left: max(12px, env(safe-area-inset-left, 0px)) !important;
+          padding-right: max(12px, env(safe-area-inset-right, 0px)) !important;
+          padding-bottom: max(10px, env(safe-area-inset-bottom, 10px)) !important;
+          gap: 2px !important;
+          background: linear-gradient(to top, rgba(0, 0, 0, 0.75), rgba(0, 0, 0, 0)) !important;
+          border-top: none !important;
         }
         .frigate-timeline-modal.is-compact .timeline-track-container {
-          height: 40px;
+          height: 40px !important;
         }
         .frigate-timeline-modal.is-compact .timeline-event-marker {
-          top: 5px;
-          bottom: 5px;
+          top: 5px !important;
+          bottom: 5px !important;
+        }
+        .frigate-timeline-modal.is-compact .timeline-track-labels {
+          color: rgba(255, 255, 255, 0.85) !important;
         }
         .frigate-timeline-modal.is-compact .timeline-time-badge {
-          font-size: 14px;
+          font-size: 14px !important;
+          color: #ffffff !important;
+        }
+        .frigate-timeline-modal.is-compact .timeline-modal-body > .timeline-transport-bar {
+          display: none !important;
         }
       }
 
@@ -5850,18 +6054,18 @@ export class FrigateEventsCard extends LitElement {
     const root = container || this._timelineContainer;
     if (!root) return;
     const currentIndex = TIMELINE_PLAYBACK_SPEEDS.indexOf(this._timelinePlaybackRate);
-    const speedDisplay = root.querySelector('[data-timeline-speed-display]') as HTMLElement | null;
-    if (speedDisplay) {
-      speedDisplay.textContent = `${this._timelinePlaybackRate}x`;
-    }
-    const downBtn = root.querySelector('[data-action="speed-down"]') as HTMLButtonElement | null;
-    if (downBtn) {
-      downBtn.disabled = currentIndex <= 0;
-    }
-    const upBtn = root.querySelector('[data-action="speed-up"]') as HTMLButtonElement | null;
-    if (upBtn) {
-      upBtn.disabled = currentIndex >= TIMELINE_PLAYBACK_SPEEDS.length - 1;
-    }
+    const speedDisplays = root.querySelectorAll('[data-timeline-speed-display]');
+    speedDisplays.forEach(speedDisplay => {
+      (speedDisplay as HTMLElement).textContent = `${this._timelinePlaybackRate}x`;
+    });
+    const downBtns = root.querySelectorAll('[data-action="speed-down"]');
+    downBtns.forEach(downBtn => {
+      (downBtn as HTMLButtonElement).disabled = currentIndex <= 0;
+    });
+    const upBtns = root.querySelectorAll('[data-action="speed-up"]');
+    upBtns.forEach(upBtn => {
+      (upBtn as HTMLButtonElement).disabled = currentIndex >= TIMELINE_PLAYBACK_SPEEDS.length - 1;
+    });
   }
 
   private _applyTimelinePlaybackRate(rate: number): void {
@@ -6476,20 +6680,21 @@ export class FrigateEventsCard extends LitElement {
       currentBadge.textContent = curDate.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' });
     }
 
-    const playPauseBtn = this._timelineContainer.querySelector('[data-action="toggle-play"]') as HTMLElement | null;
-    if (playPauseBtn) {
+    const playPauseBtns = this._timelineContainer.querySelectorAll('[data-action="toggle-play"]');
+    playPauseBtns.forEach(playPauseBtn => {
+      const btn = playPauseBtn as HTMLElement;
       const isPaused = this._timelinePlaybackRate > 16
         ? !this._timelineSpeedInterval
         : video.paused;
       const stateStr = isPaused ? 'paused' : 'playing';
-      if (playPauseBtn.getAttribute('data-play-state') !== stateStr) {
-        playPauseBtn.setAttribute('data-play-state', stateStr);
-        playPauseBtn.setAttribute('title', isPaused ? 'Play' : 'Pause');
-        playPauseBtn.innerHTML = isPaused
+      if (btn.getAttribute('data-play-state') !== stateStr) {
+        btn.setAttribute('data-play-state', stateStr);
+        btn.setAttribute('title', isPaused ? 'Play' : 'Pause');
+        btn.innerHTML = isPaused
           ? `<svg viewBox="0 0 24 24"><path d="M8,5.14V19.14L19,12.14L8,5.14Z"/></svg>`
           : `<svg viewBox="0 0 24 24"><path d="M14,19H18V5H14M6,19H10V5H6V19Z"/></svg>`;
       }
-    }
+    });
   }
 
   private _updateTimelineScrubberEvents(): void {
@@ -6661,9 +6866,10 @@ export class FrigateEventsCard extends LitElement {
     } else {
       const tabsMarkup = this._timelineCameraTabsMarkup(availableCameras, currentCamera);
       const isTvLayout = layoutMode === 'tv';
-      // Compact: transport lives in the settings sheet (Playback section), the
-      // on-screen chrome is just the floating topbar + scrubber. TV keeps its
-      // on-screen transport bar and heading-free sheet.
+      // Compact: slim transport row sits on stage (portrait) and is duplicated
+      // in the settings sheet Playback section (serves landscape, where the
+      // stage row hides to preserve footage height). TV keeps its on-screen
+      // transport bar and heading-free sheet.
       const compactSheetInner = `<div class="timeline-sheet-section"><div class="timeline-sheet-heading">Playback</div>${this._timelineTransportMarkup(true)}</div>${this._timelineControlsMarkup(dtValue, windowMinutes, true)}`;
       container.innerHTML = `
       <div class="frigate-events-modal-content" role="dialog" aria-modal="true" aria-label="Timeline">
@@ -6690,10 +6896,8 @@ export class FrigateEventsCard extends LitElement {
 
           <!-- Scrubber Track -->
           ${this._timelineScrubberMarkup(startDate, endDate, true)}
-          ${isTvLayout ? `
-          <!-- Transport & Speed Controls -->
+          <!-- Transport & Speed Controls (slim on-stage row; landscape low-height hides it via CSS) -->
           ${this._timelineTransportMarkup(true)}
-          ` : ''}
         </div>
 
         <div class="timeline-settings-backdrop" data-action="close-settings"></div>
@@ -6887,11 +7091,12 @@ export class FrigateEventsCard extends LitElement {
       this._toggleTimelinePlayPause();
     });
 
-    // Play / Pause button
-    const playPauseBtn = container.querySelector('[data-action="toggle-play"]');
-    playPauseBtn?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      this._toggleTimelinePlayPause();
+    // Play / Pause buttons (on-stage + settings sheet copies)
+    container.querySelectorAll('[data-action="toggle-play"]').forEach(playPauseBtn => {
+      playPauseBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._toggleTimelinePlayPause();
+      });
     });
 
     // Skip buttons
@@ -6912,25 +7117,31 @@ export class FrigateEventsCard extends LitElement {
     // Stepper Speed controls
     this._syncTimelineSpeedStepperUI(container);
 
-    container.querySelector('[data-action="speed-down"]')?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const currentIndex = TIMELINE_PLAYBACK_SPEEDS.indexOf(this._timelinePlaybackRate);
-      if (currentIndex > 0) {
-        this._applyTimelinePlaybackRate(TIMELINE_PLAYBACK_SPEEDS[currentIndex - 1]);
-      }
+    container.querySelectorAll('[data-action="speed-down"]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const currentIndex = TIMELINE_PLAYBACK_SPEEDS.indexOf(this._timelinePlaybackRate);
+        if (currentIndex > 0) {
+          this._applyTimelinePlaybackRate(TIMELINE_PLAYBACK_SPEEDS[currentIndex - 1]);
+        }
+      });
     });
 
-    container.querySelector('[data-action="speed-up"]')?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const currentIndex = TIMELINE_PLAYBACK_SPEEDS.indexOf(this._timelinePlaybackRate);
-      if (currentIndex >= 0 && currentIndex < TIMELINE_PLAYBACK_SPEEDS.length - 1) {
-        this._applyTimelinePlaybackRate(TIMELINE_PLAYBACK_SPEEDS[currentIndex + 1]);
-      }
+    container.querySelectorAll('[data-action="speed-up"]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const currentIndex = TIMELINE_PLAYBACK_SPEEDS.indexOf(this._timelinePlaybackRate);
+        if (currentIndex >= 0 && currentIndex < TIMELINE_PLAYBACK_SPEEDS.length - 1) {
+          this._applyTimelinePlaybackRate(TIMELINE_PLAYBACK_SPEEDS[currentIndex + 1]);
+        }
+      });
     });
 
-    container.querySelector('[data-timeline-speed-display]')?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      this._applyTimelinePlaybackRate(1);
+    container.querySelectorAll('[data-timeline-speed-display]').forEach(display => {
+      display.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._applyTimelinePlaybackRate(1);
+      });
     });
 
     // Scrubber track click / drag scrubbing
