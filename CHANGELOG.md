@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.6.11] - 2026-10-27
+- Improved: **Mobile timeline transport moved into the settings sheet** — the skip jumps, play/pause and speed stepper now live only in the Playback section behind the gear button, so the stage is just the video and the scrubber. Tap the video to play/pause without opening the sheet.
+- Improved: The scrubber deck picks up the extra space the transport row used to take, and the sheet controls reflow down to 320px wide without clipping.
+
 ## [2.6.9] - 2026-10-27
 - Improved: **Mobile timeline now looks like a popup version of desktop** — the phone timeline is a floating card with a rounded frame, hairline border, desktop shadow, a solid header (camera tabs, settings and close) and a solid control deck with the scrubber and transport, instead of the old edge-to-edge layout with gradient scrims.
 - Improved: **Playback controls are back on screen on phones** — play/pause, 30s skips and the speed stepper sit in a single slim row under the scrubber in portrait; landscape phones keep the chrome over the footage and use the settings sheet so the video keeps its height.

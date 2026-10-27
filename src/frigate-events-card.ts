@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.6.10';
+const CARD_VERSION = '2.6.11';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -3203,9 +3203,9 @@ export class FrigateEventsCard extends LitElement {
          card surface, 1px hairline border, desktop shadow, solid header and
          bottom deck, desktop tab/track/button styling at phone proportions.
          The video fills the card width edge-to-edge and flexes into all
-         leftover height (never cropped). Transport sits on stage in a slim row
-         AND in the settings sheet (the sheet copy serves landscape, where the
-         stage row hides to preserve footage height). */
+         leftover height (never cropped). Transport lives only in the settings
+         sheet Playback section; the stage keeps just the scrubber deck, and
+         tapping the video toggles play/pause. */
       .frigate-timeline-modal.is-compact {
         padding: max(10px, env(safe-area-inset-top, 0px)) max(10px, env(safe-area-inset-right, 0px)) max(10px, env(safe-area-inset-bottom, 0px)) max(10px, env(safe-area-inset-left, 0px)) !important;
         align-items: center !important;
@@ -3314,7 +3314,7 @@ export class FrigateEventsCard extends LitElement {
         z-index: auto !important;
         margin-top: 0 !important;
         flex-shrink: 0 !important;
-        padding: 10px 12px 8px !important;
+        padding: 10px 12px max(10px, env(safe-area-inset-bottom, 10px)) !important;
         gap: 6px !important;
         background: var(--card-background-color, #1c1c1e) !important;
         border-top: 1px solid var(--tl-line) !important;
@@ -3354,80 +3354,12 @@ export class FrigateEventsCard extends LitElement {
         color: var(--tl-text) !important;
       }
 
-      /* Slim on-stage transport row: desktop language, phone proportions. */
+      /* Compact: no on-stage transport — skips, play/pause and speed live in
+         the settings sheet Playback section. The body markup stays in place
+         for TV (same transport, hidden here by CSS only); tapping the video
+         toggles play/pause on compact. */
       .frigate-timeline-modal.is-compact .timeline-modal-body > .timeline-transport-bar {
-        display: flex !important;
-        flex-shrink: 0 !important;
-        flex-wrap: wrap !important;
-        align-items: center !important;
-        justify-content: center !important;
-        gap: 8px 12px !important;
-        padding: 4px 12px max(12px, env(safe-area-inset-bottom, 12px)) !important;
-        background: var(--card-background-color, #1c1c1e) !important;
-      }
-
-      .frigate-timeline-modal.is-compact .timeline-modal-body > .timeline-transport-bar .timeline-transport-controls {
-        gap: 4px !important;
-        flex-wrap: nowrap !important;
-      }
-
-      .frigate-timeline-modal.is-compact .timeline-modal-body > .timeline-transport-bar .timeline-transport-btn {
-        min-width: 44px !important;
-        height: 44px !important;
-        padding: 0 8px !important;
-        font-size: 13px !important;
-        border-radius: 10px !important;
-      }
-
-      .frigate-timeline-modal.is-compact .timeline-modal-body > .timeline-transport-bar .timeline-transport-btn.play-btn {
-        width: 48px !important;
-        height: 48px !important;
-        margin: 0 4px !important;
-        border-radius: 50% !important;
-      }
-
-      .frigate-timeline-modal.is-compact .timeline-modal-body > .timeline-transport-bar .timeline-speed-controls {
-        padding: 2px !important;
-        gap: 2px !important;
-      }
-
-      .frigate-timeline-modal.is-compact .timeline-modal-body > .timeline-transport-bar .timeline-stepper-btn {
-        width: 32px !important;
-        height: 32px !important;
-        font-size: 16px !important;
-      }
-
-      .frigate-timeline-modal.is-compact .timeline-modal-body > .timeline-transport-bar .timeline-speed-display {
-        min-width: 48px !important;
-        min-height: 32px !important;
-        display: inline-flex !important;
-        align-items: center !important;
-        justify-content: center !important;
-        font-size: 13px !important;
-      }
-
-      /* Phones: keep the on-stage row on one line. The ±1m skips hide on stage
-         (the full skip set stays in the settings sheet); nowrap plus tightened
-         gaps fit -30s / play / +30s / speed down to 320px. Wider compact
-         layouts keep all four skips as above. */
-      @media (max-width: 480px) {
-        .frigate-timeline-modal.is-compact .timeline-modal-body > .timeline-transport-bar {
-          flex-wrap: nowrap !important;
-          gap: 6px 8px !important;
-        }
-        .frigate-timeline-modal.is-compact .timeline-modal-body > .timeline-transport-bar .timeline-transport-controls {
-          gap: 2px !important;
-        }
-        .frigate-timeline-modal.is-compact .timeline-modal-body > .timeline-transport-bar .timeline-transport-btn[data-skip="-60"],
-        .frigate-timeline-modal.is-compact .timeline-modal-body > .timeline-transport-bar .timeline-transport-btn[data-skip="60"] {
-          display: none !important;
-        }
-        .frigate-timeline-modal.is-compact .timeline-modal-body > .timeline-transport-bar .timeline-transport-btn.play-btn {
-          margin: 0 2px !important;
-        }
-        .frigate-timeline-modal.is-compact .timeline-modal-body > .timeline-transport-bar .timeline-speed-display {
-          min-width: 40px !important;
-        }
+        display: none !important;
       }
 
       /* Time controls live in a bottom sheet behind the gear button. */
@@ -3538,8 +3470,8 @@ export class FrigateEventsCard extends LitElement {
 
       /* Landscape phones: keep the popup card framing (inset + radius + border
          + shadow) but float the chrome over scrims so footage keeps its
-         height. The on-stage transport row hides here; the settings sheet
-         copy serves transport instead. iPad landscape and TV are untouched. */
+         height. Transport lives in the settings sheet (hidden on stage for all
+         compact layouts). iPad landscape and TV are untouched. */
       @media (orientation: landscape) and (max-height: 500px) {
         .frigate-timeline-modal.is-compact .frigate-events-modal-content {
           inset: max(8px, env(safe-area-inset-top, 0px)) max(8px, env(safe-area-inset-right, 0px)) max(8px, env(safe-area-inset-bottom, 0px)) max(8px, env(safe-area-inset-left, 0px)) !important;
@@ -3623,9 +3555,6 @@ export class FrigateEventsCard extends LitElement {
         .frigate-timeline-modal.is-compact .timeline-time-badge {
           font-size: 14px !important;
           color: #ffffff !important;
-        }
-        .frigate-timeline-modal.is-compact .timeline-modal-body > .timeline-transport-bar {
-          display: none !important;
         }
       }
 
@@ -6866,10 +6795,10 @@ export class FrigateEventsCard extends LitElement {
     } else {
       const tabsMarkup = this._timelineCameraTabsMarkup(availableCameras, currentCamera);
       const isTvLayout = layoutMode === 'tv';
-      // Compact: slim transport row sits on stage (portrait) and is duplicated
-      // in the settings sheet Playback section (serves landscape, where the
-      // stage row hides to preserve footage height). TV keeps its on-screen
-      // transport bar and heading-free sheet.
+      // Compact: transport lives only in the settings sheet Playback section
+      // (full skip set, play/pause, speed). The body transport markup stays
+      // for TV's on-screen bar and is hidden for compact by CSS. TV keeps its
+      // on-screen transport bar and heading-free sheet.
       const compactSheetInner = `<div class="timeline-sheet-section"><div class="timeline-sheet-heading">Playback</div>${this._timelineTransportMarkup(true)}</div>${this._timelineControlsMarkup(dtValue, windowMinutes, true)}`;
       container.innerHTML = `
       <div class="frigate-events-modal-content" role="dialog" aria-modal="true" aria-label="Timeline">
@@ -6896,7 +6825,7 @@ export class FrigateEventsCard extends LitElement {
 
           <!-- Scrubber Track -->
           ${this._timelineScrubberMarkup(startDate, endDate, true)}
-          <!-- Transport & Speed Controls (slim on-stage row; landscape low-height hides it via CSS) -->
+          <!-- Transport & Speed Controls (TV on-stage; hidden for compact via CSS, served by the settings sheet) -->
           ${this._timelineTransportMarkup(true)}
         </div>
 
