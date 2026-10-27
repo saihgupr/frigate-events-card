@@ -1,5 +1,8 @@
 # Changelog
 
+## [2.6.18] - 2026-10-27
+- Improved: **Clicking an event on a phone or tablet opens the Timeline on a 15-minute window** instead of the hour default, so the event fills the scrubber. Desktop and TV keep `timeline_default_window_hours`, and a window you pick by hand is remembered for later opens.
+
 ## [2.6.17] - 2026-10-27
 - Fixed: **Timeline mute button ignored `show_mute: false`** — the timeline only looked at `timeline_show_mute`, so cards that opt out of mute controls card-wide still got a mute toggle over the footage. It now honours `show_mute` / `live_view_show_mute` as well, with an explicit `timeline_show_mute` taking precedence.
 

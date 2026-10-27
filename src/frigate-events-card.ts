@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.6.17';
+const CARD_VERSION = '2.6.18';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -241,6 +241,8 @@ export class FrigateEventsCard extends LitElement {
   private _timelineVodStartTs = 0;
   private _timelineVodEndTs = 0;
   private _timelineWindowDurationSec = 3600; // default 1 hour
+  /** True once the user picks a window pill, so defaults stop overriding it. */
+  private _timelineWindowUserChosen = false;
   private _timelinePlaybackRate = 1;
   private _timelineSpeedInterval?: number;
   private _isTimelineMuted = true;
@@ -5814,8 +5816,17 @@ export class FrigateEventsCard extends LitElement {
     const camera = initialCamera || this._timelineCamera || (availableCameras.length > 0 ? availableCameras[0] : (this._config?.camera || ''));
     this._timelineCamera = camera;
 
-    // Determine initial time window
-    const duration = this._timelineWindowDurationSec || ((this._config?.timeline_default_window_hours || 1) * 3600);
+    // Determine initial time window. Opening straight from an event on a phone
+    // or tablet defaults to 15 minutes so the event fills the scrubber; the
+    // desktop/TV default stays as configured. A window the user picked by hand
+    // is always kept.
+    const layoutMode = this._getTimelineLayoutMode();
+    const openedFromEvent = Boolean(initialEvent || (initialTimestamp && initialTimestamp > 0));
+    const configuredDuration = this._timelineWindowDurationSec
+      || ((this._config?.timeline_default_window_hours || 1) * 3600);
+    const duration = (layoutMode === 'compact' && openedFromEvent && !this._timelineWindowUserChosen)
+      ? 15 * 60
+      : configuredDuration;
     this._timelineWindowDurationSec = duration;
 
     let seekOffset = this._getEventSeekOffset(initialEvent);
@@ -5857,7 +5868,6 @@ export class FrigateEventsCard extends LitElement {
     }
 
     const container = document.createElement('div');
-    const layoutMode = this._getTimelineLayoutMode();
     container.className = 'frigate-events-modal frigate-timeline-modal'
       + (layoutMode === 'compact' ? ' is-compact' : layoutMode === 'tv' ? ' is-tv' : '');
     container.dataset.timelineLayout = layoutMode;
@@ -7118,6 +7128,7 @@ export class FrigateEventsCard extends LitElement {
         const mins = parseInt((pill as HTMLElement).getAttribute('data-window') || '60', 10);
         const currentWallClock = this._videoOffsetToWallClock(this._timelineVideoEl?.currentTime || 0);
         this._timelineWindowDurationSec = mins * 60;
+        this._timelineWindowUserChosen = true;
 
         // Keep currentWallClock centered in new window duration, constrained by now
         const now = Math.floor(Date.now() / 1000);
