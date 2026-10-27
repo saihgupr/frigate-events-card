@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.6.14';
+const CARD_VERSION = '2.6.16';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -2296,7 +2296,12 @@ export class FrigateEventsCard extends LitElement {
         --tl-warn: #ff9f0a;
         --tl-ok: #30d158;
         --tl-playhead: #ff453a;
+        /* Solid fallback first: engines without color-mix (older iPadOS /
+           WebViews) dropped the declaration, leaving the scrubber track and
+           ghost buttons fully transparent. */
+        --tl-fill: rgba(128, 128, 128, 0.13);
         --tl-fill: color-mix(in srgb, var(--tl-text) 7%, transparent);
+        --tl-fill-hover: rgba(128, 128, 128, 0.2);
         --tl-fill-hover: color-mix(in srgb, var(--tl-text) 12%, transparent);
       }
 
@@ -2598,7 +2603,9 @@ export class FrigateEventsCard extends LitElement {
       .timeline-track-container {
         position: relative;
         height: 40px;
-        background: var(--tl-fill);
+        /* Plain grey, no colour functions: the track must always be visible,
+           and this matches the desktop bar on both dark and light themes. */
+        background: rgba(128, 128, 128, 0.16);
         border-radius: 10px;
         cursor: pointer;
         user-select: none;
@@ -3339,7 +3346,9 @@ export class FrigateEventsCard extends LitElement {
         grid-template-columns: 1fr !important;
         overflow: hidden !important;
         border-radius: 0 !important;
-        background: #000000 !important;
+        /* Card surface, not black: the popup reads like the desktop card even
+           if the footage does not fill its box edge to edge. */
+        background: var(--card-background-color, #1c1c1e) !important;
       }
 
       .frigate-timeline-modal.is-compact .timeline-video {
@@ -3353,6 +3362,8 @@ export class FrigateEventsCard extends LitElement {
       }
 
       .frigate-timeline-modal.is-compact .timeline-mute-btn {
+        /* Out of flow unconditionally: as a grid item it adds a black row. */
+        position: absolute !important;
         width: 44px !important;
         height: 44px !important;
         opacity: 1 !important;
@@ -3383,6 +3394,8 @@ export class FrigateEventsCard extends LitElement {
       .frigate-timeline-modal.is-compact .timeline-track-container {
         height: 44px !important;
         border-radius: 10px !important;
+        /* Same track colour as desktop; pinned so nothing can wash it out. */
+        background: rgba(128, 128, 128, 0.16) !important;
       }
 
       .frigate-timeline-modal.is-compact .timeline-event-marker {
@@ -3577,6 +3590,7 @@ export class FrigateEventsCard extends LitElement {
           position: absolute !important;
           inset: 0 !important;
           flex: none !important;
+          background: #000000 !important;
         }
         .frigate-timeline-modal.is-compact .timeline-video {
           grid-area: auto !important;

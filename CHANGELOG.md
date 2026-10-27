@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.6.16] - 2026-10-27
+- Fixed: **Scrubber track still invisible on iPad** — the track fill no longer depends on `color-mix()` or a custom property at all. It is now a plain translucent grey, so the rounded bar always reads lighter than the popup surface, on any engine. The mute button is also pinned out of the grid flow so no black row can appear under the footage, and the compact player paints the card surface instead of black.
+
+## [2.6.15] - 2026-10-27
+- Fixed: **Invisible scrubber track on iPad and older WebViews** — the track and ghost buttons drew their fill with `color-mix()`, which engines without support drop entirely, leaving a bare transparent scrubber. They now fall back to a solid translucent grey first, so the rounded bar matches the desktop track everywhere.
+- Improved: The mobile timeline popup now uses the same card surface as desktop behind the footage, so any space around the video reads as the popup background instead of a black strip.
+
 ## [2.6.14] - 2026-10-27
 - Fixed: **Stray mute button and black band under the video** — the modal stylesheet only carried size/position values for the timeline mute button, while its absolutely-positioned circular styling lived in the card's shadow stylesheet, which the timeline modal cannot reach. With the new grid player it became a second grid row. The mute base now ships in the modal stylesheet, so it floats over the footage again and the player is exactly as tall as the video.
 - Note: This also makes the mute button actually visible over the desktop and TV timeline player, where it had been painted underneath the video since the redesign.
