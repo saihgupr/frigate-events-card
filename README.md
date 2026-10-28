@@ -448,7 +448,7 @@ The most common settings to get you started:
 | `timeline_on_click` | boolean | `true` | Open the Timeline directly when clicking an event thumbnail (requires `video` and `show_timeline`). |
 | `timeline_default_window_hours` | number | `1` | Default recording window shown when the Timeline opens. |
 | `timeline_event_seek_offset` | number \| map | `0` | Seconds added/subtracted when seeking to an event in the Timeline (e.g. `5` or `-5`). Supports per-label/zone map. |
-| `timeline_show_mute` | boolean | `true` | Show the mute toggle button on hover over the Timeline video player. |
+| `timeline_show_mute` | boolean | `true` | Show the mute toggle button on hover over the Timeline video player. Setting `show_mute: false` (or `live_view_show_mute: false`) also hides it; an explicit `timeline_show_mute` wins. |
 
 ### Advanced Detail Modal & Debug Settings
 | Option | Type | Default | Description |

@@ -1,5 +1,75 @@
 # Changelog
 
+## [2.6.2] - 2026-10-27
+- Release: **Mobile, tablet and TV timeline overhaul** — rolls up everything since 2.6.1 (device-aware timeline layouts, popup card on phones/tablets/TV, scrubber and mute fixes, 15-minute default window on touch devices, obvious window preset selection). The 2.6.3 through 2.6.20 entries below are the individual work-in-progress builds that went into this release.
+
+## [2.6.20] - 2026-10-27
+- Improved: **The selected window preset is now obvious** — it fills with the accent colour and white bold text instead of the old card-coloured pill, which was nearly invisible against the settings sheet on mobile. Hovering a selected pill no longer washes it out either.
+
+## [2.6.19] - 2026-10-27
+- Improved: **Android TV now uses the same timeline popup as iPad** — TV no longer gets the separate full-bleed scrim design (`is-tv`). It renders the compact card: solid header, footage at full width, deck with the scrubber underneath. D-pad focus is anchored on the scrubber so arrows still seek and Enter/Space toggles playback.
+
+## [2.6.18] - 2026-10-27
+- Improved: **Clicking an event on a phone or tablet opens the Timeline on a 15-minute window** instead of the hour default, so the event fills the scrubber. Desktop and TV keep `timeline_default_window_hours`, and a window you pick by hand is remembered for later opens.
+
+## [2.6.17] - 2026-10-27
+- Fixed: **Timeline mute button ignored `show_mute: false`** — the timeline only looked at `timeline_show_mute`, so cards that opt out of mute controls card-wide still got a mute toggle over the footage. It now honours `show_mute` / `live_view_show_mute` as well, with an explicit `timeline_show_mute` taking precedence.
+
+## [2.6.16] - 2026-10-27
+- Fixed: **Scrubber track still invisible on iPad** — the track fill no longer depends on `color-mix()` or a custom property at all. It is now a plain translucent grey, so the rounded bar always reads lighter than the popup surface, on any engine. The mute button is also pinned out of the grid flow so no black row can appear under the footage, and the compact player paints the card surface instead of black.
+
+## [2.6.15] - 2026-10-27
+- Fixed: **Invisible scrubber track on iPad and older WebViews** — the track and ghost buttons drew their fill with `color-mix()`, which engines without support drop entirely, leaving a bare transparent scrubber. They now fall back to a solid translucent grey first, so the rounded bar matches the desktop track everywhere.
+- Improved: The mobile timeline popup now uses the same card surface as desktop behind the footage, so any space around the video reads as the popup background instead of a black strip.
+
+## [2.6.14] - 2026-10-27
+- Fixed: **Stray mute button and black band under the video** — the modal stylesheet only carried size/position values for the timeline mute button, while its absolutely-positioned circular styling lived in the card's shadow stylesheet, which the timeline modal cannot reach. With the new grid player it became a second grid row. The mute base now ships in the modal stylesheet, so it floats over the footage again and the player is exactly as tall as the video.
+- Note: This also makes the mute button actually visible over the desktop and TV timeline player, where it had been painted underneath the video since the redesign.
+
+## [2.6.13] - 2026-10-27
+- Fixed: **Tiny video on iPad (and other Safari views)** — v2.6.12 sized the player with `aspect-ratio` inside a flex column, which Safari resolved from the wrong width, collapsing the footage to a thumbnail in a full-width black band. The player now takes its height from the video's own intrinsic ratio at 100% card width, with a `dvh` cap that letterboxes rather than overflowing. No JS involvement.
+- Improved: iPad landscape and portrait get a full-width video again (~1160px wide on an 11" iPad), and cards stay content-sized and centered with no bars for normal 16:9 footage.
+
+## [2.6.12] - 2026-10-27
+- Improved: **The mobile timeline popup now hugs the footage** — in portrait the card is only as tall as the header plus the camera's real video aspect plus the scrubber deck, centered on screen, so there are no black bars above or below the video. Tall/odd aspect ratios clamp to the viewport and letterbox instead of overflowing.
+- Improved: The settings sheet opens as a proper bottom sheet anchored to the screen on portrait phones, so it still has room when the card is short.
+
+## [2.6.11] - 2026-10-27
+- Improved: **Mobile timeline transport moved into the settings sheet** — the skip jumps, play/pause and speed stepper now live only in the Playback section behind the gear button, so the stage is just the video and the scrubber. Tap the video to play/pause without opening the sheet.
+- Improved: The scrubber deck picks up the extra space the transport row used to take, and the sheet controls reflow down to 320px wide without clipping.
+
+## [2.6.9] - 2026-10-27
+- Improved: **Mobile timeline now looks like a popup version of desktop** — the phone timeline is a floating card with a rounded frame, hairline border, desktop shadow, a solid header (camera tabs, settings and close) and a solid control deck with the scrubber and transport, instead of the old edge-to-edge layout with gradient scrims.
+- Improved: **Playback controls are back on screen on phones** — play/pause, 30s skips and the speed stepper sit in a single slim row under the scrubber in portrait; landscape phones keep the chrome over the footage and use the settings sheet so the video keeps its height.
+- Improved: The video still fills the card at full width and takes every leftover pixel between header and deck, never cropped, and the popup is inset by the safe areas on notched devices.
+- Note: Desktop and TV timelines are unchanged.
+
+## [2.6.8] - 2026-10-27
+- Improved: **Full-bleed timeline on phones in both orientations** — the video now fills the screen with a floating topbar and scrubber over gradient scrims; nothing reserves layout height.
+- Improved: **Playback controls moved into the settings sheet** on mobile — play/pause, the skip jumps and the speed stepper now live alongside Start time and Window under the gear button, leaving just the scrubber on screen (tap the video to play/pause).
+
+## [2.6.7] - 2026-10-27
+- Fixed: **iPhone portrait timeline** — the modal now fills the viewport exactly (no dead band under the controls) and the stage is vertically centered, with the camera name shown in the topbar when there is only one camera.
+- Improved: **iPhone landscape timeline** — the player is now full-bleed and the topbar, scrubber and transport float over it as translucent gradient bars, so the footage keeps the whole screen instead of being squeezed by ~40% of chrome.
+
+## [2.6.6] - 2026-10-27
+- Fixed: Tablet detection no longer gets demoted to the desktop layout. Any device reporting a touch digitizer or a coarse pointer now gets the mobile timeline; previously an iPad with a trackpad/mouse attached (or a WebView reporting `pointer: fine` + `hover: hover`) could fall through to desktop.
+
+## [2.6.5] - 2026-10-27
+- Fixed: Stray `}} />` text rendered at the bottom of every event thumbnail. A duplicated fragment of the tile template was being emitted as literal text (present since 2.6.x, most visible on wide/iPad layouts).
+
+## [2.6.4] - 2026-10-27
+- Fixed: **iPad no longer falls back to the desktop layout** — detection now treats touch support as authoritative, so iPadOS (including the HA companion app WebView) gets the mobile timeline in both orientations.
+- Fixed: **Android TV / TVBro sizing** — TV chrome now scales with viewport height instead of fixed pixels, since TVBro reports a ~960x540 logical viewport for a 1080p panel. Icons, scrubber, transport and topbar are roughly half their previous visual size and the video gets ~70% of the screen.
+- Fixed: **iPhone portrait spacing** — the player no longer stretches into black bars, the stack is centered, controls are a size smaller, and transport + speed stay on one row at 375px wide.
+
+## [2.6.3] - 2026-10-27
+- Added: **Mobile & TV timeline layout** — the timeline modal now detects the device and switches to a dedicated fullscreen layout on phones, tablets and TV browsers (including TVBro / Android TV) while the desktop layout stays exactly as it was.
+- Added: **Video-first mobile layout** — the player takes all available height, the scrubber sits directly under it with a taller track and larger event markers, and the transport buttons are sized for touch.
+- Added: **Time controls in a bottom sheet** — start time, quick jumps and window presets moved behind a settings button on mobile/TV so they no longer push the video down.
+- Improved: Landscape phones reserve space for the controls instead of covering footage, and TV gets always-visible focus rings, a D-pad focus anchor on the play button, plus arrow-key / Home / End seeking on the scrubber.
+- Note: Video is always scaled to fit (never cropped) on every layout.
+
 ## [2.6.1] - 2026-10-27
 - Improved: **Timeline UI Redesign** — Modernized timeline player layout, scrubber track, event markers, and controls.
 - Improved: **Temporary Mask Manager UI** — Redesigned mask management cards, countdown indicators, and polygon preview overlays.
