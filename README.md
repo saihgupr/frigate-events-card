@@ -327,8 +327,7 @@ The `frigate_temp_mask` integration exposes the following services under Home As
 
 </details>
 
-<details open>
-<summary><strong>Mobile Notification Blueprint (iOS & Android)</strong></summary>
+#### Mobile Notification Blueprint (iOS & Android)
 
 Attach **Temporary Mask** action buttons directly to Frigate mobile notifications. Tapping an action calculates the expanded polygon mask, injects it into Frigate, and restarts the detector without opening the dashboard.
 
@@ -338,15 +337,14 @@ Attach **Temporary Mask** action buttons directly to Frigate mobile notification
 
 [![Open your Home Assistant instance and show the blueprint import dialog with a specific blueprint pre-filled.](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fsaihgupr%2Ffrigate-events-card%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Ffrigate_temp_mask_notification.yaml)
 
-> [!TIP]
-> **Ways to Import the Blueprint:**
->
-> * **Option A (1-Click Badge above):** Click the **Open Home Assistant** badge above.
-> * **Option B (Import by URL):** In Home Assistant, go to **Settings > Automations & Scenes > Blueprints > Import Blueprint** and paste:
->   ```text
->   https://github.com/saihgupr/frigate-events-card/blob/main/blueprints/automation/frigate_temp_mask_notification.yaml
->   ```
-> * **Option C (Manual File Copy):** Copy [`blueprints/automation/frigate_temp_mask_notification.yaml`](https://github.com/saihgupr/frigate-events-card/blob/main/blueprints/automation/frigate_temp_mask_notification.yaml) to your Home Assistant `/config/blueprints/automation/` directory.
+**Ways to Import the Blueprint:**
+
+* **Option A (1-Click Badge above):** Click the **Open Home Assistant** badge above.
+* **Option B (Import by URL):** In Home Assistant, go to **Settings > Automations & Scenes > Blueprints > Import Blueprint** and paste:
+  ```text
+  https://github.com/saihgupr/frigate-events-card/blob/main/blueprints/automation/frigate_temp_mask_notification.yaml
+  ```
+* **Option C (Manual File Copy):** Copy [`blueprints/automation/frigate_temp_mask_notification.yaml`](https://github.com/saihgupr/frigate-events-card/blob/main/blueprints/automation/frigate_temp_mask_notification.yaml) to your Home Assistant `/config/blueprints/automation/` directory.
 
 <details>
 <summary><strong>Manual YAML Automation Example</strong></summary>
@@ -397,7 +395,6 @@ action:
         {% if trigger.event.data.action == 'TEMP_MASK_8H' %}8{% else %}24{% endif %}
 ```
 
-</details>
 </details>
 
 ## Configuration Options
