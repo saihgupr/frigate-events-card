@@ -1,6 +1,6 @@
 {
     "name": "frigate-events-card",
-    "version": "2.6.20",
+    "version": "2.6.2",
     "description": "Lovelace card for Frigate with recent events, WebRTC live view, timeline playback, and temporary masks",
     "main": "frigate-events-card.js",
     "type": "module",

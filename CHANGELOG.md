@@ -1,5 +1,8 @@
 # Changelog
 
+## [2.6.2] - 2026-10-27
+- Release: **Mobile, tablet and TV timeline overhaul** — rolls up everything since 2.6.1 (device-aware timeline layouts, popup card on phones/tablets/TV, scrubber and mute fixes, 15-minute default window on touch devices, obvious window preset selection). The 2.6.3 through 2.6.20 entries below are the individual work-in-progress builds that went into this release.
+
 ## [2.6.20] - 2026-10-27
 - Improved: **The selected window preset is now obvious** — it fills with the accent colour and white bold text instead of the old card-coloured pill, which was nearly invisible against the settings sheet on mobile. Hovering a selected pill no longer washes it out either.
 
