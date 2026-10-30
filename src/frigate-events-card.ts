@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.6.9';
+const CARD_VERSION = '2.6.11';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -4351,7 +4351,6 @@ export class FrigateEventsCard extends LitElement {
       Array.isArray(activeMasks) && activeMasks.some((m: any) => m.mask_id === maskId)
     );
     const toggleDynamic = this._getTemporaryMaskSensor(this.hass.states)?.attributes?.supports_dynamic_toggle === true;
-    const toggleCamera = this._formatCameraName(event.camera || 'Camera');
 
     try {
       if (isCurrentlyActive) {
@@ -4373,8 +4372,8 @@ export class FrigateEventsCard extends LitElement {
         ];
         this.dispatchEvent(new CustomEvent('hass-notification', {
           detail: { message: toggleDynamic
-            ? `Mask removed for ${toggleCamera}.`
-            : `Mask removed for ${toggleCamera}. Restart Frigate to apply it.` },
+            ? `Mask removed.`
+            : `Mask removed. Frigate is restarting.` },
           bubbles: true,
           composed: true,
         }));
@@ -4395,8 +4394,8 @@ export class FrigateEventsCard extends LitElement {
         this._localPendingMasks = [];
         this.dispatchEvent(new CustomEvent('hass-notification', {
           detail: { message: toggleDynamic
-            ? `Mask applied for ${toggleCamera}.`
-            : `Mask applied for ${toggleCamera}. Frigate is restarting to apply it.` },
+            ? `Mask applied.`
+            : `Mask applied. Frigate is restarting.` },
           bubbles: true,
           composed: true,
         }));
@@ -4406,7 +4405,7 @@ export class FrigateEventsCard extends LitElement {
       console.error('Failed to toggle temporary mask:', err);
       if (!isCurrentlyActive) {
         this.dispatchEvent(new CustomEvent('hass-notification', {
-          detail: { message: `Could not apply the mask for ${toggleCamera}.` },
+          detail: { message: `Could not add the mask.` },
           bubbles: true,
           composed: true,
         }));
@@ -4438,22 +4437,10 @@ export class FrigateEventsCard extends LitElement {
       }
       this._maskDurationOverrides.set(String(maskId), durationHours <= 0 ? -1 : durationHours);
 
-      const durationText = durationHours <= 0
-        ? 'infinite (manual removal only)'
-        : durationHours === 1
-        ? '1 hour'
-        : durationHours < 24
-        ? `${durationHours} hours`
-        : durationHours === 24
-        ? '24 hours (1 day)'
-        : durationHours === 48
-        ? '48 hours (2 days)'
-        : durationHours % 24 === 0
-        ? `${durationHours / 24} days`
-        : `${durationHours} hours`;
+      const durationText = this._formatMaskDurationChoice(durationHours);
 
       this.dispatchEvent(new CustomEvent('hass-notification', {
-        detail: { message: `Mask updated to ${durationText} for ${this._formatCameraName(event.camera || 'Camera')}.` },
+        detail: { message: `Mask duration: ${durationText}.` },
         bubbles: true,
         composed: true,
       }));
@@ -4747,6 +4734,17 @@ export class FrigateEventsCard extends LitElement {
       this._contextMenuEl.parentNode.removeChild(this._contextMenuEl);
       this._contextMenuEl = undefined;
     }
+  }
+
+  private _formatMaskDurationChoice(durationHours: number): string {
+    if (durationHours <= 0) return 'no expiry';
+    if (durationHours === 1) return '1 hour';
+    if (durationHours < 24) return `${durationHours} hours`;
+    if (durationHours % 24 === 0) {
+      const days = durationHours / 24;
+      return days === 1 ? '1 day' : `${days} days`;
+    }
+    return `${durationHours} hours`;
   }
 
   private _formatMaskRemainingTime(expiresAt?: string | null, durationHours?: number): string {
@@ -5974,12 +5972,11 @@ export class FrigateEventsCard extends LitElement {
         this._localPendingMasks = this._localPendingMasks.filter(m => String(m.mask_id) !== String(maskId));
       }
 
-      const removeCamera = this._formatCameraName(camera || 'Camera');
       const removeDynamic = postAttrs?.supports_dynamic_toggle === true;
       this.dispatchEvent(new CustomEvent('hass-notification', {
         detail: { message: removeDynamic
-          ? `Mask removed for ${removeCamera}.`
-          : `Mask removed for ${removeCamera}. Restart Frigate to apply it.` },
+          ? `Mask removed.`
+          : `Mask removed. Frigate is restarting.` },
         bubbles: true,
         composed: true,
       }));
@@ -6017,7 +6014,7 @@ export class FrigateEventsCard extends LitElement {
       this.dispatchEvent(new CustomEvent('hass-notification', {
         detail: { message: pruneDynamic
           ? 'All masks removed.'
-          : 'All masks removed. Frigate is restarting to apply it.' },
+          : 'All masks removed. Frigate is restarting.' },
         bubbles: true,
         composed: true,
       }));
@@ -6047,22 +6044,10 @@ export class FrigateEventsCard extends LitElement {
         duration_hours: durationHours,
       });
       this._maskDurationOverrides.set(String(maskId), durationHours <= 0 ? -1 : durationHours);
-      const durationText = durationHours <= 0
-        ? 'infinite (manual removal only)'
-        : durationHours === 1
-        ? '1 hour'
-        : durationHours < 24
-        ? `${durationHours} hours`
-        : durationHours === 24
-        ? '24 hours (1 day)'
-        : durationHours === 48
-        ? '48 hours (2 days)'
-        : durationHours % 24 === 0
-        ? `${durationHours / 24} days`
-        : `${durationHours} hours`;
+      const durationText = this._formatMaskDurationChoice(durationHours);
 
       this.dispatchEvent(new CustomEvent('hass-notification', {
-        detail: { message: `Mask updated to ${durationText} for ${this._formatCameraName(camera || 'Camera')}.` },
+        detail: { message: `Mask duration: ${durationText}.` },
         bubbles: true,
         composed: true,
       }));
@@ -6120,7 +6105,7 @@ export class FrigateEventsCard extends LitElement {
       const needsRestart = sensorAttrs?.supports_dynamic_toggle !== true;
       this.dispatchEvent(new CustomEvent('hass-notification', {
         detail: { message: needsRestart
-          ? 'Mask updated. Frigate is restarting to apply it.'
+          ? 'Mask updated. Frigate is restarting.'
           : 'Mask updated.' },
         bubbles: true,
         composed: true,

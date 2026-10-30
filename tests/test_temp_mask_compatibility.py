@@ -344,6 +344,19 @@ version: 0.18-0
         self.assertEqual(_polygon_to_pixels("0.1,0.2", 1920, 1080), "0.1,0.2")
         self.assertEqual(_polygon_to_pixels("", 1920, 1080), "")
 
+    def test_unknown_version_defaults_to_legacy(self):
+        # No version key, no existing masks: assume pre-0.14 list format
+        # (pixels + restart) rather than a modern format old Frigate chokes on.
+        config = """cameras:
+  wyze_camera:
+    objects:
+      filters:
+        person: {}
+"""
+        v, is_dict = _detect_config_version_and_format(config, "wyze_camera")
+        self.assertEqual(v, (0, 0))
+        self.assertFalse(is_dict)
+
     def test_v13_edit_flow_converts_to_pixels(self):
         # Simulates the card editor saving a normalized polygon to Frigate 0.13:
         # format detection must request pixels, conversion must match, and the

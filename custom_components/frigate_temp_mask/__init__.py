@@ -229,7 +229,10 @@ def _detect_config_version_and_format(config_text: str, camera: str = "", versio
             version_str = m.group(1).strip()
 
     version_known = bool(version_str)
-    version_tuple = _parse_frigate_version(version_str) if version_known else (0, 18, 0)
+    # Unknown version defaults to (0, 0): callers treat that as pre-0.14
+    # (pixel coordinates, restart behavior) rather than risk writing a
+    # modern-format mask an old Frigate cannot start with.
+    version_tuple = _parse_frigate_version(version_str) if version_known else (0, 0)
 
     # Frigate 0.18+ always uses dict format
     if version_known and version_tuple >= (0, 18):
@@ -924,9 +927,11 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
     domain_data.setdefault("unsub_sync", None)
     domain_data.setdefault("last_config_audit_ts", 0.0)
     domain_data.setdefault("mask_sensor", None)
-    # Optimistic default: assume modern Frigate (0.18+) so supports_dynamic_toggle starts
-    # as true. The real version is fetched on the first sync and will override this.
-    domain_data.setdefault("frigate_version", (0, 18, 0))
+    # Pessimistic default: Frigate version unknown until the API proves
+    # otherwise. Assuming modern (0.18+) here would enable the no-restart
+    # dynamic path and report supports_dynamic_toggle=true on old Frigate,
+    # where geometry saves actually need a detector restart.
+    domain_data.setdefault("frigate_version", (0, 0))
     domain_data.setdefault("store", Store(hass, STORAGE_VERSION, STORAGE_KEY))
     domain_data.setdefault("save_lock", asyncio.Lock())
 
@@ -977,9 +982,13 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         return ""
 
     async def _async_get_frigate_version() -> tuple[int, ...]:
-        """Fetch and cache running Frigate version tuple, e.g. (0, 18, 0)."""
+        """Fetch and cache running Frigate version tuple, e.g. (0, 18, 0).
+
+        Returns (0, 0) when the version cannot be determined. Callers must
+        treat unknown as pre-0.18 (restart behavior), never as modern.
+        """
         cached = domain_data.get("frigate_version")
-        if cached:
+        if cached and cached != (0, 0):
             return cached
         session = async_get_clientsession(hass)
         base_url = _get_frigate_base_url()
@@ -995,7 +1004,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                         return parsed
         except Exception as e:
             _LOGGER.debug("Could not fetch Frigate version via API: %s", e)
-        return (0, 18, 0)
+        return (0, 0)
 
     async def _async_set_runtime_mask_state(camera: str, mask_key: str, state: str = "OFF") -> bool:
         """Toggle an object mask dynamically in Frigate 0.18+ without restarting."""
@@ -1024,8 +1033,9 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         count = len(active)
         pending_count = len(pending)
         f_ver = domain_data.get("frigate_version")
-        ver_str = ".".join(str(x) for x in f_ver) if f_ver else "unknown"
-        supports_dyn = f_ver >= (0, 18) if f_ver else False
+        ver_known = bool(f_ver) and f_ver != (0, 0)
+        ver_str = ".".join(str(x) for x in f_ver) if ver_known else "unknown"
+        supports_dyn = f_ver >= (0, 18) if ver_known else False
         attributes = {
                 # Publish fresh dictionaries so Home Assistant sees attribute
                 # changes even when a mask record was updated in place.
