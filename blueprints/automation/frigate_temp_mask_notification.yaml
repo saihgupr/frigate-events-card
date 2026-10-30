@@ -26,6 +26,16 @@ trigger:
   - id: mask_action
     platform: event
     event_type: mobile_app_notification_action
+  - id: mask_action
+    platform: event
+    event_type: ios.notification_action_fired
+    event_data:
+      actionName: TEMP_MASK_24H
+  - id: mask_action
+    platform: event
+    event_type: ios.notification_action_fired
+    event_data:
+      actionName: TEMP_MASK_8H
 
 condition: []
 
@@ -49,8 +59,16 @@ action:
               actions:
                 - action: "TEMP_MASK_24H"
                   title: "Temporary Mask"
+                  action_data:
+                    event_id: "{{ trigger.payload_json['after']['id'] }}"
+                    camera: "{{ trigger.payload_json['after']['camera'] }}"
+                    label: "{{ trigger.payload_json['after']['label'] }}"
                 - action: "TEMP_MASK_8H"
                   title: "Mask 8h"
+                  action_data:
+                    event_id: "{{ trigger.payload_json['after']['id'] }}"
+                    camera: "{{ trigger.payload_json['after']['camera'] }}"
+                    label: "{{ trigger.payload_json['after']['label'] }}"
                 - action: "URI"
                   title: "View Live"
                   uri: "/lovelace/cameras"
@@ -60,10 +78,17 @@ action:
             id: mask_action
           - condition: template
             value_template: >
-              {{ trigger.event.data.action in ['TEMP_MASK_24H', 'TEMP_MASK_8H'] }}
+              {{ (trigger.event.data.action | default(trigger.event.data.actionName, true)) in ['TEMP_MASK_24H', 'TEMP_MASK_8H'] }}
         sequence:
           - service: frigate_temp_mask.add_mask
             data:
-              event_id: "{{ trigger.event.data.tag | default(trigger.event.data.action_data, true) }}"
+              event_id: >
+                {% set d = trigger.event.data %}
+                {% set ad = d.action_data if d.action_data is defined else none %}
+                {% if ad is mapping and ad.event_id %}{{ ad.event_id }}
+                {% elif ad is string and ad %}{{ ad }}
+                {% elif d.event_id is defined and d.event_id %}{{ d.event_id }}
+                {% elif d.data is defined and d.data is mapping and d.data.event_id is defined and d.data.event_id %}{{ d.data.event_id }}
+                {% else %}{{ d.tag | default('', true) }}{% endif %}
               duration_hours: >
-                {% if trigger.event.data.action == 'TEMP_MASK_8H' %}8{% else %}24{% endif %}
+                {% if (trigger.event.data.action | default(trigger.event.data.actionName, true)) == 'TEMP_MASK_8H' %}8{% else %}24{% endif %}
