@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.6.12';
+const CARD_VERSION = '2.6.13';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -5317,11 +5317,12 @@ export class FrigateEventsCard extends LitElement {
     // Keep the list scroll position across re-renders (timers, duration changes, snapshots).
     const previousScroll = container.querySelector<HTMLElement>('.mask-manager-body')?.scrollTop ?? 0;
 
-    // Expanded row: the user's last choice, otherwise the first mask in the current view.
+    // Expanded row: the user's last choice; with no choice yet, expand the
+    // lone mask but collapse all when there are several.
     const expandedId = (this._maskManagerExpandedId === '' ||
       (this._maskManagerExpandedId !== undefined && filteredMasks.some((m: any) => String(m.mask_id) === this._maskManagerExpandedId)))
       ? this._maskManagerExpandedId
-      : (filteredMasks[0] ? String(filteredMasks[0].mask_id) : '');
+      : (filteredMasks.length > 1 ? '' : (filteredMasks[0] ? String(filteredMasks[0].mask_id) : ''));
 
     const buildViewModel = (mask: any) => {
       const clientId = this._config?.frigate_client_id || 'frigate';
