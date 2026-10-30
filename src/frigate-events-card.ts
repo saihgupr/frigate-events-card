@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.6.6';
+const CARD_VERSION = '2.6.8';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -5422,7 +5422,7 @@ export class FrigateEventsCard extends LitElement {
       <svg class="mask-preview-minimap" viewBox="0 0 ${vm.geo.viewBoxW} ${vm.geo.viewBoxH}" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
         ${vm.geo.polyPts ? `<polygon points="${escapeHtml(vm.geo.polyPts)}" class="minimap-poly" vector-effect="non-scaling-stroke" />` : ''}
       </svg>
-      ${detailed && !vm.displayUrl && (Date.now() - this._maskManagerLastSaveAt) < 120000 ? `
+      ${detailed && (Date.now() - this._maskManagerLastSaveAt) < 120000 ? `
         <div class="mask-preview-notice"><span class="mask-preview-spinner"></span><span>Frigate is restarting to apply your edit…</span></div>
       ` : ''}
     `;
