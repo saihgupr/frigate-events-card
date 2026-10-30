@@ -4516,7 +4516,9 @@ export class FrigateEventsCard extends LitElement {
     if (currentMask) {
       activeDurationHours = this._getCurrentMaskDurationHours(currentMask);
       if (activeDurationHours <= 0 || !currentMask.expires_at) {
-        timeRemainingStr = '∞';
+        // No-expiry masks: activeDurationText already shows '∞', so leave
+        // timeRemainingStr empty to avoid a doubled "∞ · ∞" subtitle.
+        timeRemainingStr = '';
       } else if (currentMask.expires_at) {
         const expMs = new Date(currentMask.expires_at).getTime();
         const nowMs = Date.now();
