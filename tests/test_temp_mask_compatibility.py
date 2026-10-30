@@ -30,6 +30,7 @@ from custom_components.frigate_temp_mask import (
     _normalize_raw_config,
     _parse_frigate_version,
     _box_to_polygon,
+    _polygon_to_pixels,
     _detect_config_version_and_format,
     _find_camera_block_bounds,
     _clean_config_masks,
@@ -329,6 +330,35 @@ version: 0.18-0
         # Ensure person: is not left childless without {}
         self.assertIn("person: {}", cleaned)
         self.assertNotIn("person:\n        car:", cleaned)
+
+    def test_polygon_to_pixels_normalized(self):
+        poly = _polygon_to_pixels("0.277,0.663,0.349,0.663,0.359,0.859,0.272,0.869", 1920, 1080)
+        self.assertEqual(poly, "532,716,670,716,689,928,522,939")
+
+    def test_polygon_to_pixels_passthrough(self):
+        # Already-pixel polygons must not be touched.
+        pixel = "532,716,670,716,689,928,522,939"
+        self.assertEqual(_polygon_to_pixels(pixel, 1920, 1080), pixel)
+        # Degenerate / non-numeric input passes through for the caller to reject.
+        self.assertEqual(_polygon_to_pixels("0.1,0.2,oops", 1920, 1080), "0.1,0.2,oops")
+        self.assertEqual(_polygon_to_pixels("0.1,0.2", 1920, 1080), "0.1,0.2")
+        self.assertEqual(_polygon_to_pixels("", 1920, 1080), "")
+
+    def test_v13_edit_flow_converts_to_pixels(self):
+        # Simulates the card editor saving a normalized polygon to Frigate 0.13:
+        # format detection must request pixels, conversion must match, and the
+        # injected config must round-trip with pixel coordinates.
+        v, is_dict = _detect_config_version_and_format(self.config_v13, "wyze_camera")
+        self.assertFalse(v >= (0, 14))
+        self.assertFalse(is_dict)
+        converted = _polygon_to_pixels("0.277,0.663,0.349,0.663,0.359,0.859,0.272,0.869", 1920, 1080)
+        updated = _inject_temp_mask(self.config_v13, "wyze_camera", converted, "1792507169.873793", label="person", is_dict=is_dict)
+        self.assertIn(f"- {converted} # TEMP_MASK_1792507169.873793", updated)
+        parsed = _parse_temp_masks_from_config(updated)
+        self.assertEqual(len(parsed), 1)
+        self.assertEqual(parsed[0]["polygon"], converted)
+        cleaned = _clean_config_masks(updated, "1792507169.873793")
+        self.assertNotIn("TEMP_MASK", cleaned)
 
     def test_clean_mask_leaves_valid_yaml_and_no_childless_keys(self):
         raw_id = "1789218715.393093"

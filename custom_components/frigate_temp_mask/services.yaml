@@ -24,6 +24,16 @@ add_mask:
       description: Optional [x, y, width, height] coordinates, in pixels or normalized to 0–1. Normally inferred from event_id.
       selector:
         text:
+    polygon:
+      name: Polygon
+      description: Optional polygon coordinate string (e.g. from mask edit). If supplied with an existing mask_id, updates the mask geometry.
+      selector:
+        text:
+    label:
+      name: Label
+      description: Object label for the mask (e.g. person, car). Inferred from event_id if omitted.
+      selector:
+        text:
     duration_hours:
       name: Duration (Hours)
       description: Hours before the mask is automatically pruned (default 24).

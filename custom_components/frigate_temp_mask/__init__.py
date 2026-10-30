@@ -169,6 +169,35 @@ def _box_to_polygon(box: list[float], width: int, height: int, padding: float = 
         return f"{px_min},{py_min},{px_max},{py_min},{px_max},{py_max},{px_min},{py_max}"
 
 
+def _polygon_to_pixels(poly_str: str, width: int, height: int) -> str:
+    """Convert a normalized (0-1) polygon coordinate string to pixel coordinates.
+
+    Frigate < 0.14 list-format configs (and the 0.13 object-filter masks) use
+    pixel coordinates. Newer flows — including the card's visual mask editor —
+    submit normalized 0-1 polygons. Writing normalized floats into a 0.13
+    config prevents Frigate from starting, so convert when the polygon looks
+    normalized. Pixel polygons pass through unchanged.
+    """
+    if not poly_str or not isinstance(poly_str, str):
+        return poly_str
+    if width <= 0 or height <= 0:
+        return poly_str
+    try:
+        nums = [float(v.strip()) for v in poly_str.split(",")]
+    except (TypeError, ValueError):
+        return poly_str
+    if len(nums) < 6 or len(nums) % 2 != 0:
+        return poly_str
+    if not all(0.0 <= n <= 1.0 for n in nums):
+        return poly_str
+    pts: list[str] = []
+    for i in range(0, len(nums), 2):
+        px = max(0, min(width, int(round(nums[i] * width))))
+        py = max(0, min(height, int(round(nums[i + 1] * height))))
+        pts.append(f"{px},{py}")
+    return ",".join(pts)
+
+
 
 def _normalize_raw_config(text: str) -> str:
     """Normalize raw config text.
@@ -1297,6 +1326,35 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
 
         version_tuple, is_dict = _detect_config_version_and_format(raw_config, camera, version_str)
         use_normalized = version_tuple >= (0, 14) or is_dict
+
+        if poly_str and not use_normalized:
+            # Frigate < 0.14 list-format configs use pixel coordinates, but the
+            # card's visual editor submits normalized 0-1 polygons. Writing
+            # normalized floats into a 0.13 config prevents Frigate from
+            # starting, so convert when the polygon looks normalized.
+            conv_w, conv_h = width, height
+            stored = domain_data["active_masks"].get(mask_id, {})
+            if isinstance(stored.get("width"), int) and isinstance(stored.get("height"), int) \
+                    and stored["width"] > 0 and stored["height"] > 0:
+                conv_w, conv_h = stored["width"], stored["height"]
+            else:
+                try:
+                    async with session.get(f"{base_url}/api/config", timeout=10) as resp:
+                        if resp.status == 200:
+                            cfg = await resp.json()
+                            detect_cfg = cfg.get("cameras", {}).get(camera, {}).get("detect", {})
+                            conv_w = detect_cfg.get("width", conv_w)
+                            conv_h = detect_cfg.get("height", conv_h)
+                except Exception as e:
+                    _LOGGER.warning("Using fallback resolution %sx%s for polygon conversion: %s", conv_w, conv_h, e)
+            converted = _polygon_to_pixels(poly_str, conv_w, conv_h)
+            if converted != poly_str:
+                _LOGGER.info(
+                    "Converted normalized polygon to pixel coordinates for Frigate %s (%sx%s)",
+                    version_str or "pre-0.14", conv_w, conv_h,
+                )
+                poly_str = converted
+                width, height = conv_w, conv_h
 
         if not poly_str:
             # Fetch camera detect stream resolution

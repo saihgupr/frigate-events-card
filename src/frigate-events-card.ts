@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.6.2';
+const CARD_VERSION = '2.6.5';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -183,6 +183,8 @@ export class FrigateEventsCard extends LitElement {
   @state() private _maskManagerSelectedCamera = 'all';
   // undefined = default (first mask expanded), '' = all collapsed, otherwise a mask id
   private _maskManagerExpandedId?: string;
+  private _maskEditingId?: string;
+  private _maskEditSavingIds = new Set<string>();
   @state() private _localPendingMasks: any[] = [];
 
   private _unsubscribe?: () => void;
@@ -1948,6 +1950,10 @@ export class FrigateEventsCard extends LitElement {
       .mask-seg-btn:focus-visible,
       .mask-chip:focus-visible,
       .mask-remove-btn:focus-visible,
+      .mask-edit-btn:focus-visible,
+      .mask-edit-save:focus-visible,
+      .mask-edit-cancel:focus-visible,
+      .mask-edit-size-btn:focus-visible,
       .mask-text-btn:focus-visible,
       .mask-filter-tab:focus-visible {
         outline: 2px solid var(--mm-accent);
@@ -2188,6 +2194,185 @@ export class FrigateEventsCard extends LitElement {
         background: color-mix(in srgb, var(--mm-accent) 14%, transparent);
       }
 
+      .mask-edit-btn {
+        min-height: 32px;
+        padding: 0 8px;
+        font-size: 13px;
+        font-weight: 500;
+        font-family: inherit;
+        color: var(--mm-accent);
+        background: none;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: background 0.15s ease;
+      }
+
+      .mask-edit-btn:hover {
+        background: color-mix(in srgb, var(--mm-accent) 14%, transparent);
+      }
+
+      .mask-row-actions {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
+
+      .mask-edit-panel {
+        margin: 12px 12px 0;
+        padding: 12px;
+        border: 1px solid var(--mm-line);
+        border-radius: 10px;
+        background: color-mix(in srgb, var(--mm-text) 4%, transparent);
+      }
+
+      .mask-edit-preview {
+        position: relative;
+        aspect-ratio: 16 / 9;
+        border-radius: 8px;
+        overflow: hidden;
+        background: var(--mm-fill);
+        touch-action: none;
+      }
+
+      .mask-edit-preview img {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+        pointer-events: none;
+      }
+
+      .mask-edit-preview svg {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+      }
+
+      .mask-edit-poly {
+        fill: rgba(10, 132, 255, 0.18);
+        stroke: var(--mm-accent);
+        stroke-width: 2px;
+        vector-effect: non-scaling-stroke;
+      }
+
+      .mask-edit-handle {
+        fill: #fff;
+        stroke: var(--mm-accent);
+        stroke-width: 2px;
+        vector-effect: non-scaling-stroke;
+        cursor: grab;
+        touch-action: none;
+      }
+
+      .mask-edit-handle:active {
+        cursor: grabbing;
+      }
+
+      .mask-edit-meta {
+        margin-top: 8px;
+        font-size: 12px;
+        line-height: 16px;
+        color: var(--mm-text-2);
+      }
+
+      .mask-edit-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 8px;
+      }
+
+      .mask-edit-size-btn {
+        min-height: 32px;
+        padding: 0 12px;
+        font-size: 13px;
+        font-weight: 500;
+        font-family: inherit;
+        color: var(--mm-text);
+        background: var(--mm-fill);
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+      }
+
+      .mask-edit-size-btn:hover {
+        background: var(--mm-fill-hover);
+      }
+
+      .mask-edit-label-row {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        margin-top: 12px;
+      }
+
+      .mask-edit-input {
+        min-height: 36px;
+        padding: 0 12px;
+        font-size: 14px;
+        font-family: inherit;
+        color: var(--mm-text);
+        background: var(--mm-fill);
+        border: 1px solid var(--mm-line);
+        border-radius: 8px;
+        outline: none;
+      }
+
+      .mask-edit-input:focus {
+        border-color: var(--mm-accent);
+      }
+
+      .mask-edit-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        margin-top: 12px;
+      }
+
+      .mask-edit-cancel {
+        min-height: 32px;
+        padding: 0 14px;
+        font-size: 13px;
+        font-weight: 500;
+        font-family: inherit;
+        color: var(--mm-text-2);
+        background: none;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+      }
+
+      .mask-edit-cancel:hover {
+        background: var(--mm-fill);
+        color: var(--mm-text);
+      }
+
+      .mask-edit-save {
+        min-height: 32px;
+        padding: 0 16px;
+        font-size: 13px;
+        font-weight: 600;
+        font-family: inherit;
+        color: #fff;
+        background: var(--mm-accent);
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+      }
+
+      .mask-edit-save:hover {
+        filter: brightness(1.1);
+      }
+
+      .mask-edit-save:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+
       .mask-pending-section {
         margin-top: 16px;
         padding-top: 8px;
@@ -2240,7 +2425,14 @@ export class FrigateEventsCard extends LitElement {
         .mask-seg-btn,
         .mask-chip,
         .mask-remove-btn,
+        .mask-edit-btn,
+        .mask-edit-save,
+        .mask-edit-cancel,
+        .mask-edit-size-btn,
         .mask-text-btn {
+          min-height: 44px;
+        }
+        .mask-edit-input {
           min-height: 44px;
         }
       }
@@ -4863,6 +5055,7 @@ export class FrigateEventsCard extends LitElement {
       this._maskManagerContainer.parentNode.removeChild(this._maskManagerContainer);
       this._maskManagerContainer = undefined;
       this._maskManagerExpandedId = undefined;
+      this._maskEditingId = undefined;
     }
     if (this._maskManagerTimer) {
       clearInterval(this._maskManagerTimer);
@@ -4888,6 +5081,60 @@ export class FrigateEventsCard extends LitElement {
         el.classList.toggle('expiring', msLeft < 3600000);
       }
     });
+  }
+
+  private _parseMaskPolygonNormalized(mask: any): { pts: Array<{ x: number; y: number }>; viewBoxW: number; viewBoxH: number } {
+    let viewBoxW = 1920;
+    let viewBoxH = 1080;
+    if (typeof mask?.width === 'number' && typeof mask?.height === 'number' && mask.width > 0 && mask.height > 0) {
+      viewBoxW = mask.width;
+      viewBoxH = mask.height;
+    }
+    const polyStr = mask?.polygon;
+    if (!polyStr || typeof polyStr !== 'string') return { pts: [], viewBoxW, viewBoxH };
+    const nums = polyStr.split(',').map((s: string) => parseFloat(s.trim())).filter((n: number) => !isNaN(n));
+    if (nums.length < 6) return { pts: [], viewBoxW, viewBoxH };
+    const isNormalized = nums.every((n: number) => n <= 1.0);
+    if (!isNormalized && (!mask?.width || !mask?.height)) {
+      let maxCoord = 0;
+      for (const n of nums) {
+        if (n > maxCoord) maxCoord = n;
+      }
+      if (maxCoord > 2560) {
+        viewBoxW = 3840; viewBoxH = 2160;
+      } else if (maxCoord > 1920) {
+        viewBoxW = 2560; viewBoxH = 1440;
+      }
+    }
+    const clamp01 = (n: number): number => Math.min(1, Math.max(0, n));
+    const pts: Array<{ x: number; y: number }> = [];
+    for (let i = 0; i + 1 < nums.length; i += 2) {
+      if (isNormalized) {
+        pts.push({ x: clamp01(nums[i]), y: clamp01(nums[i + 1]) });
+      } else {
+        pts.push({ x: clamp01(nums[i] / viewBoxW), y: clamp01(nums[i + 1] / viewBoxH) });
+      }
+    }
+    return { pts, viewBoxW, viewBoxH };
+  }
+
+  private _formatNormalizedPolygon(pts: Array<{ x: number; y: number }>): string {
+    return pts.map(p => `${Math.round(p.x * 1000) / 1000},${Math.round(p.y * 1000) / 1000}`).join(',');
+  }
+
+  private _scaleNormalizedPolygon(pts: Array<{ x: number; y: number }>, factor: number): Array<{ x: number; y: number }> {
+    if (pts.length === 0) return pts;
+    let cx = 0, cy = 0;
+    for (const p of pts) {
+      cx += p.x;
+      cy += p.y;
+    }
+    cx /= pts.length;
+    cy /= pts.length;
+    return pts.map(p => ({
+      x: Math.min(1, Math.max(0, cx + (p.x - cx) * factor)),
+      y: Math.min(1, Math.max(0, cy + (p.y - cy) * factor)),
+    }));
   }
 
   private _getMaskPreviewGeometry(mask: any, matchedEvent?: any): {
@@ -5138,6 +5385,57 @@ export class FrigateEventsCard extends LitElement {
 
     const chevronSvg = '<svg class="mask-row-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M8.59 16.59 13.17 12 8.59 7.41 10 6l6 6-6 6z"/></svg>';
 
+    const buildEditPanel = (mask: any, vm: ReturnType<typeof buildViewModel>): string => {
+      const parsed = this._parseMaskPolygonNormalized(mask);
+      if (parsed.pts.length === 0) return '';
+      const vw = parsed.viewBoxW;
+      const vh = parsed.viewBoxH;
+      const normPoly = this._formatNormalizedPolygon(parsed.pts);
+      const dispPts = parsed.pts.map(p => `${p.x * vw},${p.y * vh}`).join(' ');
+      const handleR = Math.max(14, Math.round(Math.max(vw, vh) * 0.012));
+      const eventId = escapeHtml(mask.event_id || vm.maskId);
+      const handles = parsed.pts.map((p, i) =>
+        `<circle class="mask-edit-handle" data-edit-handle="${i}" cx="${p.x * vw}" cy="${p.y * vh}" r="${handleR}" />`
+      ).join('');
+      const minX = Math.min(...parsed.pts.map(p => p.x));
+      const maxX = Math.max(...parsed.pts.map(p => p.x));
+      const minY = Math.min(...parsed.pts.map(p => p.y));
+      const maxY = Math.max(...parsed.pts.map(p => p.y));
+      const coversText = `Covers ${Math.round((maxX - minX) * vw)} × ${Math.round((maxY - minY) * vh)} px`;
+      return `
+        <div class="mask-edit-panel" data-edit-panel="${escapeHtml(vm.maskId)}" data-norm-poly="${escapeHtml(normPoly)}" data-orig-poly="${escapeHtml(normPoly)}" data-viewbox-w="${vw}" data-viewbox-h="${vh}" data-label="${escapeHtml(mask.label || '')}">
+          <div class="mask-edit-preview" data-edit-preview>
+            ${vm.displayUrl ? `<img src="${escapeHtml(vm.displayUrl)}" alt="" loading="lazy" data-fallback-url="${escapeHtml(vm.imageFallbackUrl)}" onerror="((img) => {
+              if (!img.dataset.triedFallback && img.dataset.fallbackUrl) {
+                img.dataset.triedFallback = 'true';
+                img.src = img.dataset.fallbackUrl;
+              } else {
+                img.style.display = 'none';
+              }
+            })(this)" />` : ''}
+            <svg data-edit-svg viewBox="0 0 ${vw} ${vh}" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+              <polygon points="${escapeHtml(dispPts)}" class="mask-edit-poly" data-edit-poly vector-effect="non-scaling-stroke" />
+              ${handles}
+            </svg>
+          </div>
+          <div class="mask-edit-meta"><span data-edit-covers>${escapeHtml(coversText)}</span></div>
+          <div class="mask-edit-row" role="group" aria-label="Adjust mask size">
+            <button type="button" class="mask-edit-size-btn" data-action="edit-shrink" data-mask-id="${escapeHtml(vm.maskId)}">Shrink −10%</button>
+            <button type="button" class="mask-edit-size-btn" data-action="edit-expand" data-mask-id="${escapeHtml(vm.maskId)}">Expand +10%</button>
+            <button type="button" class="mask-edit-size-btn" data-action="edit-reset" data-mask-id="${escapeHtml(vm.maskId)}">Reset</button>
+          </div>
+          <div class="mask-edit-label-row">
+            <span class="mask-control-label">Label</span>
+            <input type="text" class="mask-edit-input" data-edit-label maxlength="64" aria-label="Mask label" />
+          </div>
+          <div class="mask-edit-actions">
+            <button type="button" class="mask-edit-cancel" data-action="edit-cancel" data-mask-id="${escapeHtml(vm.maskId)}">Cancel</button>
+            <button type="button" class="mask-edit-save" data-action="edit-save" data-mask-id="${escapeHtml(vm.maskId)}" data-camera="${escapeHtml(mask.camera || '')}" data-event-id="${eventId}">Save</button>
+          </div>
+        </div>
+      `;
+    };
+
     const buildActiveRow = (mask: any): string => {
       const vm = buildViewModel(mask);
       const maskId = escapeHtml(vm.maskId);
@@ -5183,12 +5481,16 @@ export class FrigateEventsCard extends LitElement {
                   <button type="button" class="mask-seg-btn ${selectedIsPrimary ? '' : 'active'}" data-action="toggle-more" aria-expanded="false">${escapeHtml(moreLabel)}</button>
                 </div>
               </div>
-              <button type="button" class="mask-remove-btn" data-action="remove-mask" data-mask-id="${maskId}" data-camera="${camera}">Remove mask</button>
+              <div class="mask-row-actions">
+                <button type="button" class="mask-edit-btn" data-action="edit-mask" data-mask-id="${maskId}" data-camera="${camera}">${this._maskEditingId === vm.maskId ? 'Close editor' : 'Edit'}</button>
+                <button type="button" class="mask-remove-btn" data-action="remove-mask" data-mask-id="${maskId}" data-camera="${camera}">Remove mask</button>
+              </div>
             </div>
             <div class="mask-more" hidden>
               ${morePresets.map(p => durationButton(p, 'mask-chip')).join('')}
               <button type="button" class="mask-chip ${(!selectedPreset) ? 'active' : ''}" data-action="custom-duration" data-mask-id="${maskId}" data-camera="${camera}" data-poly="${poly}" data-label="${maskLabel}">${selectedPreset ? 'Custom…' : `Custom (${currentDurationHours}h)`}</button>
             </div>
+            ${this._maskEditingId === vm.maskId ? buildEditPanel(mask, vm) : ''}
           </div>
         </div>
       `;
@@ -5389,6 +5691,192 @@ export class FrigateEventsCard extends LitElement {
         }
       });
     });
+
+    // ── Inline geometry editor ──
+    const findEditPanel = (maskId: string): HTMLElement | null => {
+      let found: HTMLElement | null = null;
+      container.querySelectorAll('[data-edit-panel]').forEach(panel => {
+        if ((panel as HTMLElement).getAttribute('data-edit-panel') === maskId) {
+          found = panel as HTMLElement;
+        }
+      });
+      return found;
+    };
+    const clamp01 = (n: number): number => Math.min(1, Math.max(0, n));
+    const parsePanelPoly = (panel: HTMLElement): Array<{ x: number; y: number }> => {
+      const raw = panel.getAttribute('data-norm-poly') || '';
+      const nums = raw.split(',').map(s => parseFloat(s.trim())).filter(n => !isNaN(n));
+      const pts: Array<{ x: number; y: number }> = [];
+      for (let i = 0; i + 1 < nums.length; i += 2) {
+        pts.push({ x: clamp01(nums[i]), y: clamp01(nums[i + 1]) });
+      }
+      return pts;
+    };
+    const panelViewBox = (panel: HTMLElement): { w: number; h: number } => ({
+      w: parseFloat(panel.getAttribute('data-viewbox-w') || '1920') || 1920,
+      h: parseFloat(panel.getAttribute('data-viewbox-h') || '1080') || 1080,
+    });
+    const paintPanel = (panel: HTMLElement): void => {
+      const pts = parsePanelPoly(panel);
+      const { w, h } = panelViewBox(panel);
+      const polyEl = panel.querySelector('[data-edit-poly]');
+      if (polyEl) {
+        polyEl.setAttribute('points', pts.map(p => `${p.x * w},${p.y * h}`).join(' '));
+      }
+      pts.forEach((p, i) => {
+        const handle = panel.querySelector(`[data-edit-handle="${i}"]`);
+        if (handle) {
+          handle.setAttribute('cx', String(p.x * w));
+          handle.setAttribute('cy', String(p.y * h));
+        }
+      });
+      const covers = panel.querySelector('[data-edit-covers]');
+      if (covers && pts.length > 0) {
+        const xs = pts.map(p => p.x);
+        const ys = pts.map(p => p.y);
+        const cw = Math.round((Math.max(...xs) - Math.min(...xs)) * w);
+        const ch = Math.round((Math.max(...ys) - Math.min(...ys)) * h);
+        covers.textContent = `Covers ${cw} × ${ch} px`;
+      }
+    };
+    const clientToNorm = (svg: SVGSVGElement, clientX: number, clientY: number, w: number, h: number): { x: number; y: number } | null => {
+      try {
+        const ctm = svg.getScreenCTM();
+        if (ctm) {
+          const pt = new DOMPoint(clientX, clientY).matrixTransform(ctm.inverse());
+          return { x: clamp01(pt.x / w), y: clamp01(pt.y / h) };
+        }
+      } catch {
+        // Fall through to bounding-rect approximation below.
+      }
+      const rect = svg.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return null;
+      return { x: clamp01((clientX - rect.left) / rect.width), y: clamp01((clientY - rect.top) / rect.height) };
+    };
+
+    container.querySelectorAll('[data-action="edit-mask"]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const maskId = (btn as HTMLElement).getAttribute('data-mask-id');
+        if (!maskId) return;
+        this._maskEditingId = this._maskEditingId === maskId ? undefined : maskId;
+        this._renderMaskManagerContent(container);
+      });
+    });
+
+    container.querySelectorAll('[data-edit-panel]').forEach(panelEl => {
+      const panel = panelEl as HTMLElement;
+      panel.addEventListener('click', (e) => e.stopPropagation());
+      panel.addEventListener('pointerdown', (e) => e.stopPropagation());
+      const labelInput = panel.querySelector('[data-edit-label]') as HTMLInputElement | null;
+      if (labelInput && !labelInput.value) {
+        labelInput.value = panel.getAttribute('data-label') || '';
+      }
+      const svg = panel.querySelector('[data-edit-svg]') as SVGSVGElement | null;
+      if (svg) {
+        panel.querySelectorAll('[data-edit-handle]').forEach(handleEl => {
+          const handle = handleEl as Element;
+          const idx = parseInt((handle as HTMLElement).getAttribute('data-edit-handle') || '-1', 10);
+          if (isNaN(idx) || idx < 0) return;
+          handle.addEventListener('pointerdown', (ev) => {
+            ev.stopPropagation();
+            ev.preventDefault();
+            const evt = ev as PointerEvent;
+            try {
+              handle.setPointerCapture(evt.pointerId);
+            } catch {
+              // Pointer capture unavailable; drag still works via move/up listeners.
+            }
+            const onMove = (me: Event): void => {
+              const { w, h } = panelViewBox(panel);
+              const norm = clientToNorm(svg, (me as PointerEvent).clientX, (me as PointerEvent).clientY, w, h);
+              if (!norm) return;
+              const pts = parsePanelPoly(panel);
+              if (idx >= pts.length) return;
+              pts[idx] = norm;
+              panel.setAttribute('data-norm-poly', this._formatNormalizedPolygon(pts));
+              paintPanel(panel);
+            };
+            const onUp = (): void => {
+              handle.removeEventListener('pointermove', onMove);
+              handle.removeEventListener('pointerup', onUp);
+              handle.removeEventListener('pointercancel', onUp);
+            };
+            handle.addEventListener('pointermove', onMove);
+            handle.addEventListener('pointerup', onUp);
+            handle.addEventListener('pointercancel', onUp);
+          });
+        });
+      }
+    });
+
+    container.querySelectorAll('[data-action="edit-expand"]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const maskId = (btn as HTMLElement).getAttribute('data-mask-id') || '';
+        const panel = findEditPanel(maskId);
+        if (!panel) return;
+        panel.setAttribute('data-norm-poly', this._formatNormalizedPolygon(this._scaleNormalizedPolygon(parsePanelPoly(panel), 1.1)));
+        paintPanel(panel);
+      });
+    });
+
+    container.querySelectorAll('[data-action="edit-shrink"]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const maskId = (btn as HTMLElement).getAttribute('data-mask-id') || '';
+        const panel = findEditPanel(maskId);
+        if (!panel) return;
+        panel.setAttribute('data-norm-poly', this._formatNormalizedPolygon(this._scaleNormalizedPolygon(parsePanelPoly(panel), 0.9)));
+        paintPanel(panel);
+      });
+    });
+
+    container.querySelectorAll('[data-action="edit-reset"]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const maskId = (btn as HTMLElement).getAttribute('data-mask-id') || '';
+        const panel = findEditPanel(maskId);
+        if (!panel) return;
+        panel.setAttribute('data-norm-poly', panel.getAttribute('data-orig-poly') || '');
+        paintPanel(panel);
+      });
+    });
+
+    container.querySelectorAll('[data-action="edit-cancel"]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._maskEditingId = undefined;
+        this._renderMaskManagerContent(container);
+      });
+    });
+
+    container.querySelectorAll('[data-action="edit-save"]').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const maskId = (btn as HTMLElement).getAttribute('data-mask-id') || '';
+        const camera = (btn as HTMLElement).getAttribute('data-camera') || '';
+        const eventId = (btn as HTMLElement).getAttribute('data-event-id') || maskId;
+        const panel = findEditPanel(maskId);
+        if (!maskId || !panel) return;
+        const labelInput = panel.querySelector('[data-edit-label]') as HTMLInputElement | null;
+        const newLabel = (labelInput?.value || '').trim();
+        const newPolygon = panel.getAttribute('data-norm-poly') || '';
+        if (!newPolygon) return;
+        const activeMasks = (this._getTemporaryMaskSensor(this.hass?.states)?.attributes?.masks as any[]) || [];
+        const existing = activeMasks.find((m: any) => String(m.mask_id) === String(maskId));
+        const durationHours = existing ? this._getCurrentMaskDurationHours(existing) : 24;
+        await this._executeEditMask(maskId, camera, eventId, newPolygon, newLabel, durationHours);
+      });
+    });
+
+    container.onkeydown = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape' && this._maskEditingId) {
+        e.stopPropagation();
+        this._maskEditingId = undefined;
+        this._renderMaskManagerContent(container);
+      }
+    };
   }
 
   private async _executeRestartFrigate(): Promise<void> {
@@ -5566,6 +6054,72 @@ export class FrigateEventsCard extends LitElement {
       }
     } catch (err) {
       console.error('Failed to update mask duration:', err);
+    }
+  }
+
+  private async _executeEditMask(
+    maskId: string,
+    camera: string,
+    eventId: string,
+    newPolygon: string,
+    newLabel: string,
+    durationHours: number
+  ): Promise<void> {
+    if (!this.hass) return;
+    const key = String(maskId);
+    if (this._maskEditSavingIds.has(key)) return;
+    this._maskEditSavingIds.add(key);
+    const findSaveBtn = (): HTMLButtonElement | null => {
+      let found: HTMLButtonElement | null = null;
+      this._maskManagerContainer?.querySelectorAll('[data-action="edit-save"]').forEach(btn => {
+        if ((btn as HTMLElement).getAttribute('data-mask-id') === key) {
+          found = btn as HTMLButtonElement;
+        }
+      });
+      return found;
+    };
+    const saveBtn = findSaveBtn();
+    if (saveBtn) saveBtn.disabled = true;
+    try {
+      if (!this.hass.callService) throw new Error('Home Assistant service calls are unavailable');
+      const payload = {
+        camera,
+        event_id: eventId || key,
+        mask_id: key,
+        polygon: newPolygon,
+        label: newLabel,
+        duration_hours: durationHours,
+      };
+      try {
+        await this.hass.callService('frigate_temp_mask', 'add_mask', payload);
+      } catch {
+        await this.hass.callService('shell_command', 'frigate_add_temp_mask', payload);
+      }
+      this._maskEditingId = undefined;
+      this.dispatchEvent(new CustomEvent('hass-notification', {
+        detail: { message: `Temporary mask #${key} updated` },
+        bubbles: true,
+        composed: true,
+      }));
+      this.requestUpdate();
+      if (this._maskManagerContainer) {
+        const body = this._maskManagerContainer.querySelector<HTMLElement>('.mask-manager-body');
+        const scrollTop = body?.scrollTop ?? 0;
+        this._renderMaskManagerContent(this._maskManagerContainer);
+        const nextBody = this._maskManagerContainer.querySelector<HTMLElement>('.mask-manager-body');
+        if (nextBody) nextBody.scrollTop = scrollTop;
+      }
+    } catch (err) {
+      console.error('Failed to edit mask:', err);
+      this.dispatchEvent(new CustomEvent('hass-notification', {
+        detail: { message: `Could not update temporary mask #${key}` },
+        bubbles: true,
+        composed: true,
+      }));
+      const btn = findSaveBtn();
+      if (btn) btn.disabled = false;
+    } finally {
+      this._maskEditSavingIds.delete(key);
     }
   }
 
