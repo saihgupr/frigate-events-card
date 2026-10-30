@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.6.14';
+const CARD_VERSION = '2.6.15';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -5984,20 +5984,9 @@ export class FrigateEventsCard extends LitElement {
         composed: true,
       }));
       this.requestUpdate();
-      if (this._maskManagerContainer) {
-        setTimeout(() => {
-          if (this._maskManagerContainer) this._renderMaskManagerContent(this._maskManagerContainer);
-        }, 300);
-        // Second pass: by 600ms HA state has definitely propagated.
-        // If supports_dynamic_toggle is true (0.18+), ensure no pending entry lingers.
-        setTimeout(() => {
-          const lateAttrs = this._getTemporaryMaskSensor(this.hass?.states)?.attributes;
-          if (lateAttrs?.supports_dynamic_toggle === true) {
-            this._localPendingMasks = this._localPendingMasks.filter(m => String(m.mask_id) !== String(maskId));
-            if (this._maskManagerContainer) this._renderMaskManagerContent(this._maskManagerContainer);
-          }
-        }, 600);
-      }
+      // Close the manager: on pre-0.18 Frigate the delete restarts the
+      // detector, so previews would just go grey until it is back.
+      this._removeMaskManagerModal();
     } catch (err) {
       console.error('Failed to remove mask:', err);
     }
