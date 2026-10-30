@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.6.8';
+const CARD_VERSION = '2.6.9';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -185,9 +185,6 @@ export class FrigateEventsCard extends LitElement {
   private _maskManagerExpandedId?: string;
   private _maskEditingId?: string;
   private _maskEditSavingIds = new Set<string>();
-  // Timestamp of the last geometry save. On pre-0.18 Frigate the detector
-  // restarts to apply the change, so snapshots fail until it is back.
-  private _maskManagerLastSaveAt = 0;
   @state() private _localPendingMasks: any[] = [];
 
   private _unsubscribe?: () => void;
@@ -2011,40 +2008,6 @@ export class FrigateEventsCard extends LitElement {
         vector-effect: non-scaling-stroke;
       }
 
-      .mask-preview-notice {
-        position: absolute;
-        left: 8px;
-        right: 8px;
-        bottom: 8px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        gap: 8px;
-        padding: 8px 12px;
-        font-size: 12px;
-        line-height: 16px;
-        color: #fff;
-        background: rgba(0, 0, 0, 0.65);
-        border-radius: 8px;
-        pointer-events: none;
-      }
-
-      .mask-preview-spinner {
-        flex: 0 0 14px;
-        width: 14px;
-        height: 14px;
-        border-radius: 50%;
-        border: 2px solid rgba(255, 255, 255, 0.3);
-        border-top-color: #fff;
-        animation: mask-preview-spin 0.8s linear infinite;
-      }
-
-      @keyframes mask-preview-spin {
-        to {
-          transform: rotate(360deg);
-        }
-      }
-
       .mask-row-text {
         flex: 1;
         min-width: 0;
@@ -2487,9 +2450,6 @@ export class FrigateEventsCard extends LitElement {
         .mask-seg-btn,
         .mask-chip {
           transition: none;
-        }
-        .mask-preview-spinner {
-          animation: none;
         }
       }
 
@@ -4390,6 +4350,8 @@ export class FrigateEventsCard extends LitElement {
     const isCurrentlyActive: boolean = Boolean(
       Array.isArray(activeMasks) && activeMasks.some((m: any) => m.mask_id === maskId)
     );
+    const toggleDynamic = this._getTemporaryMaskSensor(this.hass.states)?.attributes?.supports_dynamic_toggle === true;
+    const toggleCamera = this._formatCameraName(event.camera || 'Camera');
 
     try {
       if (isCurrentlyActive) {
@@ -4410,7 +4372,9 @@ export class FrigateEventsCard extends LitElement {
           { mask_id: maskId, camera: event.camera, label: event.label, event_id: event.id, removed_at: new Date().toISOString() }
         ];
         this.dispatchEvent(new CustomEvent('hass-notification', {
-          detail: { message: `Temporary mask removed for ${event.camera}` },
+          detail: { message: toggleDynamic
+            ? `Mask removed for ${toggleCamera}.`
+            : `Mask removed for ${toggleCamera}. Restart Frigate to apply it.` },
           bubbles: true,
           composed: true,
         }));
@@ -4430,7 +4394,9 @@ export class FrigateEventsCard extends LitElement {
         });
         this._localPendingMasks = [];
         this.dispatchEvent(new CustomEvent('hass-notification', {
-          detail: { message: `Temporary mask applied for ${event.camera}` },
+          detail: { message: toggleDynamic
+            ? `Mask applied for ${toggleCamera}.`
+            : `Mask applied for ${toggleCamera}. Frigate is restarting to apply it.` },
           bubbles: true,
           composed: true,
         }));
@@ -4439,9 +4405,8 @@ export class FrigateEventsCard extends LitElement {
     } catch (err) {
       console.error('Failed to toggle temporary mask:', err);
       if (!isCurrentlyActive) {
-        const message = err instanceof Error ? err.message : String(err);
         this.dispatchEvent(new CustomEvent('hass-notification', {
-          detail: { message: `Could not apply temporary mask: ${message}` },
+          detail: { message: `Could not apply the mask for ${toggleCamera}.` },
           bubbles: true,
           composed: true,
         }));
@@ -4488,7 +4453,7 @@ export class FrigateEventsCard extends LitElement {
         : `${durationHours} hours`;
 
       this.dispatchEvent(new CustomEvent('hass-notification', {
-        detail: { message: `Temporary mask updated to ${durationText} for ${event.camera}` },
+        detail: { message: `Mask updated to ${durationText} for ${this._formatCameraName(event.camera || 'Camera')}.` },
         bubbles: true,
         composed: true,
       }));
@@ -5096,7 +5061,6 @@ export class FrigateEventsCard extends LitElement {
       this._maskManagerContainer = undefined;
       this._maskManagerExpandedId = undefined;
       this._maskEditingId = undefined;
-      this._maskManagerLastSaveAt = 0;
     }
     if (this._maskManagerTimer) {
       clearInterval(this._maskManagerTimer);
@@ -5401,7 +5365,7 @@ export class FrigateEventsCard extends LitElement {
       return { maskId, title, sub: subParts.join(' · '), displayUrl, imageFallbackUrl, geo };
     };
 
-    const buildPreview = (vm: ReturnType<typeof buildViewModel>, detailed = false): string => `
+    const buildPreview = (vm: ReturnType<typeof buildViewModel>): string => `
       ${vm.displayUrl ? `
         <img
           src="${escapeHtml(vm.displayUrl)}"
@@ -5422,9 +5386,6 @@ export class FrigateEventsCard extends LitElement {
       <svg class="mask-preview-minimap" viewBox="0 0 ${vm.geo.viewBoxW} ${vm.geo.viewBoxH}" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
         ${vm.geo.polyPts ? `<polygon points="${escapeHtml(vm.geo.polyPts)}" class="minimap-poly" vector-effect="non-scaling-stroke" />` : ''}
       </svg>
-      ${detailed && (Date.now() - this._maskManagerLastSaveAt) < 120000 ? `
-        <div class="mask-preview-notice"><span class="mask-preview-spinner"></span><span>Frigate is restarting to apply your edit…</span></div>
-      ` : ''}
     `;
 
     const chevronSvg = '<svg class="mask-row-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M8.59 16.59 13.17 12 8.59 7.41 10 6l6 6-6 6z"/></svg>';
@@ -5509,7 +5470,7 @@ export class FrigateEventsCard extends LitElement {
       const showEditor = editPanel !== '';
 
       const detailBody = `
-            <div class="mask-frame">${buildPreview(vm, true)}</div>
+            <div class="mask-frame">${buildPreview(vm)}</div>
             ${vm.geo.maskW > 0 ? `<div class="mask-meta">Covers ${Math.round(vm.geo.maskW)} × ${Math.round(vm.geo.maskH)} px</div>` : ''}
             <div class="mask-controls">
               <div class="mask-duration" role="group" aria-label="Keep this mask for">
@@ -5938,7 +5899,7 @@ export class FrigateEventsCard extends LitElement {
       await this.hass.callService('frigate_temp_mask', 'restart', {});
       this._localPendingMasks = [];
       this.dispatchEvent(new CustomEvent('hass-notification', {
-        detail: { message: 'Frigate detector process restarting to apply configuration changes...' },
+        detail: { message: 'Frigate is restarting.' },
         bubbles: true,
         composed: true,
       }));
@@ -6013,8 +5974,12 @@ export class FrigateEventsCard extends LitElement {
         this._localPendingMasks = this._localPendingMasks.filter(m => String(m.mask_id) !== String(maskId));
       }
 
+      const removeCamera = this._formatCameraName(camera || 'Camera');
+      const removeDynamic = postAttrs?.supports_dynamic_toggle === true;
       this.dispatchEvent(new CustomEvent('hass-notification', {
-        detail: { message: `Temporary mask #${maskId} removed ${camera ? `for ${camera}` : ''}` },
+        detail: { message: removeDynamic
+          ? `Mask removed for ${removeCamera}.`
+          : `Mask removed for ${removeCamera}. Restart Frigate to apply it.` },
         bubbles: true,
         composed: true,
       }));
@@ -6048,8 +6013,11 @@ export class FrigateEventsCard extends LitElement {
           await this.hass.callService('shell_command', 'frigate_prune_all_temp_masks', {});
         }
       }
+      const pruneDynamic = this._getTemporaryMaskSensor(this.hass?.states)?.attributes?.supports_dynamic_toggle === true;
       this.dispatchEvent(new CustomEvent('hass-notification', {
-        detail: { message: 'All temporary masks pruned from Frigate' },
+        detail: { message: pruneDynamic
+          ? 'All masks removed.'
+          : 'All masks removed. Frigate is restarting to apply it.' },
         bubbles: true,
         composed: true,
       }));
@@ -6094,7 +6062,7 @@ export class FrigateEventsCard extends LitElement {
         : `${durationHours} hours`;
 
       this.dispatchEvent(new CustomEvent('hass-notification', {
-        detail: { message: `Temporary mask #${maskId} updated to ${durationText}` },
+        detail: { message: `Mask updated to ${durationText} for ${this._formatCameraName(camera || 'Camera')}.` },
         bubbles: true,
         composed: true,
       }));
@@ -6150,18 +6118,6 @@ export class FrigateEventsCard extends LitElement {
       this._maskEditingId = undefined;
       const sensorAttrs = this._getTemporaryMaskSensor(this.hass?.states)?.attributes;
       const needsRestart = sensorAttrs?.supports_dynamic_toggle !== true;
-      if (needsRestart) {
-        // Pre-0.18 Frigate restarts the detector to apply geometry changes,
-        // so snapshots fail until it is back. Mark the save time so the
-        // preview shows a restarting notice instead of a bare grey box, and
-        // retry snapshots so the preview recovers on its own.
-        this._maskManagerLastSaveAt = Date.now();
-        [12000, 30000, 60000, 100000].forEach((delay) => {
-          setTimeout(() => {
-            if (this._maskManagerContainer) void this._refreshMaskManagerSnapshots();
-          }, delay);
-        });
-      }
       this.dispatchEvent(new CustomEvent('hass-notification', {
         detail: { message: needsRestart
           ? 'Mask updated. Frigate is restarting to apply it.'
@@ -6170,18 +6126,7 @@ export class FrigateEventsCard extends LitElement {
         composed: true,
       }));
       this.requestUpdate();
-      if (this._maskManagerContainer) {
-        // Drop cached snapshot URLs: they point at the pre-restart Frigate
-        // and would fail, leaving a bare grey box. Clearing them lets the
-        // restarting notice show until the retries below reload fresh images.
-        this._maskManagerSnapshotUrls.clear();
-        this._maskManagerEventSnapshotUrls.clear();
-        const body = this._maskManagerContainer.querySelector<HTMLElement>('.mask-manager-body');
-        const scrollTop = body?.scrollTop ?? 0;
-        this._renderMaskManagerContent(this._maskManagerContainer);
-        const nextBody = this._maskManagerContainer.querySelector<HTMLElement>('.mask-manager-body');
-        if (nextBody) nextBody.scrollTop = scrollTop;
-      }
+      this._removeMaskManagerModal();
     } catch (err) {
       console.error('Failed to edit mask:', err);
       const btn = findSaveBtn();
