@@ -15,7 +15,6 @@
 - Improved: **Tapping an event on a phone or tablet opens a 15-minute window**, so the event actually fills the scrubber. Desktop and TV keep `timeline_default_window_hours`.
 - Improved: **The selected window preset is now obvious** — accent fill with white bold text instead of a card-coloured pill that vanished against the settings sheet.
 - Improved: iPad and other touch devices reliably get the mobile layout, including the HA companion app WebView and iPads with a trackpad attached.
-- Fixed: **Timeline playback on iOS Safari and the companion app** — VOD and MP4 paths are signed with `authSig`, so Frigate's segment proxy no longer returns 401, including behind Nabu Casa.
 - Fixed: **Scrubber track and mute button** — the track no longer disappears on iPad and older WebViews, and the mute button floats over the footage again instead of adding a black row under it. It now also honours `show_mute: false`.
 - Fixed: **Tiny video on iPad** — Safari collapsed the player to a thumbnail; it now sizes from the video's own ratio at full card width.
 - Fixed: Stray `}} />` text rendering under every event thumbnail.
@@ -142,7 +141,6 @@
 
 ## [2.1.32] - 2026-06-09
 - Added: `show_scroll_arrows` config option (default: `false`) to control the visibility of navigation arrows in scroll mode.
->>>>>>> origin/develop
 
 ## [2.1.31] - 2026-06-05
 - Added: Horizontal scrolling gallery mode via new `scroll` and `scroll_limit` config options. When enabled, `event_count` controls the number of visible thumbnails and hover-triggered navigation arrows appear on desktop.
