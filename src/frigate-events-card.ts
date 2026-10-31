@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.6.18';
+const CARD_VERSION = '2.6.22';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -316,7 +316,7 @@ export class FrigateEventsCard extends LitElement {
   protected shouldUpdate(changedProps: PropertyValues): boolean {
     // If hass is the only property that changed, and it was already defined previously,
     // check if we need to subscribe, but skip re-rendering the HTML DOM tree unless
-    // active masks changed.
+    // active masks or Frigate online/offline state changed.
     if (changedProps.has('hass') && changedProps.size === 1) {
       const oldHass = changedProps.get('hass') as HomeAssistant | undefined;
       if (oldHass !== undefined) {
@@ -329,6 +329,11 @@ export class FrigateEventsCard extends LitElement {
           if (this._maskManagerContainer) {
             this._renderMaskManagerContent(this._maskManagerContainer);
           }
+          return true;
+        }
+        // Re-render when Frigate goes offline/online so the live box
+        // hides/shows. Polling already skips fetches while offline.
+        if (this._isFrigateOfflineFor(oldHass?.states) !== this._isFrigateOffline()) {
           return true;
         }
         return false;
@@ -1116,8 +1121,7 @@ export class FrigateEventsCard extends LitElement {
    * While offline we freeze the gallery on the last known events so the
    * boxes don't flash in/out on every poll + retry.
    */
-  private _isFrigateOffline(): boolean {
-    const states = this.hass?.states as any;
+  private _isFrigateOfflineFor(states: any): boolean {
     if (!states) return false;
     const clientId = this._config?.frigate_client_id || 'frigate';
     const candidates = [
@@ -1135,6 +1139,10 @@ export class FrigateEventsCard extends LitElement {
       return false;
     }
     return false;
+  }
+
+  private _isFrigateOffline(): boolean {
+    return this._isFrigateOfflineFor(this.hass?.states as any);
   }
 
   private async _loadEvents(): Promise<void> {
@@ -8538,6 +8546,15 @@ export class FrigateEventsCard extends LitElement {
     const aspectRatio = this._config?.live_view_aspect_ratio || '16 / 9';
 
     if (this._liveViewError) {
+      // Suppress only the expected shutdown noise while Frigate is off —
+      // e.g. "Failed go2rtc stream: Load failed". Other errors still show
+      // since they're helpful when debugging/setup.
+      const msg = String(this._liveViewError ?? '');
+      const isShutdownNoise =
+        this._isFrigateOffline() &&
+        /go2rtc/i.test(msg) &&
+        /load failed/i.test(msg);
+      if (!isShutdownNoise) {
       return html`
         <div class="live-view-container" style="aspect-ratio: ${aspectRatio};">
           <div class="live-view-error">
@@ -8546,6 +8563,7 @@ export class FrigateEventsCard extends LitElement {
           </div>
         </div>
       `;
+      }
     }
 
     const showMuteBtn = Boolean(this._config?.show_mute || this._config?.live_view_show_mute);
