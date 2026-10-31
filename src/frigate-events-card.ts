@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.6.16';
+const CARD_VERSION = '2.6.18';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -1111,8 +1111,40 @@ export class FrigateEventsCard extends LitElement {
     pc.oniceconnectionstatechange = handleStateChange;
   }
 
+  /**
+   * True when the Frigate integration reports the server as unreachable.
+   * While offline we freeze the gallery on the last known events so the
+   * boxes don't flash in/out on every poll + retry.
+   */
+  private _isFrigateOffline(): boolean {
+    const states = this.hass?.states as any;
+    if (!states) return false;
+    const clientId = this._config?.frigate_client_id || 'frigate';
+    const candidates = [
+      'sensor.frigate_status',
+      `sensor.${clientId}_status`,
+    ];
+    for (const entityId of candidates) {
+      const s = states[entityId];
+      if (!s) continue;
+      const state = String(s.state ?? '').toLowerCase();
+      if (state === 'unavailable' || state === 'unknown' || state === 'none' || state === '') {
+        return true;
+      }
+      // Any other state (e.g. 'running') means online.
+      return false;
+    }
+    return false;
+  }
+
   private async _loadEvents(): Promise<void> {
     if (!this.hass || !this._config) return;
+
+    // Freeze gallery while Frigate is off: keep last events, skip poll flashing.
+    if (this._events.length > 0 && this._isFrigateOffline()) {
+      this._loading = false;
+      return;
+    }
 
     this._error = undefined;
 
@@ -1132,6 +1164,12 @@ export class FrigateEventsCard extends LitElement {
         limit: fetchLimit,
         has_snapshot: true,
       });
+
+      // Backend can return [] during the shutdown window before sensor.frigate_status
+      // flips to unavailable — keep cached events so boxes don't vanish.
+      if (events.length === 0 && this._events.length > 0 && this._isFrigateOffline()) {
+        return;
+      }
 
       this._events = events.sort((a, b) => (b.start_time || 0) - (a.start_time || 0));
     } catch (e: any) {
@@ -8429,9 +8467,7 @@ export class FrigateEventsCard extends LitElement {
           ${this._config.live_view ? this._renderLiveView() : ''}
           ${this._loading && this._events.length === 0
             ? html`<div class="loading"></div>`
-            : this._error && this._events.length === 0
-              ? html``
-              : html`
+            : html`
                   <div class="events-container">
                     ${showScrollArrows ? html`
                       <button class="scroll-btn prev" @click=${() => this._scroll('left')} aria-label="Previous">
