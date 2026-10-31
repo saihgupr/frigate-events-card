@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.6.22';
+const CARD_VERSION = '2.6.24';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -8473,9 +8473,7 @@ export class FrigateEventsCard extends LitElement {
         <div class="content">
           ${this._config.debug ? html`<div class="debug-version">v${CARD_VERSION}</div>` : ''}
           ${this._config.live_view ? this._renderLiveView() : ''}
-          ${this._loading && this._events.length === 0
-            ? html`<div class="loading"></div>`
-            : html`
+          ${html`
                   <div class="events-container">
                     ${showScrollArrows ? html`
                       <button class="scroll-btn prev" @click=${() => this._scroll('left')} aria-label="Previous">
