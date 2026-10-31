@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 - Fixed: **Freeze event gallery while Frigate is off** — when `sensor.frigate_status` is `unavailable`/`unknown`, the card keeps the last loaded events and skips the 10s poll, so boxes stay put instead of flashing in/out. Also keeps cached events if the API returns empty during the shutdown window, and no longer blanks the card to empty on load errors.
-- Fixed: **Hide live view while Frigate is off** — suppresses only the expected `Failed go2rtc stream: Load failed` error when `sensor.frigate_status` is offline, so the live box stays put without the unhelpful text. Other live errors still show for debugging/setup.
+- Fixed: **Hide live view while Frigate is off** — suppresses any live-view error when `sensor.frigate_status` is offline (different browsers/report different messages, e.g. TV Bro vs Mac), so the live box stays put without unhelpful text. When online, all errors still show for debugging/setup.
 - Fixed: **No blank flash on refresh** — the event grid renders placeholder boxes immediately while events load, instead of a blank loading space.
 - Added: **Edit masks in the Temporary Mask Manager** — each active mask now has an Edit button opening an inline editor with a draggable-polygon preview over the camera snapshot, Expand/Shrink/Reset size controls, and a label field. Saving updates the mask geometry in Frigate via `add_mask`.
 - Improved: `add_mask` service now converts normalized polygons to pixel coordinates when the target Frigate config uses the pre-0.14 list format. Previously, saving an edited mask on Frigate 0.13 wrote decimal coordinates the old Frigate can't parse, which prevented it from starting.

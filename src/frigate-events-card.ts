@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.6.24';
+const CARD_VERSION = '2.6.26';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -8544,14 +8544,11 @@ export class FrigateEventsCard extends LitElement {
     const aspectRatio = this._config?.live_view_aspect_ratio || '16 / 9';
 
     if (this._liveViewError) {
-      // Suppress only the expected shutdown noise while Frigate is off —
-      // e.g. "Failed go2rtc stream: Load failed". Other errors still show
-      // since they're helpful when debugging/setup.
-      const msg = String(this._liveViewError ?? '');
-      const isShutdownNoise =
-        this._isFrigateOffline() &&
-        /go2rtc/i.test(msg) &&
-        /load failed/i.test(msg);
+      // While Frigate is off (intentional overnight shutdown), any live
+      // error is expected shutdown noise — fall through to the normal video
+      // box with no error text. When online, all errors still show since
+      // they're helpful when debugging/setup.
+      const isShutdownNoise = this._isFrigateOffline();
       if (!isShutdownNoise) {
       return html`
         <div class="live-view-container" style="aspect-ratio: ${aspectRatio};">
