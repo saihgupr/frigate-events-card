@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+- Added: **Drag mask shapes and edges in the editor** — grab the polygon fill to move the whole mask at once (shape never distorts at frame edges), or grab an edge to slide it: vertical edges move left/right, horizontal edges move up/down, diagonal edges translate freely. Vertex pins, Expand/Shrink/Reset, and Escape-to-cancel all still work.
 - Fixed: **Stale Frigate version cache across container swaps** — the integration now refreshes the cached Frigate version on sync, remove, and prune-all paths (with forced refresh) and updates the cache whenever `add_mask` detects the version from config, instead of keeping a stale version when switching between Frigate 0.13 and 0.18 containers.
 - Fixed: **Preserve bounding box on polygon edits** — saving a polygon edit now derives and stores the bounding box from the polygon when no box was supplied, so the mask record keeps its geometry metadata.
 - Added: **Testing version toggle** — when `testing: true`, `Ctrl+Opt+Cmd+D` toggles the version badge without editing Lovelace config. Persists in `localStorage` across refreshes.

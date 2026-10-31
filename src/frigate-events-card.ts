@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.6.30';
+const CARD_VERSION = '2.6.31';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -2344,6 +2344,7 @@ export class FrigateEventsCard extends LitElement {
         inset: 0;
         width: 100%;
         height: 100%;
+        touch-action: none;
       }
 
       .mask-edit-poly {
@@ -2351,6 +2352,8 @@ export class FrigateEventsCard extends LitElement {
         stroke: var(--mm-accent);
         stroke-width: 2px;
         vector-effect: non-scaling-stroke;
+        cursor: move;
+        touch-action: none;
       }
 
       .mask-edit-handle {
@@ -2364,6 +2367,14 @@ export class FrigateEventsCard extends LitElement {
 
       .mask-edit-handle:active {
         cursor: grabbing;
+      }
+
+      .mask-edit-edge {
+        fill: none;
+        stroke: transparent;
+        stroke-width: 24;
+        pointer-events: stroke;
+        touch-action: none;
       }
 
       .mask-edit-meta {
@@ -5497,6 +5508,17 @@ export class FrigateEventsCard extends LitElement {
       const handles = parsed.pts.map((p, i) =>
         `<circle class="mask-edit-handle" data-edit-handle="${i}" cx="${p.x * vw}" cy="${p.y * vh}" r="${handleR}" />`
       ).join('');
+      const edgeCursor = (i: number): string => {
+        const a = parsed.pts[i];
+        const b = parsed.pts[(i + 1) % parsed.pts.length];
+        const dx = Math.abs(b.x - a.x);
+        const dy = Math.abs(b.y - a.y);
+        return dx < dy * 0.5 ? 'ew-resize' : (dy < dx * 0.5 ? 'ns-resize' : 'move');
+      };
+      const edgeHits = parsed.pts.map((p, i) => {
+        const q = parsed.pts[(i + 1) % parsed.pts.length];
+        return `<line class="mask-edit-edge" data-edit-edge="${i}" x1="${p.x * vw}" y1="${p.y * vh}" x2="${q.x * vw}" y2="${q.y * vh}" style="cursor:${edgeCursor(i)}" />`;
+      }).join('');
       const minX = Math.min(...parsed.pts.map(p => p.x));
       const maxX = Math.max(...parsed.pts.map(p => p.x));
       const minY = Math.min(...parsed.pts.map(p => p.y));
@@ -5515,6 +5537,7 @@ export class FrigateEventsCard extends LitElement {
             })(this)" />` : ''}
             <svg data-edit-svg viewBox="0 0 ${vw} ${vh}" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
               <polygon points="${escapeHtml(dispPts)}" class="mask-edit-poly" data-edit-poly vector-effect="non-scaling-stroke" />
+              ${edgeHits}
               ${handles}
             </svg>
           </div>
@@ -5838,6 +5861,19 @@ export class FrigateEventsCard extends LitElement {
           handle.setAttribute('cy', String(p.y * h));
         }
       });
+      panel.querySelectorAll('[data-edit-edge]').forEach((edgeEl) => {
+        const edgeIdx = parseInt((edgeEl as HTMLElement).getAttribute('data-edit-edge') || '-1', 10);
+        if (isNaN(edgeIdx) || edgeIdx < 0 || edgeIdx >= pts.length) return;
+        const a = pts[edgeIdx];
+        const b = pts[(edgeIdx + 1) % pts.length];
+        edgeEl.setAttribute('x1', String(a.x * w));
+        edgeEl.setAttribute('y1', String(a.y * h));
+        edgeEl.setAttribute('x2', String(b.x * w));
+        edgeEl.setAttribute('y2', String(b.y * h));
+        const dx = Math.abs(b.x - a.x);
+        const dy = Math.abs(b.y - a.y);
+        (edgeEl as HTMLElement).style.cursor = dx < dy * 0.5 ? 'ew-resize' : (dy < dx * 0.5 ? 'ns-resize' : 'move');
+      });
       const covers = panel.querySelector('[data-edit-covers]');
       if (covers && pts.length > 0) {
         const xs = pts.map(p => p.x);
@@ -5872,6 +5908,9 @@ export class FrigateEventsCard extends LitElement {
       });
     });
 
+    // Active inline-editor drag (vertex, fill, or edge). Escape cancels the
+    // in-progress gesture and restores its snapshot instead of closing the editor.
+    let activeEditDrag: { cancel: () => void } | null = null;
     container.querySelectorAll('[data-edit-panel]').forEach(panelEl => {
       const panel = panelEl as HTMLElement;
       panel.addEventListener('click', (e) => e.stopPropagation());
@@ -5890,12 +5929,21 @@ export class FrigateEventsCard extends LitElement {
             ev.stopPropagation();
             ev.preventDefault();
             const evt = ev as PointerEvent;
+            const startPts = parsePanelPoly(panel);
+            let vertexCancelled = false;
+            const vertexDrag = { cancel: (): void => {
+              vertexCancelled = true;
+              panel.setAttribute('data-norm-poly', this._formatNormalizedPolygon(startPts));
+              paintPanel(panel);
+            } };
+            activeEditDrag = vertexDrag;
             try {
               handle.setPointerCapture(evt.pointerId);
             } catch {
               // Pointer capture unavailable; drag still works via move/up listeners.
             }
             const onMove = (me: Event): void => {
+              if (vertexCancelled) return;
               const { w, h } = panelViewBox(panel);
               const norm = clientToNorm(svg, (me as PointerEvent).clientX, (me as PointerEvent).clientY, w, h);
               if (!norm) return;
@@ -5909,10 +5957,137 @@ export class FrigateEventsCard extends LitElement {
               handle.removeEventListener('pointermove', onMove);
               handle.removeEventListener('pointerup', onUp);
               handle.removeEventListener('pointercancel', onUp);
+              if (activeEditDrag === vertexDrag) activeEditDrag = null;
             };
             handle.addEventListener('pointermove', onMove);
             handle.addEventListener('pointerup', onUp);
             handle.addEventListener('pointercancel', onUp);
+          });
+        });
+        const fillPoly = panel.querySelector('[data-edit-poly]');
+        if (fillPoly) {
+          fillPoly.addEventListener('pointerdown', (ev) => {
+            ev.stopPropagation();
+            ev.preventDefault();
+            const evt = ev as PointerEvent;
+            const { w, h } = panelViewBox(panel);
+            const start = clientToNorm(svg, evt.clientX, evt.clientY, w, h);
+            if (!start) return;
+            const orig = parsePanelPoly(panel);
+            if (orig.length === 0) return;
+            const xs = orig.map(p => p.x);
+            const ys = orig.map(p => p.y);
+            // Clamp the shared delta (not individual points) so the shape
+            // never distorts against the 0..1 frame edges.
+            const dxMin = -Math.min(...xs);
+            const dxMax = 1 - Math.max(...xs);
+            const dyMin = -Math.min(...ys);
+            const dyMax = 1 - Math.max(...ys);
+            let fillCancelled = false;
+            const fillDrag = { cancel: (): void => {
+              fillCancelled = true;
+              panel.setAttribute('data-norm-poly', this._formatNormalizedPolygon(orig));
+              paintPanel(panel);
+            } };
+            activeEditDrag = fillDrag;
+            try {
+              fillPoly.setPointerCapture(evt.pointerId);
+            } catch {
+              // Pointer capture unavailable; drag still works via move/up listeners.
+            }
+            const onMove = (me: Event): void => {
+              if (fillCancelled) return;
+              const vb = panelViewBox(panel);
+              const norm = clientToNorm(svg, (me as PointerEvent).clientX, (me as PointerEvent).clientY, vb.w, vb.h);
+              if (!norm) return;
+              const dx = Math.min(dxMax, Math.max(dxMin, norm.x - start.x));
+              const dy = Math.min(dyMax, Math.max(dyMin, norm.y - start.y));
+              const moved = orig.map(p => ({ x: p.x + dx, y: p.y + dy }));
+              panel.setAttribute('data-norm-poly', this._formatNormalizedPolygon(moved));
+              paintPanel(panel);
+            };
+            const onUp = (): void => {
+              fillPoly.removeEventListener('pointermove', onMove);
+              fillPoly.removeEventListener('pointerup', onUp);
+              fillPoly.removeEventListener('pointercancel', onUp);
+              if (activeEditDrag === fillDrag) activeEditDrag = null;
+            };
+            fillPoly.addEventListener('pointermove', onMove);
+            fillPoly.addEventListener('pointerup', onUp);
+            fillPoly.addEventListener('pointercancel', onUp);
+          });
+        }
+        panel.querySelectorAll('[data-edit-edge]').forEach(edgeEl => {
+          const edge = edgeEl as Element;
+          const edgeIdx = parseInt((edge as HTMLElement).getAttribute('data-edit-edge') || '-1', 10);
+          if (isNaN(edgeIdx) || edgeIdx < 0) return;
+          edge.addEventListener('pointerdown', (ev) => {
+            ev.stopPropagation();
+            ev.preventDefault();
+            const evt = ev as PointerEvent;
+            const { w, h } = panelViewBox(panel);
+            const start = clientToNorm(svg, evt.clientX, evt.clientY, w, h);
+            if (!start) return;
+            const orig = parsePanelPoly(panel);
+            if (edgeIdx >= orig.length) return;
+            const nextIdx = (edgeIdx + 1) % orig.length;
+            // Lock orientation from the edge geometry at dragstart so the
+            // edge can't flip mid-drag.
+            const ex = orig[nextIdx].x - orig[edgeIdx].x;
+            const ey = orig[nextIdx].y - orig[edgeIdx].y;
+            const adx = Math.abs(ex);
+            const ady = Math.abs(ey);
+            const mode = adx < ady * 0.5 ? 'v' : (ady < adx * 0.5 ? 'h' : 'd');
+            const exMin = Math.min(orig[edgeIdx].x, orig[nextIdx].x);
+            const exMax = Math.max(orig[edgeIdx].x, orig[nextIdx].x);
+            const eyMin = Math.min(orig[edgeIdx].y, orig[nextIdx].y);
+            const eyMax = Math.max(orig[edgeIdx].y, orig[nextIdx].y);
+            let edgeCancelled = false;
+            const edgeDrag = { cancel: (): void => {
+              edgeCancelled = true;
+              panel.setAttribute('data-norm-poly', this._formatNormalizedPolygon(orig));
+              paintPanel(panel);
+            } };
+            activeEditDrag = edgeDrag;
+            try {
+              edge.setPointerCapture(evt.pointerId);
+            } catch {
+              // Pointer capture unavailable; drag still works via move/up listeners.
+            }
+            const onMove = (me: Event): void => {
+              if (edgeCancelled) return;
+              const vb = panelViewBox(panel);
+              const norm = clientToNorm(svg, (me as PointerEvent).clientX, (me as PointerEvent).clientY, vb.w, vb.h);
+              if (!norm) return;
+              const pts = orig.map(p => ({ x: p.x, y: p.y }));
+              if (mode === 'v') {
+                const nx = clamp01(norm.x);
+                pts[edgeIdx].x = nx;
+                pts[nextIdx].x = nx;
+              } else if (mode === 'h') {
+                const ny = clamp01(norm.y);
+                pts[edgeIdx].y = ny;
+                pts[nextIdx].y = ny;
+              } else {
+                const dx = Math.min(1 - exMax, Math.max(-exMin, norm.x - start.x));
+                const dy = Math.min(1 - eyMax, Math.max(-eyMin, norm.y - start.y));
+                pts[edgeIdx].x = orig[edgeIdx].x + dx;
+                pts[edgeIdx].y = orig[edgeIdx].y + dy;
+                pts[nextIdx].x = orig[nextIdx].x + dx;
+                pts[nextIdx].y = orig[nextIdx].y + dy;
+              }
+              panel.setAttribute('data-norm-poly', this._formatNormalizedPolygon(pts));
+              paintPanel(panel);
+            };
+            const onUp = (): void => {
+              edge.removeEventListener('pointermove', onMove);
+              edge.removeEventListener('pointerup', onUp);
+              edge.removeEventListener('pointercancel', onUp);
+              if (activeEditDrag === edgeDrag) activeEditDrag = null;
+            };
+            edge.addEventListener('pointermove', onMove);
+            edge.addEventListener('pointerup', onUp);
+            edge.addEventListener('pointercancel', onUp);
           });
         });
       }
@@ -5979,6 +6154,13 @@ export class FrigateEventsCard extends LitElement {
     });
 
     container.onkeydown = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape' && activeEditDrag) {
+        e.stopPropagation();
+        const active = activeEditDrag;
+        activeEditDrag = null;
+        active.cancel();
+        return;
+      }
       if (e.key === 'Escape' && this._maskEditingId) {
         e.stopPropagation();
         this._maskEditingId = undefined;
