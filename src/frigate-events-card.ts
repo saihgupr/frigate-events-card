@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.6.26';
+const CARD_VERSION = '2.6.27';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -78,6 +78,7 @@ interface FrigateEventsCardConfig extends LovelaceCardConfig {
   video_start_padding?: number | Record<string, number>;
   video_end_skip_seconds?: number | Record<string, number>;
   debug?: boolean;
+  testing?: boolean;
   tracking_pan_delay?: number | Record<string, number>;
   tracking_smoothing?: number;
   scroll?: boolean;
@@ -141,6 +142,7 @@ const DEFAULT_CONFIG: Partial<FrigateEventsCardConfig> = {
   video_start_skip_seconds: 0,
   video_end_skip_seconds: 0,
   debug: false,
+  testing: false,
   tracking_smoothing: HOVER_CROP_DEFAULT_SMOOTHING,
   scroll: true,
   scroll_limit: 20,
@@ -186,11 +188,14 @@ export class FrigateEventsCard extends LitElement {
   private _maskEditingId?: string;
   private _maskEditSavingIds = new Set<string>();
   @state() private _localPendingMasks: any[] = [];
+  /** Hotkey override for the version badge: undefined = follow config.testing. */
+  @state() private _showVersionOverride?: boolean;
 
   private _unsubscribe?: () => void;
   private _pollInterval?: number;
   private _boundVisibilityHandler?: () => void;
   private _boundKeyDownHandler?: (e: KeyboardEvent) => void;
+  private _boundDebugVersionHandler?: (e: KeyboardEvent) => void;
   private _modalContainer?: HTMLDivElement;
   private _maskManagerContainer?: HTMLDivElement;
   private _maskManagerTimer?: ReturnType<typeof setInterval>;
@@ -359,6 +364,7 @@ export class FrigateEventsCard extends LitElement {
     await this._subscribeToEvents();
     this._setupVisibilityHandler();
     this._setupPolling();
+    this._setupDebugVersionToggle();
     this._setupLiveView();
     this._setupFullscreenListener();
   }
@@ -400,6 +406,9 @@ export class FrigateEventsCard extends LitElement {
       if (!this._pollInterval) {
         this._setupPolling();
       }
+      if (!this._boundDebugVersionHandler) {
+        this._setupDebugVersionToggle();
+      }
       if (!this._intersectionObserver) {
         this._setupLiveView();
       }
@@ -426,6 +435,10 @@ export class FrigateEventsCard extends LitElement {
     if (this._boundVisibilityHandler) {
       document.removeEventListener('visibilitychange', this._boundVisibilityHandler);
       this._boundVisibilityHandler = undefined;
+    }
+    if (this._boundDebugVersionHandler) {
+      window.removeEventListener('keydown', this._boundDebugVersionHandler);
+      this._boundDebugVersionHandler = undefined;
     }
     if (this._boundFullscreenHandler) {
       document.removeEventListener('fullscreenchange', this._boundFullscreenHandler);
@@ -503,6 +516,41 @@ export class FrigateEventsCard extends LitElement {
         this._loadEvents();
       }
     }, FALLBACK_POLL_INTERVAL);
+  }
+
+  /**
+   * Ctrl+Opt+Cmd+D toggles the version badge without editing Lovelace
+   * config. Uses e.code (not e.key) since Option modifies the character.
+   * Persisted in localStorage so it survives refresh while testing.
+   */
+  private _setupDebugVersionToggle(): void {
+    if (this._boundDebugVersionHandler) return;
+    try {
+      const stored = window.localStorage?.getItem('frigate-events-card-show-version');
+      if (stored === '1') this._showVersionOverride = true;
+      else if (stored === '0') this._showVersionOverride = false;
+    } catch {
+      // Ignore storage errors (private mode, etc.)
+    }
+    this._boundDebugVersionHandler = (e: KeyboardEvent) => {
+      if (e.code === 'KeyD' && e.ctrlKey && e.altKey && e.metaKey) {
+        // Only available when testing: true is in config, so the hotkey
+        // passes through untouched for everyone else.
+        if (this._config?.testing !== true) return;
+        e.preventDefault();
+        const current = this._showVersionOverride ?? true;
+        this._showVersionOverride = !current;
+        try {
+          window.localStorage?.setItem(
+            'frigate-events-card-show-version',
+            this._showVersionOverride ? '1' : '0'
+          );
+        } catch {
+          // Ignore storage errors
+        }
+      }
+    };
+    window.addEventListener('keydown', this._boundDebugVersionHandler);
   }
 
   /**
@@ -8471,7 +8519,7 @@ export class FrigateEventsCard extends LitElement {
     return html`
       <ha-card>
         <div class="content">
-          ${this._config.debug ? html`<div class="debug-version">v${CARD_VERSION}</div>` : ''}
+          ${(this._config?.testing === true ? (this._showVersionOverride ?? true) : !!this._config?.debug) ? html`<div class="debug-version">v${CARD_VERSION}</div>` : ''}
           ${this._config.live_view ? this._renderLiveView() : ''}
           ${html`
                   <div class="events-container">

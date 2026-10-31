@@ -463,6 +463,7 @@ The most common settings to get you started:
 | `show_modal_navigation` | boolean | `false` | Show previous/next navigation buttons (◀/▶) in the event details modal popup (keyboard arrow keys remain always active). |
 | `show_bounding_box` | boolean | `true` | Show the detection bounding box overlays on event snapshots. |
 | `debug` | boolean | `false` | Enable debug mode to display the current card version number above snapshots. |
+| `testing` | boolean | `false` | Enable testing mode to display the version badge with Ctrl+Opt+Cmd+D toggle (persists in localStorage across refreshes). |
 
 </details>
 

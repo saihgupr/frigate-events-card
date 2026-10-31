@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+- Added: **Testing version toggle** — when `testing: true`, `Ctrl+Opt+Cmd+D` toggles the version badge without editing Lovelace config. Persists in `localStorage` across refreshes.
 - Fixed: **Freeze event gallery while Frigate is off** — when `sensor.frigate_status` is `unavailable`/`unknown`, the card keeps the last loaded events and skips the 10s poll, so boxes stay put instead of flashing in/out. Also keeps cached events if the API returns empty during the shutdown window, and no longer blanks the card to empty on load errors.
 - Fixed: **Hide live view while Frigate is off** — suppresses any live-view error when `sensor.frigate_status` is offline (different browsers/report different messages, e.g. TV Bro vs Mac), so the live box stays put without unhelpful text. When online, all errors still show for debugging/setup.
 - Fixed: **No blank flash on refresh** — the event grid renders placeholder boxes immediately while events load, instead of a blank loading space.
