@@ -981,19 +981,19 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                     return url.rstrip("/")
         return ""
 
-    async def _async_get_frigate_version() -> tuple[int, ...]:
+    async def _async_get_frigate_version(force_refresh: bool = False) -> tuple[int, ...]:
         """Fetch and cache running Frigate version tuple, e.g. (0, 18, 0).
 
         Returns (0, 0) when the version cannot be determined. Callers must
         treat unknown as pre-0.18 (restart behavior), never as modern.
         """
         cached = domain_data.get("frigate_version")
-        if cached and cached != (0, 0):
+        if not force_refresh and cached and cached != (0, 0):
             return cached
         session = async_get_clientsession(hass)
         base_url = _get_frigate_base_url()
         if not base_url:
-            return (0, 0)
+            return cached if cached and cached != (0, 0) else (0, 0)
         try:
             async with session.get(f"{base_url}/api/version", timeout=4) as resp:
                 if resp.status == 200:
@@ -1004,7 +1004,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                         return parsed
         except Exception as e:
             _LOGGER.debug("Could not fetch Frigate version via API: %s", e)
-        return (0, 0)
+        return cached if cached and cached != (0, 0) else (0, 0)
 
     async def _async_set_runtime_mask_state(camera: str, mask_key: str, state: str = "OFF") -> bool:
         """Toggle an object mask dynamically in Frigate 0.18+ without restarting."""
@@ -1129,6 +1129,8 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         )
         if not should_audit:
             return
+
+        await _async_get_frigate_version(force_refresh=True)
 
         try:
             async with session.get(f"{base_url}/api/config/raw", timeout=10) as cfg_resp:
@@ -1335,6 +1337,8 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
             raise HomeAssistantError(f"Failed to read Frigate config: {e}") from e
 
         version_tuple, is_dict = _detect_config_version_and_format(raw_config, camera, version_str)
+        if version_tuple != (0, 0):
+            domain_data["frigate_version"] = version_tuple
         use_normalized = version_tuple >= (0, 14) or is_dict
 
         if poly_str and not use_normalized:
@@ -1444,6 +1448,9 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         # Remove from pending if re-adding
         domain_data["pending_restart_masks"].pop(mask_id, None)
 
+        if not box_coords and poly_str:
+            box_coords = _polygon_to_box(poly_str)
+
         domain_data["active_masks"][mask_id] = {
             "mask_id": mask_id,
             "camera": camera,
@@ -1492,7 +1499,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
             removed_mask = dict(domain_data["active_masks"].pop(mask_id))
             removed_mask["removed_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         
-        frigate_ver = await _async_get_frigate_version()
+        frigate_ver = await _async_get_frigate_version(force_refresh=True)
         is_v18_or_newer = frigate_ver >= (0, 18)
 
         # For Frigate 0.13 and earlier, queue for pending restart
@@ -1612,7 +1619,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
             unsub()
         domain_data["timers"].clear()
 
-        frigate_ver = await _async_get_frigate_version()
+        frigate_ver = await _async_get_frigate_version(force_refresh=True)
         is_v18_or_newer = frigate_ver >= (0, 18)
 
         active_masks_snapshot = dict(domain_data["active_masks"])

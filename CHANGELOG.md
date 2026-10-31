@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+- Fixed: **Stale Frigate version cache across container swaps** — the integration now refreshes the cached Frigate version on sync, remove, and prune-all paths (with forced refresh) and updates the cache whenever `add_mask` detects the version from config, instead of keeping a stale version when switching between Frigate 0.13 and 0.18 containers.
+- Fixed: **Preserve bounding box on polygon edits** — saving a polygon edit now derives and stores the bounding box from the polygon when no box was supplied, so the mask record keeps its geometry metadata.
 - Added: **Testing version toggle** — when `testing: true`, `Ctrl+Opt+Cmd+D` toggles the version badge without editing Lovelace config. Persists in `localStorage` across refreshes.
 - Fixed: **Freeze event gallery while Frigate is off** — when `sensor.frigate_status` is `unavailable`/`unknown`, the card keeps the last loaded events and skips the 10s poll, so boxes stay put instead of flashing in/out. Also keeps cached events if the API returns empty during the shutdown window, and no longer blanks the card to empty on load errors.
 - Fixed: **Hide live view while Frigate is off** — suppresses any live-view error when `sensor.frigate_status` is offline (different browsers/report different messages, e.g. TV Bro vs Mac), so the live box stays put without unhelpful text. When online, all errors still show for debugging/setup.
