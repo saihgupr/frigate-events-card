@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.6.27';
+const CARD_VERSION = '2.6.28';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -538,7 +538,7 @@ export class FrigateEventsCard extends LitElement {
         // passes through untouched for everyone else.
         if (this._config?.testing !== true) return;
         e.preventDefault();
-        const current = this._showVersionOverride ?? true;
+        const current = this._showVersionOverride ?? false;
         this._showVersionOverride = !current;
         try {
           window.localStorage?.setItem(
@@ -8519,7 +8519,7 @@ export class FrigateEventsCard extends LitElement {
     return html`
       <ha-card>
         <div class="content">
-          ${(this._config?.testing === true ? (this._showVersionOverride ?? true) : !!this._config?.debug) ? html`<div class="debug-version">v${CARD_VERSION}</div>` : ''}
+          ${(this._config?.testing === true ? (this._showVersionOverride ?? false) : !!this._config?.debug) ? html`<div class="debug-version">v${CARD_VERSION}</div>` : ''}
           ${this._config.live_view ? this._renderLiveView() : ''}
           ${html`
                   <div class="events-container">
