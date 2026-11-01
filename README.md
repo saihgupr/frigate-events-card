@@ -285,7 +285,7 @@ Right-clicking the live feed exposes the same context menu, with direct shortcut
 
 ### Temporary Masking (Optional)
 
-The card works standalone. The `frigate_temp_mask` companion integration enables temporary masks for recurring false detections such as a parked car, package, or wheelbarrow. Masks use a 10% expanded bounding box around the detection, are written to Frigate's config, and can be changed or removed later.
+The card works standalone. The [`frigate_temp_mask`](https://github.com/saihgupr/frigate-temp-mask) companion integration enables temporary masks for recurring false detections such as a parked car, package, or wheelbarrow. Masks use a 10% expanded bounding box around the detection, are written to Frigate's config, and can be changed or removed later.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/temp-mask.png" width="49%" alt="Temporary Mask Manager" />
@@ -298,9 +298,23 @@ The card works standalone. The `frigate_temp_mask` companion integration enables
 
 #### Setup
 
-1. Copy the `custom_components/frigate_temp_mask` integration into your Home Assistant `/config/custom_components/` directory (or use `deploy.sh`).
-2. Add `frigate_temp_mask:` to your `/config/configuration.yaml`.
-3. Restart Home Assistant (or reload YAML).
+**Option A: Install via HACS (Recommended)**
+
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=saihgupr&repository=frigate-temp-mask&category=Integration)
+
+1. Click the **Open in HACS** badge above, or in Home Assistant go to **HACS > Integrations > Custom repositories** and add:
+   ```text
+   https://github.com/saihgupr/frigate-temp-mask
+   ```
+   with category **Integration**.
+2. Download the integration and restart Home Assistant.
+3. In Home Assistant, go to **Settings > Devices & Services > Add Integration**, search for **Frigate Temporary Mask**, and click submit (or add `frigate_temp_mask:` to your `configuration.yaml`).
+
+**Option B: Manual Installation**
+
+1. Copy the `custom_components/frigate_temp_mask` directory into your Home Assistant `/config/custom_components/` directory (or use `deploy.sh`).
+2. Add `frigate_temp_mask:` to your `/config/configuration.yaml` (or add via Settings > Devices & Services).
+3. Restart Home Assistant.
 
 The card automatically detects the integration and adds **Temporary Mask**, **Change Duration**, and **Remove Mask** to the context menu.
 
