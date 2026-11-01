@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import MagicMock
 
 # Mock Home Assistant and aiohttp dependencies before import
+sys.modules['voluptuous'] = MagicMock()
 sys.modules['homeassistant'] = MagicMock()
 sys.modules['homeassistant.components'] = MagicMock()
 sys.modules['homeassistant.components.http'] = MagicMock()
@@ -29,6 +30,7 @@ if repo_root not in sys.path:
 from custom_components.frigate_temp_mask import (
     _normalize_raw_config,
     _parse_frigate_version,
+    _parse_mask_timestamp,
     _box_to_polygon,
     _polygon_to_pixels,
     _detect_config_version_and_format,
@@ -394,6 +396,45 @@ version: 0.18-0
                         has_child = True
                     break
                 self.assertTrue(has_child, f"Dangling childless key found: '{stripped}' at line {i+1}")
+
+    def test_parse_mask_timestamp(self):
+        # Valid timestamp format from event / time
+        ts = _parse_mask_timestamp("1793485164.000487")
+        self.assertIsNotNone(ts)
+        self.assertAlmostEqual(ts, 1793485164.000487, places=3)
+
+        # Compound mask id with suffix
+        ts_suffix = _parse_mask_timestamp("1793369474.75646-c769w5")
+        self.assertIsNotNone(ts_suffix)
+        self.assertAlmostEqual(ts_suffix, 1793369474.75646, places=3)
+
+        # Invalid mask id
+        self.assertIsNone(_parse_mask_timestamp("invalid_custom_mask"))
+
+    def test_offline_drain_removes_expired_masks_from_config(self):
+        # Setup config with a stuck expired mask from an offline event
+        config = """cameras:
+  wyze_camera:
+    objects:
+      filters:
+        car:
+          mask:
+            - 0,227,1064,220,1064,784,0,784 # TEMP_MASK_1793485164.000487
+        person:
+          mask:
+            - 518,743,662,743,662,969,518,969 # TEMP_MASK_1792507169.873793
+"""
+        pending_offline_removals = {"1793485164.000487"}
+        cleaned = config
+        for m_id in pending_offline_removals:
+            cleaned = _clean_config_masks(cleaned, m_id)
+
+        self.assertNotIn("TEMP_MASK_1793485164.000487", cleaned)
+        self.assertNotIn("0,227,1064,220,1064,784,0,784", cleaned)
+        # Verify the active person mask was preserved
+        self.assertIn("TEMP_MASK_1792507169.873793", cleaned)
+        self.assertIn("518,743,662,743,662,969,518,969", cleaned)
+
 
 
 if __name__ == "__main__":

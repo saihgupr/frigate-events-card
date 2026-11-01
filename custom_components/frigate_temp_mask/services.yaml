@@ -89,6 +89,10 @@ prune_all:
   name: Prune All Temporary Masks
   description: Removes all temporary masks from Frigate configuration.
 
+prune_expired:
+  name: Prune Expired Temporary Masks
+  description: Automatically removes any temporary masks whose expiration time has passed.
+
 restart:
   name: Restart Frigate
   description: Restarts the Frigate detector backend to apply pending configuration changes.

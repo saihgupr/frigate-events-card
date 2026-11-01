@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.6.31';
+const CARD_VERSION = '2.6.32';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -1932,6 +1932,31 @@ export class FrigateEventsCard extends LitElement {
         color: var(--mm-text-2);
       }
 
+      .mask-clean-expired-btn {
+        margin-left: auto;
+        margin-right: 8px;
+        padding: 4px 10px;
+        font-size: 12px;
+        font-weight: 500;
+        font-family: inherit;
+        color: #ff9800;
+        background: rgba(255, 152, 0, 0.12);
+        border: 1px solid rgba(255, 152, 0, 0.35);
+        border-radius: 6px;
+        cursor: pointer;
+        transition: all 0.15s ease;
+      }
+
+      .mask-clean-expired-btn:hover:not(:disabled) {
+        background: rgba(255, 152, 0, 0.22);
+        border-color: rgba(255, 152, 0, 0.6);
+      }
+
+      .mask-clean-expired-btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+
       .mask-filter-tabs {
         display: flex;
         gap: 4px;
@@ -2139,6 +2164,11 @@ export class FrigateEventsCard extends LitElement {
 
       .mask-row-time.expiring {
         color: var(--mm-warn);
+      }
+
+      .mask-row-time.expired {
+        color: #ff9800;
+        font-weight: 600;
       }
 
       .mask-row-chevron {
@@ -5568,6 +5598,7 @@ export class FrigateEventsCard extends LitElement {
       const currentDurationHours = this._getCurrentMaskDurationHours(mask);
       const remaining = this._formatMaskRemainingTime(mask.expires_at, currentDurationHours);
       const remainingText = remaining === '∞' ? 'No expiry' : remaining;
+      const isExpired = remaining === 'Expired';
       const msLeft = (currentDurationHours <= 0 || !mask.expires_at)
         ? Infinity
         : new Date(mask.expires_at).getTime() - Date.now();
@@ -5617,7 +5648,7 @@ export class FrigateEventsCard extends LitElement {
               <span class="mask-row-title" title="Mask ${maskId}" data-safe-text="${escapeHtml(vm.title)}"></span>
               <span class="mask-row-sub" data-safe-text="${escapeHtml(vm.sub)}"></span>
             </span>
-            <span class="mask-row-time ${expiring ? 'expiring' : ''}" data-timer-mask-id="${maskId}"><span class="timer-text">${escapeHtml(remainingText)}</span></span>
+            <span class="mask-row-time ${isExpired ? 'expired' : (expiring ? 'expiring' : '')}" data-timer-mask-id="${maskId}"><span class="timer-text">${escapeHtml(remainingText)}</span></span>
             ${chevronSvg}
           </button>
           <div class="mask-row-detail">
@@ -5644,12 +5675,27 @@ export class FrigateEventsCard extends LitElement {
       `;
     };
 
+    const expiredMasks = activeMasks.filter((m: any) => {
+      const dur = this._getCurrentMaskDurationHours(m);
+      if (dur <= 0 || !m.expires_at) return false;
+      return (new Date(m.expires_at).getTime() - Date.now()) <= 0;
+    });
+    const activeNonExpiredCount = Math.max(0, activeMasks.length - expiredMasks.length);
+    const countLabel = expiredMasks.length > 0
+      ? `${activeNonExpiredCount} active · ${expiredMasks.length} expired`
+      : `${totalCount} active`;
+
     container.innerHTML = `
       <div class="frigate-events-modal-backdrop" data-action="close"></div>
       <div class="frigate-events-modal-content" role="dialog" aria-modal="true" aria-label="Temporary masks">
         <div class="mask-manager-header">
           <h2 class="mask-manager-title">Temporary masks</h2>
-          <span class="mask-manager-count">${totalCount} active</span>
+          <span class="mask-manager-count">${countLabel}</span>
+          ${expiredMasks.length > 0 ? `
+            <button type="button" class="mask-clean-expired-btn" data-action="prune-expired" title="Remove expired temporary masks from Frigate">
+              Prune expired (${expiredMasks.length})
+            </button>
+          ` : ''}
           <button class="frigate-events-modal-close" data-action="close" title="Close" aria-label="Close">
             <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
           </button>
@@ -5717,6 +5763,39 @@ export class FrigateEventsCard extends LitElement {
       el.addEventListener('click', (e) => {
         e.stopPropagation();
         this._removeMaskManagerModal();
+      });
+    });
+
+    container.querySelectorAll('[data-action="prune-expired"]').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const targetBtn = btn as HTMLButtonElement;
+        targetBtn.disabled = true;
+        targetBtn.textContent = 'Pruning…';
+        try {
+          if (this.hass?.callService) {
+            if (this.hass.services?.['frigate_temp_mask']?.['prune_expired']) {
+              await this.hass.callService('frigate_temp_mask', 'prune_expired', {});
+            } else {
+              for (const m of expiredMasks) {
+                await this.hass.callService('frigate_temp_mask', 'remove_mask', { mask_id: m.mask_id });
+              }
+            }
+            await this.hass.callService('frigate_temp_mask', 'sync', {});
+          }
+          this.dispatchEvent(new CustomEvent('hass-notification', {
+            detail: { message: `Pruned ${expiredMasks.length} expired mask(s).` },
+            bubbles: true,
+            composed: true,
+          }));
+        } catch (err) {
+          console.error('Failed to prune expired masks:', err);
+        } finally {
+          this.requestUpdate();
+          if (this._maskManagerContainer) {
+            this._renderMaskManagerContent(this._maskManagerContainer);
+          }
+        }
       });
     });
 
