@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.6.32';
+const CARD_VERSION = '2.6.33';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -4134,6 +4134,206 @@ export class FrigateEventsCard extends LitElement {
         box-shadow: 0 0 0 5px rgba(10, 132, 255, 0.65);
       }
 
+      /* ── TV theater (is-tv ONLY): undo the compact popup card so 16:9 footage
+         fills the panel. Compact (phone/tablet) selectors above are untouched. */
+      .frigate-timeline-modal.is-tv {
+        padding: 0 !important;
+        align-items: stretch !important;
+        justify-content: stretch !important;
+      }
+
+      .frigate-timeline-modal.is-tv .frigate-events-modal-content {
+        position: absolute !important;
+        inset: 0 !important;
+        width: auto !important;
+        height: auto !important;
+        min-width: 0 !important;
+        max-width: none !important;
+        max-height: none !important;
+        margin: 0 !important;
+        border: none !important;
+        border-radius: 0 !important;
+        box-shadow: none !important;
+        overflow: hidden !important;
+        animation: none !important;
+        background: #000000 !important;
+      }
+
+      /* Slim header bar over the stage. */
+      .frigate-timeline-modal.is-tv .timeline-compact-topbar {
+        position: relative !important;
+        height: auto !important;
+        min-height: var(--tl-tv-topbar-h) !important;
+        padding: var(--tl-tv-topbar-pad) 16px !important;
+        padding-top: max(var(--tl-tv-topbar-pad), env(safe-area-inset-top, 0px)) !important;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.12) !important;
+        background: #101013 !important;
+        z-index: 8 !important;
+      }
+
+      /* Stage body: header-height chrome, video takes the rest. */
+      .frigate-timeline-modal.is-tv .timeline-modal-body {
+        position: static !important;
+        inset: auto !important;
+        flex: 1 1 auto !important;
+        min-height: 0 !important;
+        gap: 0 !important;
+        padding: 0 !important;
+        overflow: hidden !important;
+        background: #000000 !important;
+      }
+
+      .frigate-timeline-modal.is-tv .timeline-player-container {
+        position: relative !important;
+        inset: auto !important;
+        flex: 1 1 auto !important;
+        min-height: 0 !important;
+        width: 100% !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        overflow: hidden !important;
+        border-radius: 0 !important;
+        background: #000000 !important;
+        aspect-ratio: auto !important;
+      }
+
+      .frigate-timeline-modal.is-tv .timeline-video {
+        grid-area: auto !important;
+        position: absolute !important;
+        inset: 0 !important;
+        width: 100% !important;
+        height: 100% !important;
+        max-height: none !important;
+        object-fit: contain !important;
+      }
+
+      /* Scrubber overlays the video bottom edge so the video keeps its height. */
+      .frigate-timeline-modal.is-tv .timeline-scrubber-wrapper {
+        position: relative !important;
+        left: auto !important;
+        right: auto !important;
+        bottom: auto !important;
+        z-index: 7 !important;
+        flex-shrink: 0 !important;
+        margin-top: calc(-1 * (var(--tl-tv-scrim-top) + var(--tl-tv-track) + 6px + var(--tl-tv-badge) + 6px + var(--tl-tv-bar-pad))) !important;
+        padding: var(--tl-tv-scrim-top) 16px var(--tl-tv-bar-pad) !important;
+        padding-left: max(16px, env(safe-area-inset-left, 16px)) !important;
+        padding-right: max(16px, env(safe-area-inset-right, 16px)) !important;
+        gap: 6px !important;
+        background: linear-gradient(to top, rgba(0, 0, 0, 0.9) 62%, rgba(0, 0, 0, 0)) !important;
+        border-top: none !important;
+      }
+
+      /* On-stage transport stays visible on TV (compact hides it). */
+      .frigate-timeline-modal.is-tv .timeline-modal-body > .timeline-transport-bar {
+        display: flex !important;
+        flex-shrink: 0 !important;
+        background: #000000 !important;
+      }
+
+      /* ── TV settings (is-tv ONLY): centered dialog, not a bottom sheet.
+         Phone/tablet bottom-sheet selectors above are untouched. */
+      .frigate-timeline-modal.is-tv .timeline-settings-backdrop {
+        position: absolute !important;
+        inset: 0 !important;
+      }
+
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet {
+        position: absolute !important;
+        left: 50% !important;
+        right: auto !important;
+        top: 50% !important;
+        bottom: auto !important;
+        width: min(880px, 92vw) !important;
+        max-height: 84vh !important;
+        max-height: 84dvh !important;
+        overflow-y: auto !important;
+        background: #17171b !important;
+        border: 1px solid rgba(255, 255, 255, 0.14) !important;
+        border-radius: 16px !important;
+        box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6) !important;
+        padding: 20px 24px 24px !important;
+        transform: translate(-50%, calc(-50% + 12px)) !important;
+        visibility: hidden !important;
+        transition: transform 0.22s ease, visibility 0s linear 0.25s !important;
+      }
+
+      .frigate-timeline-modal.is-tv.settings-open .timeline-settings-sheet {
+        transform: translate(-50%, -50%) !important;
+        visibility: visible !important;
+        transition: transform 0.22s ease !important;
+      }
+
+      .frigate-timeline-modal.is-tv .timeline-settings-handle {
+        display: none !important;
+      }
+
+      /* Two-column Time | Window grid inside the dialog. */
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-controls-bar {
+        display: grid !important;
+        grid-template-columns: 1fr 1fr !important;
+        align-items: start !important;
+        gap: 20px 24px !important;
+      }
+
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-sheet-section {
+        display: flex !important;
+        flex-direction: column !important;
+        gap: 12px !important;
+        min-width: 0 !important;
+      }
+
+      /* Playback spans the full dialog width; Time | Window sit side by side. */
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-controls-bar > .timeline-sheet-section:first-child {
+        grid-column: 1 / -1 !important;
+      }
+
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-datetime-group,
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-window-group {
+        flex-direction: column !important;
+        align-items: stretch !important;
+        gap: 12px !important;
+      }
+
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-datetime-input {
+        width: 100% !important;
+        height: 48px !important;
+        font-size: 16px !important;
+      }
+
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-quick-btn,
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-window-pill {
+        min-height: 48px !important;
+        height: 48px !important;
+        padding: 0 16px !important;
+        font-size: 15px !important;
+        flex: 1 1 auto !important;
+      }
+
+      /* D-pad targets: every TV control is at least 48px tall. */
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-transport-btn {
+        min-width: 48px !important;
+        height: 48px !important;
+      }
+
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-transport-btn.play-btn {
+        width: 60px !important;
+        height: 60px !important;
+      }
+
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-stepper-btn {
+        width: 48px !important;
+        height: 48px !important;
+        font-size: 20px !important;
+      }
+
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-speed-display {
+        min-width: 64px !important;
+        min-height: 48px !important;
+        font-size: 15px !important;
+      }
+
       @media (prefers-reduced-motion: reduce) {
         .frigate-timeline-modal.is-compact .timeline-settings-sheet,
         .frigate-timeline-modal.is-tv .timeline-settings-sheet,
@@ -6506,14 +6706,27 @@ export class FrigateEventsCard extends LitElement {
     try {
       const w = (typeof window !== 'undefined' ? window : undefined) as any;
       if (!w) return 'desktop';
+      // Test override: ?timeline_layout=tv|compact|desktop (also timelineLayout, frigate_tv=1).
+      try {
+        const q = new URLSearchParams(String(w.location?.search || ''));
+        const forced = (q.get('timeline_layout') || q.get('timelineLayout') || '').toLowerCase();
+        if (forced === 'tv' || forced === 'television') return 'tv';
+        if (forced === 'compact' || forced === 'mobile') return 'compact';
+        if (forced === 'desktop') return 'desktop';
+        if (String(q.get('frigate_tv') || '') === '1') return 'tv';
+      } catch (_) {}
       const nav = w.navigator as Navigator | undefined;
       const ua = String((nav as any)?.userAgent || w.navigator?.userAgent || '');
       const platform = String((nav as any)?.platform || '');
       const maxTouchPoints = Number((nav as any)?.maxTouchPoints || 0);
       const matchMediaFn = typeof w.matchMedia === 'function' ? w.matchMedia.bind(w) : undefined;
 
-      // TV user agents / environments win first.
-      if (/TV|AndroidTV|BRAVIA|AFT|webOS|Tizen|CrKey|Leanback|tvbro/i.test(ua)) return 'tv';
+      // TV user agents / environments win first (checked before Android /
+      // phone / touch fallbacks so TV browsers are never demoted to compact).
+      // Covers TV Bro ("TV Bro" and "TVBro"), Fire TV / AFT*, BRAVIA,
+      // GoogleTV/AndroidTV, webOS/NetCast, Tizen/SmartHub, HbbTV/CE-HTML/Opera TV,
+      // Roku, CrKey/Leanback/Cobalt, Viera/AQUOS/VIDAA/Foxxum/Orsay, DTV.
+      if (/TV\s*Bro|Fire\s*TV|AFT[A-Z]*|AndroidTV|GoogleTV|BRAVIA|webOS|NetCast|Tizen|SmartHub|HbbTV|CE-HTML|Opera\s*TV|Roku|CrKey|Leanback|Cobalt|Viera|AQUOS|VIDAA|Foxxum|Orsay|\bDTV\b|\bTV\b/i.test(ua)) return 'tv';
 
       // No-hover + no-pointer environment on a large screen is treated as TV
       // (e.g. a set-top box or TV browser without touch).
@@ -6728,15 +6941,15 @@ export class FrigateEventsCard extends LitElement {
     const camera = initialCamera || this._timelineCamera || (availableCameras.length > 0 ? availableCameras[0] : (this._config?.camera || ''));
     this._timelineCamera = camera;
 
-    // Determine initial time window. Opening straight from an event on a phone
-    // or tablet defaults to 15 minutes so the event fills the scrubber; the
-    // desktop/TV default stays as configured. A window the user picked by hand
+    // Determine initial time window. Opening straight from an event on a phone,
+    // tablet or TV defaults to 15 minutes so the event fills the scrubber; the
+    // desktop default stays as configured. A window the user picked by hand
     // is always kept.
     const layoutMode = this._getTimelineLayoutMode();
     const openedFromEvent = Boolean(initialEvent || (initialTimestamp && initialTimestamp > 0));
     const configuredDuration = this._timelineWindowDurationSec
       || ((this._config?.timeline_default_window_hours || 1) * 3600);
-    const duration = (layoutMode === 'compact' && openedFromEvent && !this._timelineWindowUserChosen)
+    const duration = ((layoutMode === 'compact' || layoutMode === 'tv') && openedFromEvent && !this._timelineWindowUserChosen)
       ? 15 * 60
       : configuredDuration;
     this._timelineWindowDurationSec = duration;
@@ -6780,10 +6993,12 @@ export class FrigateEventsCard extends LitElement {
     }
 
     const container = document.createElement('div');
-    // TV renders the same compact card as iPad/phone now; `timelineLayout`
-    // still marks the device for focus handling.
+    // TV keeps `is-compact` (compact CSS/JS paths depend on it) and adds
+    // `is-tv` so TV-only overrides apply. `dataset.timelineLayout` is the
+    // source of truth for the render branch.
     container.className = 'frigate-events-modal frigate-timeline-modal'
-      + (layoutMode === 'desktop' ? '' : ' is-compact');
+      + (layoutMode === 'desktop' ? '' : ' is-compact')
+      + (layoutMode === 'tv' ? ' is-tv' : '');
     container.dataset.timelineLayout = layoutMode;
     this._timelineContainer = container;
     this._isTimelineMuted = this._config?.muted !== false;
@@ -6797,6 +7012,32 @@ export class FrigateEventsCard extends LitElement {
     });
 
     const onKeyDown = (e: KeyboardEvent) => {
+      // TV-only D-pad navigation: ArrowUp/Down/Left/Right move focus between
+      // controls, Enter activates. Desktop/compact keyboard behavior below is untouched.
+      const isTvKeys = container.dataset.timelineLayout === 'tv';
+      if (isTvKeys && (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+        const t = e.target as HTMLElement | null;
+        // Let text/date inputs keep native arrow editing.
+        if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+        // The scrubber track owns Left/Right for seeking (see its keydown handler).
+        if (t && t.classList?.contains('timeline-track-container') && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) return;
+        const focusables = Array.from(
+          container.querySelectorAll<HTMLElement>(
+            'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+          )
+        ).filter(el => el.offsetParent !== null || el === document.activeElement);
+        if (focusables.length > 0) {
+          const idx = focusables.indexOf(document.activeElement as HTMLElement);
+          const dir = (e.key === 'ArrowRight' || e.key === 'ArrowDown') ? 1 : -1;
+          const next = focusables[(idx + dir + focusables.length) % focusables.length];
+          if (next) {
+            e.preventDefault();
+            e.stopPropagation();
+            next.focus({ preventScroll: true });
+            return;
+          }
+        }
+      }
       if (e.key === 'Escape') {
         const c = this._timelineContainer;
         if (c && c.classList.contains('settings-open')) {
@@ -6813,6 +7054,9 @@ export class FrigateEventsCard extends LitElement {
         if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
           return;
         }
+        // TV: a focused button already activates natively — skip the global
+        // toggle so Space/Enter doesn't double-toggle play/pause.
+        if (isTvKeys && target && target.tagName === 'BUTTON') return;
         e.preventDefault();
         this._toggleTimelinePlayPause();
       }
@@ -7806,9 +8050,12 @@ export class FrigateEventsCard extends LitElement {
     const dtValue = `${startDate.getFullYear()}-${pad(startDate.getMonth() + 1)}-${pad(startDate.getDate())}T${pad(startDate.getHours())}:${pad(startDate.getMinutes())}`;
 
     const windowMinutes = Math.round(this._timelineWindowDurationSec / 60);
-    const layoutMode: 'desktop' | 'compact' | 'tv' = container.classList.contains('is-tv')
+    // Source of truth is dataset.timelineLayout (set from _getTimelineLayoutMode
+    // at open); fall back to the live classes for containers built before it.
+    const datasetMode = String((container.dataset as any)?.timelineLayout || '').toLowerCase();
+    const layoutMode: 'desktop' | 'compact' | 'tv' = datasetMode === 'tv' || container.classList.contains('is-tv')
       ? 'tv'
-      : container.classList.contains('is-compact')
+      : datasetMode === 'compact' || container.classList.contains('is-compact')
         ? 'compact'
         : 'desktop';
     const isCompactLayout = layoutMode === 'compact' || layoutMode === 'tv';
@@ -7843,9 +8090,10 @@ export class FrigateEventsCard extends LitElement {
     `;
     } else {
       const tabsMarkup = this._timelineCameraTabsMarkup(availableCameras, currentCamera);
-      const isTvLayout = layoutMode === 'tv';
-      // Compact (phones, tablets and TV): transport lives only in the settings
-      // sheet Playback section. The body transport markup below is hidden by CSS.
+      // Compact (phones/tablets) and TV: transport lives in the settings
+      // sheet Playback section. The body transport markup below stays in place
+      // (hidden by CSS for compact, visible on-stage for TV); tapping the
+      // video toggles play/pause.
       const compactSheetInner = `<div class="timeline-sheet-section"><div class="timeline-sheet-heading">Playback</div>${this._timelineTransportMarkup(true)}</div>${this._timelineControlsMarkup(dtValue, windowMinutes, true)}`;
       container.innerHTML = `
       <div class="frigate-events-modal-content" role="dialog" aria-modal="true" aria-label="Timeline">
@@ -7879,7 +8127,7 @@ export class FrigateEventsCard extends LitElement {
         <div class="timeline-settings-backdrop" data-action="close-settings"></div>
         <div class="timeline-settings-sheet" role="dialog" aria-label="Timeline settings">
           <div class="timeline-settings-handle"></div>
-          ${isTvLayout ? this._timelineControlsMarkup(dtValue, windowMinutes) : compactSheetInner}
+          ${compactSheetInner}
         </div>
       </div>
     `;
