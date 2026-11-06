@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.6.37';
+const CARD_VERSION = '2.6.41';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -9287,7 +9287,7 @@ export class FrigateEventsCard extends LitElement {
       }
 
       ha-card {
-        overflow: hidden;
+        overflow: visible;
         background: transparent;
         box-shadow: none;
         width: 100%;
@@ -9360,6 +9360,10 @@ export class FrigateEventsCard extends LitElement {
         grid-template-columns: repeat(var(--visible-count, 5), 1fr);
         gap: 9px;
         align-items: start;
+        /* Room for the tile shadows; the negative margin keeps the outer
+           spacing identical to the normal 8px Lovelace gap. */
+        padding: 3px 3px 8px 3px;
+        margin: -3px -3px -8px -3px;
       }
 
       .events.scrollable {
