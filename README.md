@@ -155,7 +155,8 @@ offset: 1
 
 # Optional: Timeline (Frigate 0.13 VOD)
 show_timeline: true
-timeline_on_click: true
+event_click_action: timeline # or detail - which modal opens when clicking an event
+timeline_on_click: true # legacy alias: false equals event_click_action detail
 timeline_default_window_hours: 1
 timeline_event_seek_offset: 0
 
@@ -460,7 +461,8 @@ The most common settings to get you started:
 | `offset` | number | `0` | Number of recent events to skip/hide from the start of the list. Useful for excluding the newest event if it's already shown in another card. |
 | `daily_clear_time` | string | none | Optional. Time to reset the display daily (24hr format, e.g., "04:00"). If set, events before this time are hidden and shown as grey placeholders. |
 | `show_timeline` | boolean | `true` | Enable the continuous playback Timeline modal. |
-| `timeline_on_click` | boolean | `true` | Open the Timeline directly when clicking an event thumbnail (requires `video` and `show_timeline`). |
+| `event_click_action` | string | `timeline` | Which modal opens when clicking an event: `timeline` or `detail`. Takes precedence over legacy `timeline_on_click`. |
+| `timeline_on_click` | boolean | `true` | Legacy: `false` opens details instead of Timeline (same as `event_click_action: detail`). Open the Timeline directly when clicking an event thumbnail (requires `video` and `show_timeline`). |
 | `timeline_default_window_hours` | number | `1` | Default recording window shown when the Timeline opens. |
 | `timeline_event_seek_offset` | number \| map | `0` | Seconds added/subtracted when seeking to an event in the Timeline (e.g. `5` or `-5`). Supports per-label/zone map. |
 | `timeline_show_mute` | boolean | `true` | Show the mute toggle button on hover over the Timeline video player. Setting `show_mute: false` (or `live_view_show_mute: false`) also hides it; an explicit `timeline_show_mute` wins. |

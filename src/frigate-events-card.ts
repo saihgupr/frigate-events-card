@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.6.41';
+const CARD_VERSION = '2.6.43';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -103,7 +103,8 @@ interface FrigateEventsCardConfig extends LovelaceCardConfig {
   // Timeline options
   show_timeline?: boolean;          // default: true
   timeline?: boolean;               // alias for show_timeline: default: true
-  timeline_on_click?: boolean;      // default: true (when timeline is on and video is enabled)
+  timeline_on_click?: boolean;      // default: true (when timeline is on and video is enabled) — legacy, use event_click_action
+  event_click_action?: 'timeline' | 'detail'; // default: 'timeline' — which modal opens when clicking an event
   timeline_show_mute?: boolean;     // default: true
   timeline_default_window_hours?: number; // default: 1
   timeline_event_seek_offset?: number | Record<string, number>;    // default: 0 (seconds added/subtracted, e.g. -26 or { car: -26, person: -10 })
@@ -127,6 +128,7 @@ const DEFAULT_CONFIG: Partial<FrigateEventsCardConfig> = {
   show_timeline: true,
   timeline: true,
   timeline_on_click: true,
+  event_click_action: 'timeline',
   timeline_show_mute: true,
   timeline_default_window_hours: 1,
   timeline_event_seek_offset: 0,
@@ -1302,9 +1304,19 @@ export class FrigateEventsCard extends LitElement {
 
   private _shouldOpenTimelineOnEventClick(): boolean {
     if (!this._isTimelineEnabled()) return false;
-    if (this._config?.timeline_on_click === false) return false;
     // only if video playing is enabled, instead of picture
     if (this._config?.video === false) return false;
+    // Explicit option wins (issue #24). Check user config first so the
+    // merged DEFAULT_CONFIG ('timeline') doesn't mask legacy timeline_on_click: false.
+    const action = this._userConfig?.event_click_action ?? this._config?.event_click_action;
+    if (action === 'detail') return false;
+    if (action === 'timeline') {
+      // Respect legacy opt-out when the new option wasn't explicitly set.
+      if (!this._userConfig?.event_click_action && this._config?.timeline_on_click === false) return false;
+      return true;
+    }
+    // legacy boolean fallback
+    if (this._config?.timeline_on_click === false) return false;
     return true;
   }
 

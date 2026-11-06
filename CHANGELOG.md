@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+- Added: **`event_click_action` option (issue #24)** — set which modal opens when clicking an event: `timeline` (default, current behavior) or `detail`. Takes precedence over legacy `timeline_on_click: false`, which keeps working as `detail` for backward compatibility.
 - Fixed: **Empty event placeholders in light mode** — blank slots were hardcoded `#1c1c1c`, so they showed as black boxes on light themes. They now use `var(--ha-card-background, var(--card-background-color))` with the theme's card shadow, and the event row reserves shadow room internally (padding offset by negative margin) so the shadow isn't clipped and the 8px card gap is unchanged.
 - Fixed: **TV timeline theater mode** — `is-tv` class is now actually emitted (was dead code falling back to compact), TV detection covers `TV Bro` with space plus Fire TV/BRAVIA/webOS/Tizen/Roku/CrKey and more, timeline video goes full-bleed on 16:9 1080p with overlay scrubber, settings open as a centered D-pad-friendly dialog instead of a phone bottom sheet, and opening an event on TV defaults to a 15-minute window like mobile (desktop keeps `timeline_default_window_hours`). Test with `?timeline_layout=tv`.
 - Added: **Drag mask shapes and edges in the editor** — grab the polygon fill to move the whole mask at once (shape never distorts at frame edges), or grab an edge to slide it: vertical edges move left/right, horizontal edges move up/down, diagonal edges translate freely. Vertex pins, Expand/Shrink/Reset, and Escape-to-cancel all still work.
