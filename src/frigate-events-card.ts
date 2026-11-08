@@ -4,12 +4,13 @@
 import { LitElement, html, css, PropertyValues, TemplateResult, CSSResult } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { ref } from 'lit/directives/ref.js';
+import { guard } from 'lit/directives/guard.js';
 import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/types';
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.6.44';
+const CARD_VERSION = '2.6.46';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -219,6 +220,8 @@ export class FrigateEventsCard extends LitElement {
   private _intersectionGraceTimer?: number;
   private _disconnectTimer?: number;
   private _liveVideoEl: HTMLVideoElement | null = null;
+  private _freezeCanvasEl: HTMLCanvasElement | null = null;
+  private _statsInterval?: number;
   private _remoteStream?: MediaStream;
   private _contextMenuEl?: HTMLElement;
   private _isIntersecting = false;
@@ -576,6 +579,12 @@ export class FrigateEventsCard extends LitElement {
     window.addEventListener('keydown', this._boundDebugVersionHandler);
   }
 
+  private _diagLog(...args: unknown[]): void {
+    if (this._config?.debug || this._config?.testing) {
+      console.warn('[FrigateEventsCard DIAG]', ...args);
+    }
+  }
+
   /**
    * Set up an IntersectionObserver to gate the WebRTC connection to card visibility.
    * Opens the peer connection when ≥10% of the card is in the viewport,
@@ -600,6 +609,7 @@ export class FrigateEventsCard extends LitElement {
       (entries) => {
         const isVisible = entries.some(e => e.isIntersecting);
         this._isIntersecting = isVisible;
+        this._diagLog(`IntersectionObserver: isIntersecting=${isVisible}, docVisibility=${document.visibilityState}`);
         if (isVisible && document.visibilityState === 'visible') {
           // Cancel any pending teardown grace timer
           if (this._intersectionGraceTimer) {
@@ -672,9 +682,39 @@ export class FrigateEventsCard extends LitElement {
 
       pc.ontrack = (event) => {
         // Attach stream to <video> only once tracks arrive so reconnects keep the last frame visible
-        event.streams[0]?.getTracks().forEach(track => remoteStream.addTrack(track));
+        event.streams[0]?.getTracks().forEach((track) => {
+          remoteStream.addTrack(track);
+          if (track.kind === 'video') {
+            track.onmute = () => {
+              this._diagLog('WebRTC video track MUTED (holding freeze frame)');
+              if (this._liveVideoEl) {
+                this._liveVideoEl.style.opacity = '0';
+              }
+            };
+            track.onunmute = () => {
+              this._diagLog('WebRTC video track UNMUTED (restoring live video)');
+              if (this._liveVideoEl) {
+                this._liveVideoEl.style.opacity = '1';
+              }
+            };
+          }
+        });
         if (event.track && !remoteStream.getTracks().includes(event.track)) {
           remoteStream.addTrack(event.track);
+          if (event.track.kind === 'video') {
+            event.track.onmute = () => {
+              this._diagLog('WebRTC video track MUTED (holding freeze frame)');
+              if (this._liveVideoEl) {
+                this._liveVideoEl.style.opacity = '0';
+              }
+            };
+            event.track.onunmute = () => {
+              this._diagLog('WebRTC video track UNMUTED (restoring live video)');
+              if (this._liveVideoEl) {
+                this._liveVideoEl.style.opacity = '1';
+              }
+            };
+          }
         }
         const video = this._liveVideoEl || (this.renderRoot?.querySelector('.live-view-video') as HTMLVideoElement | null);
         if (video) {
@@ -684,6 +724,7 @@ export class FrigateEventsCard extends LitElement {
             video.srcObject = remoteStream;
           }
           video.play().catch(() => {});
+          this._startFreezeCanvasCapture(video);
         }
       };
 
@@ -847,9 +888,39 @@ export class FrigateEventsCard extends LitElement {
       }
 
       pc.ontrack = (event) => {
-        event.streams[0]?.getTracks().forEach((track) => remoteStream.addTrack(track));
+        event.streams[0]?.getTracks().forEach((track) => {
+          remoteStream.addTrack(track);
+          if (track.kind === 'video') {
+            track.onmute = () => {
+              this._diagLog('WebRTC video track MUTED (holding freeze frame)');
+              if (this._liveVideoEl) {
+                this._liveVideoEl.style.opacity = '0';
+              }
+            };
+            track.onunmute = () => {
+              this._diagLog('WebRTC video track UNMUTED (restoring live video)');
+              if (this._liveVideoEl) {
+                this._liveVideoEl.style.opacity = '1';
+              }
+            };
+          }
+        });
         if (event.track && !remoteStream.getTracks().includes(event.track)) {
           remoteStream.addTrack(event.track);
+          if (event.track.kind === 'video') {
+            event.track.onmute = () => {
+              this._diagLog('WebRTC video track MUTED (holding freeze frame)');
+              if (this._liveVideoEl) {
+                this._liveVideoEl.style.opacity = '0';
+              }
+            };
+            event.track.onunmute = () => {
+              this._diagLog('WebRTC video track UNMUTED (restoring live video)');
+              if (this._liveVideoEl) {
+                this._liveVideoEl.style.opacity = '1';
+              }
+            };
+          }
         }
         const video = this._liveVideoEl || (this.renderRoot?.querySelector('.live-view-video') as HTMLVideoElement | null);
         if (video) {
@@ -859,6 +930,7 @@ export class FrigateEventsCard extends LitElement {
             video.srcObject = remoteStream;
           }
           video.play().catch(() => {});
+          this._startFreezeCanvasCapture(video);
         }
       };
 
@@ -965,6 +1037,10 @@ export class FrigateEventsCard extends LitElement {
    *   stream's ontrack fires.
    */
   private _teardownWebRTC(clearVideo = true): void {
+    if (this._statsInterval) {
+      clearInterval(this._statsInterval);
+      this._statsInterval = undefined;
+    }
     if (this._disconnectTimer) {
       clearTimeout(this._disconnectTimer);
       this._disconnectTimer = undefined;
@@ -1007,6 +1083,7 @@ export class FrigateEventsCard extends LitElement {
         this._liveVideoEl.pause();
       } catch (_) {}
       this._liveVideoEl.srcObject = null;
+      this._liveVideoEl.style.opacity = '1';
     }
   }
 
@@ -1225,7 +1302,7 @@ export class FrigateEventsCard extends LitElement {
     const handleStateChange = () => {
       const connState = pc.connectionState;
       const iceState = pc.iceConnectionState;
-      console.debug(`Frigate Events Card: WebRTC state → connection: ${connState}, ice: ${iceState}`);
+      this._diagLog(`WebRTC state: connection=${connState}, ice=${iceState}`);
 
       if (connState === 'connected' || iceState === 'connected' || iceState === 'completed') {
         if (this._disconnectTimer) {
@@ -1268,6 +1345,38 @@ export class FrigateEventsCard extends LitElement {
         }
       }
     };
+
+    let lastFreezes = 0;
+    let lastFramesDropped = 0;
+    let lastPacketsLost = 0;
+    if (this._statsInterval) {
+      clearInterval(this._statsInterval);
+    }
+    this._statsInterval = window.setInterval(async () => {
+      if (!this.isConnected || this._peerConnection !== pc) {
+        clearInterval(this._statsInterval);
+        this._statsInterval = undefined;
+        return;
+      }
+      try {
+        const stats = await pc.getStats();
+        stats.forEach((report: any) => {
+          if (report.type === 'inbound-rtp' && report.kind === 'video') {
+            const freezes = report.freezeCount || 0;
+            const dropped = report.framesDropped || 0;
+            const lost = report.packetsLost || 0;
+            if (freezes > lastFreezes || dropped > lastFramesDropped || lost > lastPacketsLost) {
+              this._diagLog(
+                `WebRTC stats delta: freezes=+${freezes - lastFreezes} (total ${freezes}), dropped=+${dropped - lastFramesDropped} (total ${dropped}), packetsLost=+${lost - lastPacketsLost} (total ${lost})`
+              );
+              lastFreezes = freezes;
+              lastFramesDropped = dropped;
+              lastPacketsLost = lost;
+            }
+          }
+        });
+      } catch {}
+    }, 5000);
 
     pc.onconnectionstatechange = handleStateChange;
     pc.oniceconnectionstatechange = handleStateChange;
@@ -9183,7 +9292,22 @@ export class FrigateEventsCard extends LitElement {
       <ha-card>
         <div class="content">
           ${(this._config?.testing === true ? (this._showVersionOverride ?? false) : !!this._config?.debug) ? html`<div class="debug-version">v${CARD_VERSION}</div>` : ''}
-          ${this._config.live_view ? this._renderLiveView() : ''}
+          ${this._config.live_view
+            ? guard(
+                [
+                  this._config.live_view_entity,
+                  this._config.go2rtc_url,
+                  this._config.live_view_aspect_ratio,
+                  this._config.show_mute,
+                  this._config.live_view_show_mute,
+                  this._config.live_view_mute_position,
+                  this._isLiveMuted,
+                  this._liveViewError,
+                  this._isFrigateOffline()
+                ],
+                () => this._renderLiveView()
+              )
+            : ''}
           ${html`
                   <div class="events-container">
                     ${showScrollArrows ? html`
@@ -9215,6 +9339,23 @@ export class FrigateEventsCard extends LitElement {
     if (videoEl) {
       videoEl.muted = this._isLiveMuted;
       if (videoEl !== prevVideoEl) {
+        videoEl.addEventListener('waiting', () => {
+          this._diagLog('Live video WAITING (buffering)');
+          videoEl.style.opacity = '0';
+        });
+        videoEl.addEventListener('stalled', () => {
+          this._diagLog('Live video STALLED');
+          videoEl.style.opacity = '0';
+        });
+        videoEl.addEventListener('playing', () => {
+          this._diagLog('Live video PLAYING');
+          videoEl.style.opacity = '1';
+        });
+        videoEl.addEventListener('timeupdate', () => {
+          if (videoEl.style.opacity === '0') {
+            videoEl.style.opacity = '1';
+          }
+        });
         if (this._boundFullscreenHandler) {
           videoEl.addEventListener('webkitbeginfullscreen', this._boundFullscreenHandler);
           videoEl.addEventListener('webkitendfullscreen', this._boundFullscreenHandler);
@@ -9226,6 +9367,7 @@ export class FrigateEventsCard extends LitElement {
           videoEl.addEventListener('pointermove', this._boundFullscreenMouseMoveHandler, { capture: true, passive: true });
         }
       }
+      this._startFreezeCanvasCapture(videoEl);
     }
     if (
       videoEl &&
@@ -9237,6 +9379,64 @@ export class FrigateEventsCard extends LitElement {
       videoEl.play().catch(() => {});
     }
   };
+
+  private _handleFreezeCanvasRef = (el: Element | undefined): void => {
+    this._freezeCanvasEl = (el as HTMLCanvasElement) ?? null;
+    if (this._freezeCanvasEl && this._liveVideoEl && this._liveVideoEl.videoWidth > 0) {
+      this._updateFreezeCanvas(this._liveVideoEl);
+    }
+  };
+
+  private _updateFreezeCanvas(video: HTMLVideoElement): void {
+    if (!this._freezeCanvasEl || video.videoWidth === 0 || video.videoHeight === 0) return;
+    const canvas = this._freezeCanvasEl;
+    if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+    }
+    const ctx = canvas.getContext('2d', { alpha: false });
+    if (ctx) {
+      try {
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      } catch {}
+    }
+  }
+
+  private _startFreezeCanvasCapture(video: HTMLVideoElement): void {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    if ((video as any)._freezeCaptureActive) return;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (video as any)._freezeCaptureActive = true;
+
+    let lastCapture = 0;
+    const captureFrame = () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if (!this.isConnected || this._liveVideoEl !== video) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (video as any)._freezeCaptureActive = false;
+        return;
+      }
+      const now = performance.now();
+      // Throttle capture to once per 1,000ms for negligible CPU/GPU cost
+      if (now - lastCapture >= 1000) {
+        this._updateFreezeCanvas(video);
+        lastCapture = now;
+      }
+      if ('requestVideoFrameCallback' in video) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (video as any).requestVideoFrameCallback(captureFrame);
+      } else {
+        setTimeout(captureFrame, 1000);
+      }
+    };
+
+    if ('requestVideoFrameCallback' in video) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (video as any).requestVideoFrameCallback(captureFrame);
+    } else {
+      setTimeout(captureFrame, 1000);
+    }
+  }
 
   private _handleLiveMuteToggle(e: Event): void {
     e.stopPropagation();
@@ -9289,6 +9489,10 @@ export class FrigateEventsCard extends LitElement {
         @touchend=${() => this._handleLiveViewTouchEnd()}
         @touchcancel=${() => this._handleLiveViewTouchEnd()}
       >
+        <canvas
+          class="live-view-freeze-canvas"
+          ${ref(this._handleFreezeCanvasRef)}
+        ></canvas>
         <video
           class="live-view-video"
           autoplay
@@ -9298,7 +9502,6 @@ export class FrigateEventsCard extends LitElement {
           webkit-playsinline
           disablepictureinpicture
           disableremoteplayback
-          poster="data:image/png;base64,iVBORw0KGgoAAAANSU5EUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
           @click=${(e: Event) => {
             e.preventDefault();
           }}
@@ -9649,20 +9852,38 @@ export class FrigateEventsCard extends LitElement {
         -webkit-user-select: none !important;
         user-select: none !important;
         touch-action: manipulation;
+        contain: paint layout;
+        transform: translateZ(0);
+        will-change: transform;
       }
 
-      .live-view-video {
+      .live-view-freeze-canvas {
+        position: absolute;
+        inset: 0;
         width: 100%;
         height: 100%;
         object-fit: contain;
         display: block;
-        background-color: #1c1c1c;
+        pointer-events: none !important;
+        border-radius: 12px;
+        z-index: 1;
+      }
+
+      .live-view-video {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        display: block;
+        background-color: transparent !important;
         transform: translateZ(0);
-        will-change: transform;
+        will-change: transform, opacity;
+        transition: opacity 0.05s ease-out;
         -webkit-touch-callout: none !important;
         -webkit-user-select: none !important;
         user-select: none !important;
         pointer-events: none !important;
+        z-index: 2;
       }
 
       .live-view-container:fullscreen,
@@ -9676,7 +9897,9 @@ export class FrigateEventsCard extends LitElement {
       }
 
       .live-view-container:fullscreen .live-view-video,
-      .live-view-container:-webkit-full-screen .live-view-video {
+      .live-view-container:-webkit-full-screen .live-view-video,
+      .live-view-container:fullscreen .live-view-freeze-canvas,
+      .live-view-container:-webkit-full-screen .live-view-freeze-canvas {
         width: 100%;
         height: 100%;
         object-fit: contain;
