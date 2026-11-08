@@ -9,7 +9,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.6.43';
+const CARD_VERSION = '2.6.44';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -194,6 +194,9 @@ export class FrigateEventsCard extends LitElement {
   @state() private _showVersionOverride?: boolean;
 
   private _unsubscribe?: () => void;
+  private _subscribing = false;
+  private _loadRetryTimer?: number;
+  private _webrtcReconnectTimer?: number;
   private _pollInterval?: number;
   private _boundVisibilityHandler?: () => void;
   private _boundKeyDownHandler?: (e: KeyboardEvent) => void;
@@ -362,13 +365,13 @@ export class FrigateEventsCard extends LitElement {
   }
 
   protected async firstUpdated(): Promise<void> {
-    await this._loadEvents();
-    await this._subscribeToEvents();
     this._setupVisibilityHandler();
     this._setupPolling();
     this._setupDebugVersionToggle();
     this._setupLiveView();
     this._setupFullscreenListener();
+    await this._loadEvents();
+    await this._subscribeToEvents();
   }
 
   protected updated(changedProps: PropertyValues): void {
@@ -434,6 +437,24 @@ export class FrigateEventsCard extends LitElement {
       clearInterval(this._pollInterval);
       this._pollInterval = undefined;
     }
+    if (this._loadRetryTimer) {
+      clearTimeout(this._loadRetryTimer);
+      this._loadRetryTimer = undefined;
+    }
+    if (this._intersectionGraceTimer) {
+      clearTimeout(this._intersectionGraceTimer);
+      this._intersectionGraceTimer = undefined;
+    }
+    if (this._webrtcReconnectTimer) {
+      clearTimeout(this._webrtcReconnectTimer);
+      this._webrtcReconnectTimer = undefined;
+    }
+    if (this._intersectionObserver) {
+      this._intersectionObserver.disconnect();
+      this._intersectionObserver = undefined;
+    }
+    this._isIntersecting = false;
+    this._teardownWebRTC(true);
     if (this._boundVisibilityHandler) {
       document.removeEventListener('visibilitychange', this._boundVisibilityHandler);
       this._boundVisibilityHandler = undefined;
@@ -643,20 +664,18 @@ export class FrigateEventsCard extends LitElement {
 
       const remoteStream = new MediaStream();
       this._remoteStream = remoteStream;
-      // Attach to the video element if it's already in the DOM
       const videoEl = this._liveVideoEl || (this.renderRoot?.querySelector('.live-view-video') as HTMLVideoElement | null);
       if (videoEl) {
         this._liveVideoEl = videoEl;
         videoEl.muted = this._isLiveMuted;
-        if (videoEl.srcObject !== remoteStream) {
-          videoEl.srcObject = remoteStream;
-          videoEl.play().catch(() => {});
-        }
       }
 
       pc.ontrack = (event) => {
-        // Add each incoming track to the stream that's already attached to the <video>
+        // Attach stream to <video> only once tracks arrive so reconnects keep the last frame visible
         event.streams[0]?.getTracks().forEach(track => remoteStream.addTrack(track));
+        if (event.track && !remoteStream.getTracks().includes(event.track)) {
+          remoteStream.addTrack(event.track);
+        }
         const video = this._liveVideoEl || (this.renderRoot?.querySelector('.live-view-video') as HTMLVideoElement | null);
         if (video) {
           this._liveVideoEl = video;
@@ -676,7 +695,15 @@ export class FrigateEventsCard extends LitElement {
 
       // --- SDP offer ---
       const offer = await pc.createOffer();
+      if (!this.isConnected || this._peerConnection !== pc) {
+        pc.close();
+        return;
+      }
       await pc.setLocalDescription(offer);
+      if (!this.isConnected || this._peerConnection !== pc) {
+        pc.close();
+        return;
+      }
 
       // Gather ICE candidates before sending the offer (complete gathering or 3s timeout).
       // This is a Vanilla ICE approach — simpler and works well on LAN.
@@ -694,6 +721,10 @@ export class FrigateEventsCard extends LitElement {
         // 3-second fallback to support Trickle ICE if the camera needs it
         setTimeout(() => resolve(pc.localDescription?.sdp || offer.sdp!), 3000);
       });
+      if (!this.isConnected || this._peerConnection !== pc) {
+        pc.close();
+        return;
+      }
 
       // --- Subscribe to HA's WebRTC offer/answer event stream ---
       this._liveViewUnsub = await this.hass.connection.subscribeMessage<HAWebRtcEvent>(
@@ -731,7 +762,7 @@ export class FrigateEventsCard extends LitElement {
               console.warn(
                 `Frigate Events Card: WebRTC stream error (${event.code}): ${event.message}`
               );
-              this._teardownWebRTC();
+              this._teardownWebRTC(false);
               if (allowAudio) {
                 console.info('Frigate Events Card: Retrying WebRTC with video-only...');
                 this._startWebRTC(false);
@@ -744,6 +775,10 @@ export class FrigateEventsCard extends LitElement {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         { type: 'camera/web_rtc_offer', entity_id: entity, offer: sdpOffer } as any
       );
+      if (!this.isConnected || this._peerConnection !== pc) {
+        this._teardownWebRTC(true);
+        return;
+      }
 
       // --- Trickle ICE: send local candidates to HA as they're discovered ---
       pc.onicecandidate = ({ candidate }) => {
@@ -761,7 +796,7 @@ export class FrigateEventsCard extends LitElement {
       this._setupWebRTCMonitoring(pc);
 
     } catch (e: any) {
-      this._teardownWebRTC();
+      this._teardownWebRTC(false);
       if (allowAudio) {
         console.info('Frigate Events Card: Retrying WebRTC with video-only...');
         this._startWebRTC(false);
@@ -776,9 +811,31 @@ export class FrigateEventsCard extends LitElement {
     }
   }
 
+  private _isLanGo2rtcHost(urlStr: string): { isLan: boolean; isIpv4Literal: boolean } {
+    try {
+      const parsed = new URL(urlStr, window.location.origin);
+      const host = parsed.hostname.toLowerCase();
+      const isIpv4Literal = /^\d+\.\d+\.\d+\.\d+$/.test(host);
+      const isLan =
+        host === 'localhost' ||
+        host === '127.0.0.1' ||
+        host.endsWith('.local') ||
+        host.endsWith('.lan') ||
+        /^192\.168\.\d+\.\d+$/.test(host) ||
+        /^10\.\d+\.\d+\.\d+$/.test(host) ||
+        /^172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+$/.test(host);
+      return { isLan, isIpv4Literal };
+    } catch {
+      return { isLan: false, isIpv4Literal: false };
+    }
+  }
+
   private async _startGo2rtcWebRTC(go2rtcUrl: string, streamName: string): Promise<void> {
     try {
-      const pc = new RTCPeerConnection({ iceServers: WEBRTC_STUN_SERVERS });
+      const { isLan, isIpv4Literal } = this._isLanGo2rtcHost(go2rtcUrl);
+      // Skip external STUN servers for local LAN go2rtc endpoints so ICE gathering completes in <20ms
+      // instead of waiting up to 3,000ms on WAN STUN responses or temporary IPv6 STUN candidates.
+      const pc = new RTCPeerConnection({ iceServers: isLan ? [] : WEBRTC_STUN_SERVERS });
       this._peerConnection = pc;
 
       const remoteStream = new MediaStream();
@@ -787,14 +844,13 @@ export class FrigateEventsCard extends LitElement {
       if (videoEl) {
         this._liveVideoEl = videoEl;
         videoEl.muted = this._isLiveMuted;
-        if (videoEl.srcObject !== remoteStream) {
-          videoEl.srcObject = remoteStream;
-          videoEl.play().catch(() => {});
-        }
       }
 
       pc.ontrack = (event) => {
         event.streams[0]?.getTracks().forEach((track) => remoteStream.addTrack(track));
+        if (event.track && !remoteStream.getTracks().includes(event.track)) {
+          remoteStream.addTrack(event.track);
+        }
         const video = this._liveVideoEl || (this.renderRoot?.querySelector('.live-view-video') as HTMLVideoElement | null);
         if (video) {
           this._liveVideoEl = video;
@@ -810,33 +866,68 @@ export class FrigateEventsCard extends LitElement {
       pc.addTransceiver('audio', { direction: 'recvonly' });
 
       const offer = await pc.createOffer();
+      if (!this.isConnected || this._peerConnection !== pc) {
+        pc.close();
+        return;
+      }
       await pc.setLocalDescription(offer);
+      if (!this.isConnected || this._peerConnection !== pc) {
+        pc.close();
+        return;
+      }
 
-      const sdpOffer = await new Promise<string>((resolve) => {
+      let sdpOffer = await new Promise<string>((resolve) => {
         if (pc.iceGatheringState === 'complete') {
           resolve(pc.localDescription!.sdp);
           return;
         }
-        const onStateChange = () => {
+        let settled = false;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          resolve(pc.localDescription?.sdp || offer.sdp!);
+        };
+        pc.onicegatheringstatechange = () => {
           if (pc.iceGatheringState === 'complete') {
-            resolve(pc.localDescription!.sdp);
+            finish();
           }
         };
-        pc.onicegatheringstatechange = onStateChange;
-        setTimeout(() => resolve(pc.localDescription?.sdp || offer.sdp!), 3000);
+        setTimeout(finish, isLan ? 500 : 3000);
       });
+      if (!this.isConnected || this._peerConnection !== pc) {
+        pc.close();
+        return;
+      }
+
+      // If go2rtcUrl is an explicit IPv4 LAN address and SDP contains IPv4 host candidates,
+      // strip temporary IPv6 host candidates so WebRTC binds to stable LAN IPv4 rather than
+      // ephemeral SLAAC privacy IPv6 addresses.
+      if (isLan && isIpv4Literal && /\ba=candidate:\S+\s+\d+\s+udp\s+\d+\s+\d+\.\d+\.\d+\.\d+\s+/i.test(sdpOffer)) {
+        sdpOffer = sdpOffer
+          .split('\r\n')
+          .filter((line) => !/^a=candidate:\S+\s+\d+\s+udp\s+\d+\s+[0-9a-fA-F:]+:[0-9a-fA-F:]+\s+/i.test(line))
+          .join('\r\n');
+      }
 
       const cleanUrl = go2rtcUrl.replace(/\/+$/, '');
       const res = await fetch(`${cleanUrl}/api/webrtc?src=${encodeURIComponent(streamName)}`, {
         method: 'POST',
         body: sdpOffer,
       });
+      if (!this.isConnected || this._peerConnection !== pc) {
+        pc.close();
+        return;
+      }
 
       if (!res.ok) {
         throw new Error(`go2rtc returned HTTP ${res.status}: ${res.statusText}`);
       }
 
       const text = await res.text();
+      if (!this.isConnected || this._peerConnection !== pc) {
+        pc.close();
+        return;
+      }
       let answerSdp = text;
       try {
         const json = JSON.parse(text);
@@ -847,6 +938,10 @@ export class FrigateEventsCard extends LitElement {
       }
 
       await pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: answerSdp }));
+      if (!this.isConnected || this._peerConnection !== pc) {
+        pc.close();
+        return;
+      }
       this._liveViewError = undefined;
 
       // --- Monitor for connection failure and 24/7 self-healing recovery ---
@@ -855,7 +950,7 @@ export class FrigateEventsCard extends LitElement {
       const msg = e?.message || String(e);
       console.error('Frigate Events Card: Failed direct go2rtc WebRTC session:', msg);
       this._liveViewError = `Failed go2rtc stream: ${msg}`;
-      this._teardownWebRTC();
+      this._teardownWebRTC(false);
     }
   }
 
@@ -863,8 +958,13 @@ export class FrigateEventsCard extends LitElement {
    * Close the WebRTC peer connection and free all associated resources.
    * Sends the close_webrtc_session command to HA so the server-side
    * session is also released. Safe to call multiple times.
+   *
+   * @param clearVideo When true (default), detaches srcObject from the <video>
+   *   element to release the hardware decoder immediately. Pass false during
+   *   in-place reconnects so the last video frame stays visible until the new
+   *   stream's ontrack fires.
    */
-  private _teardownWebRTC(): void {
+  private _teardownWebRTC(clearVideo = true): void {
     if (this._disconnectTimer) {
       clearTimeout(this._disconnectTimer);
       this._disconnectTimer = undefined;
@@ -895,16 +995,18 @@ export class FrigateEventsCard extends LitElement {
       this._liveViewSessionId = undefined;
     }
 
-    // Detach the stream from the video element and stop all tracks
-    if (this._liveVideoEl) {
+    // Stop all tracks on the previous stream
+    if (this._remoteStream) {
+      this._remoteStream.getTracks().forEach((track) => track.stop());
+      this._remoteStream = undefined;
+    }
+
+    // Detach the stream from the video element when fully tearing down
+    if (clearVideo && this._liveVideoEl) {
       try {
         this._liveVideoEl.pause();
       } catch (_) {}
       this._liveVideoEl.srcObject = null;
-    }
-    if (this._remoteStream) {
-      this._remoteStream.getTracks().forEach((track) => track.stop());
-      this._remoteStream = undefined;
     }
   }
 
@@ -1136,9 +1238,13 @@ export class FrigateEventsCard extends LitElement {
           this._disconnectTimer = undefined;
         }
         console.warn('Frigate Events Card: WebRTC connection failed; auto-reconnecting in 5s.');
-        this._teardownWebRTC();
-        window.setTimeout(() => {
-          if (this._intersectionObserver && !this._peerConnection) {
+        this._teardownWebRTC(false);
+        if (this._webrtcReconnectTimer) {
+          clearTimeout(this._webrtcReconnectTimer);
+        }
+        this._webrtcReconnectTimer = window.setTimeout(() => {
+          this._webrtcReconnectTimer = undefined;
+          if (this.isConnected && this._intersectionObserver && !this._peerConnection) {
             this._startWebRTC();
           }
         }, 5000);
@@ -1148,13 +1254,14 @@ export class FrigateEventsCard extends LitElement {
           this._disconnectTimer = window.setTimeout(() => {
             this._disconnectTimer = undefined;
             if (
+              this.isConnected &&
               this._peerConnection === pc &&
               (pc.connectionState === 'disconnected' || pc.iceConnectionState === 'disconnected')
             ) {
               console.warn(
                 'Frigate Events Card: WebRTC stream remained disconnected for 10s. Triggering self-healing restart.'
               );
-              this._teardownWebRTC();
+              this._teardownWebRTC(false);
               this._startWebRTC();
             }
           }, 10000);
@@ -1195,16 +1302,34 @@ export class FrigateEventsCard extends LitElement {
     return this._isFrigateOfflineFor(this.hass?.states as any);
   }
 
+  private _areEventsEqual(a: FrigateEvent[], b: FrigateEvent[]): boolean {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      if (
+        a[i].id !== b[i].id ||
+        a[i].start_time !== b[i].start_time ||
+        a[i].end_time !== b[i].end_time ||
+        a[i].has_snapshot !== b[i].has_snapshot ||
+        a[i].has_clip !== b[i].has_clip
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   private async _loadEvents(): Promise<void> {
     if (!this.hass || !this._config) return;
 
     // Freeze gallery while Frigate is off: keep last events, skip poll flashing.
     if (this._events.length > 0 && this._isFrigateOffline()) {
-      this._loading = false;
+      if (this._loading) this._loading = false;
       return;
     }
 
-    this._error = undefined;
+    if (this._error !== undefined) {
+      this._error = undefined;
+    }
 
     try {
       const isScroll = !!this._config.scroll;
@@ -1229,27 +1354,37 @@ export class FrigateEventsCard extends LitElement {
         return;
       }
 
-      this._events = events.sort((a, b) => (b.start_time || 0) - (a.start_time || 0));
+      const sorted = events.sort((a, b) => (b.start_time || 0) - (a.start_time || 0));
+      if (!this._areEventsEqual(this._events, sorted)) {
+        this._events = sorted;
+      }
     } catch (e: any) {
       console.warn('Temporary connection issue loading Frigate events:', e);
       const msg = e?.message || (typeof e === 'object' ? JSON.stringify(e) : String(e));
       this._error = `Failed to load events: ${msg}`;
       // Automatically retry in 4 seconds in case Home Assistant or Frigate is starting up
-      setTimeout(() => {
+      if (this._loadRetryTimer) {
+        clearTimeout(this._loadRetryTimer);
+      }
+      this._loadRetryTimer = window.setTimeout(() => {
+        this._loadRetryTimer = undefined;
         if (this._error && this.isConnected) {
           this._loadEvents();
         }
       }, 4000);
     } finally {
-      this._loading = false;
+      if (this._loading) {
+        this._loading = false;
+      }
     }
   }
 
   private async _subscribeToEvents(): Promise<void> {
-    if (!this.hass || !this._config || this._unsubscribe) return;
+    if (!this.hass || !this._config || this._unsubscribe || this._subscribing) return;
 
+    this._subscribing = true;
     try {
-      this._unsubscribe = await subscribeToEvents(
+      const unsub = await subscribeToEvents(
         this.hass,
         this._config.frigate_client_id || 'frigate',
         (change: FrigateEventChange) => {
@@ -1262,8 +1397,15 @@ export class FrigateEventsCard extends LitElement {
           }
         }
       );
+      if (!this.isConnected) {
+        unsub();
+        return;
+      }
+      this._unsubscribe = unsub;
     } catch (e) {
       console.warn('Failed to subscribe to Frigate events:', e);
+    } finally {
+      this._subscribing = false;
     }
   }
 
@@ -9068,26 +9210,29 @@ export class FrigateEventsCard extends LitElement {
 
   private _handleLiveVideoRef = (el: Element | undefined): void => {
     const videoEl = (el as HTMLVideoElement) ?? null;
+    const prevVideoEl = this._liveVideoEl;
     this._liveVideoEl = videoEl;
     if (videoEl) {
       videoEl.muted = this._isLiveMuted;
-      if (this._boundFullscreenHandler) {
-        videoEl.addEventListener('webkitbeginfullscreen', this._boundFullscreenHandler);
-        videoEl.addEventListener('webkitendfullscreen', this._boundFullscreenHandler);
-        videoEl.addEventListener('fullscreenchange', this._boundFullscreenHandler);
-        videoEl.addEventListener('webkitfullscreenchange', this._boundFullscreenHandler);
-      }
-      if (this._boundFullscreenMouseMoveHandler) {
-        videoEl.addEventListener('mousemove', this._boundFullscreenMouseMoveHandler, { capture: true, passive: true });
-        videoEl.addEventListener('pointermove', this._boundFullscreenMouseMoveHandler, { capture: true, passive: true });
-      }
-      videoEl.addEventListener('pause', () => {
-        if (this._remoteStream && videoEl.paused) {
-          videoEl.play().catch(() => {});
+      if (videoEl !== prevVideoEl) {
+        if (this._boundFullscreenHandler) {
+          videoEl.addEventListener('webkitbeginfullscreen', this._boundFullscreenHandler);
+          videoEl.addEventListener('webkitendfullscreen', this._boundFullscreenHandler);
+          videoEl.addEventListener('fullscreenchange', this._boundFullscreenHandler);
+          videoEl.addEventListener('webkitfullscreenchange', this._boundFullscreenHandler);
         }
-      });
+        if (this._boundFullscreenMouseMoveHandler) {
+          videoEl.addEventListener('mousemove', this._boundFullscreenMouseMoveHandler, { capture: true, passive: true });
+          videoEl.addEventListener('pointermove', this._boundFullscreenMouseMoveHandler, { capture: true, passive: true });
+        }
+      }
     }
-    if (videoEl && this._remoteStream && videoEl.srcObject !== this._remoteStream) {
+    if (
+      videoEl &&
+      this._remoteStream &&
+      this._remoteStream.getTracks().length > 0 &&
+      videoEl.srcObject !== this._remoteStream
+    ) {
       videoEl.srcObject = this._remoteStream;
       videoEl.play().catch(() => {});
     }
