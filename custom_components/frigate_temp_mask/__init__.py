@@ -1134,7 +1134,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         if offline_removals:
             _LOGGER.info("Frigate is reachable; draining %d pending offline removal(s): %s", len(offline_removals), offline_removals)
             for m_id in offline_removals:
-                await async_handle_remove_mask(ServiceCall(DOMAIN, "remove_mask", {"mask_id": m_id}))
+                await _async_remove_mask(m_id)
 
         # 3. Check for any active masks whose duration expired while offline or timers stalled
         active = domain_data.get("active_masks", {})
@@ -1152,7 +1152,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
 
             for mask_id in expired_ids:
                 _LOGGER.info("Active mask %s expired during sync check, pruning...", mask_id)
-                await async_handle_remove_mask(ServiceCall(DOMAIN, "remove_mask", {"mask_id": mask_id}))
+                await _async_remove_mask(mask_id)
 
         # 4. Reconcile active configuration from Frigate raw config
         # Audited on-demand, on startup, and every 10 minutes in background
@@ -1200,7 +1200,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                         # If this mask was queued for offline removal, clean it immediately
                         if disc_id in domain_data.get("pending_offline_removals", set()):
                             _LOGGER.info("Discovered mask %s is queued for offline removal, cleaning from Frigate...", disc_id)
-                            await async_handle_remove_mask(ServiceCall(DOMAIN, "remove_mask", {"mask_id": disc_id}))
+                            await _async_remove_mask(disc_id)
                             continue
 
                         if disc_id in active:
@@ -1225,9 +1225,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                                     "Tracked temporary mask %s expired while Frigate was unavailable, pruning...",
                                     disc_id,
                                 )
-                                await async_handle_remove_mask(
-                                    ServiceCall(DOMAIN, "remove_mask", {"mask_id": disc_id})
-                                )
+                                await _async_remove_mask(disc_id)
                             continue
 
                         # If discovered mask has a timestamp older than 48 hours and is not tracked, clean it from Frigate
@@ -1237,7 +1235,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                                 disc_id,
                                 datetime.fromtimestamp(creation_ts, timezone.utc).isoformat(),
                             )
-                            await async_handle_remove_mask(ServiceCall(DOMAIN, "remove_mask", {"mask_id": disc_id}))
+                            await _async_remove_mask(disc_id)
                             continue
 
                         # Discovered mask not yet tracked in active_masks.
@@ -1519,7 +1517,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         if not is_infinite:
             async def _expire_callback(_now):
                 _LOGGER.info("Temporary mask %s expired after %s hours, pruning...", mask_id, duration_hours)
-                await async_handle_remove_mask(ServiceCall(DOMAIN, "remove_mask", {"mask_id": mask_id}))
+                await _async_remove_mask(mask_id)
 
             duration_seconds = int(duration_hours * 3600)
             unsub = async_call_later(hass, duration_seconds, _expire_callback)
@@ -1528,12 +1526,17 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         else:
             _LOGGER.info("Added temporary mask %s for %s (infinite / no auto-expiration)", mask_id, camera)
 
-    async def async_handle_remove_mask(call: ServiceCall):
+    async def _async_remove_mask(raw_mask_id: object) -> None:
+        """Remove a temporary mask by id.
+
+        Internal callers use this directly. Building a ServiceCall by hand is
+        not safe across HA versions (the constructor now takes `hass` first),
+        and a malformed call silently does nothing.
+        """
         base_url = _get_frigate_base_url()
         if not base_url:
             _LOGGER.error("Frigate integration is not configured; cannot remove temporary masks")
             return
-        raw_mask_id = call.data.get("mask_id")
         mask_id = str(raw_mask_id).strip().strip("\"'") if raw_mask_id is not None else ""
         if not mask_id:
             return
@@ -1639,6 +1642,9 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
             _update_state()
             _schedule_save()
 
+    async def async_handle_remove_mask(call: ServiceCall):
+        await _async_remove_mask(call.data.get("mask_id"))
+
     async def async_handle_set_duration(call: ServiceCall):
         mask_id = str(call.data.get("mask_id", "")).strip()
         if not mask_id or mask_id not in domain_data["active_masks"]:
@@ -1652,6 +1658,11 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
             domain_data["timers"].pop(mask_id)()
 
         updated_mask = dict(domain_data["active_masks"][mask_id])
+        # An adopted mask starts life with no persisted expiry and is protected
+        # from auto-pruning. Once the user picks a duration it is a normal
+        # finite mask and must expire on its own.
+        if duration_hours > 0:
+            updated_mask.pop("is_orphan", None)
         updated_mask["duration_hours"] = -1 if duration_hours <= 0 else duration_hours
         updated_mask["expires_at"] = (
             None
@@ -1665,7 +1676,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         if duration_hours > 0:
             async def _expire_callback(_now):
                 _LOGGER.info("Temporary mask %s expired after %s hours, pruning...", mask_id, duration_hours)
-                await async_handle_remove_mask(ServiceCall(DOMAIN, "remove_mask", {"mask_id": mask_id}))
+                await _async_remove_mask(mask_id)
 
             domain_data["timers"][mask_id] = async_call_later(
                 hass, max(1, int(duration_hours * 3600)), _expire_callback
@@ -1769,9 +1780,9 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         ]
         _LOGGER.info("Manual prune of expired masks triggered, found %d expired mask(s)", len(expired_ids))
         for m_id in expired_ids:
-            await async_handle_remove_mask(ServiceCall(DOMAIN, "remove_mask", {"mask_id": m_id}))
+            await _async_remove_mask(m_id)
         for m_id in list(domain_data.get("pending_offline_removals", set())):
-            await async_handle_remove_mask(ServiceCall(DOMAIN, "remove_mask", {"mask_id": m_id}))
+            await _async_remove_mask(m_id)
         _update_state()
 
     async def async_handle_restart(call: ServiceCall):
@@ -1887,7 +1898,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         def _make_restored_expire_cb(m_id, dur_h):
             async def _expire_callback(_now):
                 _LOGGER.info("Restored temporary mask %s expired after %s hours, pruning...", m_id, dur_h)
-                await async_handle_remove_mask(ServiceCall(DOMAIN, "remove_mask", {"mask_id": m_id}))
+                await _async_remove_mask(m_id)
             return _expire_callback
 
         domain_data["timers"][restored_id] = async_call_later(

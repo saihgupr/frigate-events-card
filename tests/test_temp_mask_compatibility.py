@@ -436,6 +436,23 @@ version: 0.18-0
         self.assertIn("518,743,662,743,662,969,518,969", cleaned)
 
 
+class TestInternalRemovalEntryPoint(unittest.TestCase):
+    """Guard the internal prune path against hand-built ServiceCall objects.
+
+    Home Assistant's ServiceCall takes `hass` as its first argument, so
+    building one internally as ServiceCall(domain, service, data) produced a
+    call whose data was empty. remove_mask then returned at its empty-id guard
+    and expired masks were never pruned automatically.
+    """
+
+    def test_module_never_builds_servicecall_directly(self):
+        import inspect
+        import custom_components.frigate_temp_mask as temp_mask_module
+
+        source = inspect.getsource(temp_mask_module)
+        self.assertNotIn("ServiceCall(", source)
+        self.assertIn("async def _async_remove_mask", source)
+
 
 if __name__ == "__main__":
     unittest.main()
