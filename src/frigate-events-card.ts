@@ -10,7 +10,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.6.49';
+const CARD_VERSION = '2.6.53';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -185,6 +185,9 @@ export class FrigateEventsCard extends LitElement {
   @state() private _hoveredEventId?: string;
   @state() private _liveViewError?: string;   // Set when live feed fails gracefully
   @state() private _isLiveMuted = true;
+  @state() private _liveAutoplayBlocked = false;
+  @state() private _liveUserActivated = false;
+  private _tvBroBrowser?: boolean;
   @state() private _maskManagerSelectedCamera = 'all';
   // undefined = default (first mask expanded), '' = all collapsed, otherwise a mask id
   private _maskManagerExpandedId?: string;
@@ -695,6 +698,7 @@ export class FrigateEventsCard extends LitElement {
               this._diagLog('WebRTC video track UNMUTED (restoring live video)');
               if (this._liveVideoEl) {
                 this._liveVideoEl.style.opacity = '1';
+                this._liveVideoEl.style.visibility = 'visible';
               }
             };
           }
@@ -712,6 +716,7 @@ export class FrigateEventsCard extends LitElement {
               this._diagLog('WebRTC video track UNMUTED (restoring live video)');
               if (this._liveVideoEl) {
                 this._liveVideoEl.style.opacity = '1';
+                this._liveVideoEl.style.visibility = 'visible';
               }
             };
           }
@@ -723,7 +728,7 @@ export class FrigateEventsCard extends LitElement {
           if (video.srcObject !== remoteStream) {
             video.srcObject = remoteStream;
           }
-          video.play().catch(() => {});
+          this._playLiveVideo(video);
           this._startFreezeCanvasCapture(video);
         }
       };
@@ -901,6 +906,7 @@ export class FrigateEventsCard extends LitElement {
               this._diagLog('WebRTC video track UNMUTED (restoring live video)');
               if (this._liveVideoEl) {
                 this._liveVideoEl.style.opacity = '1';
+                this._liveVideoEl.style.visibility = 'visible';
               }
             };
           }
@@ -918,6 +924,7 @@ export class FrigateEventsCard extends LitElement {
               this._diagLog('WebRTC video track UNMUTED (restoring live video)');
               if (this._liveVideoEl) {
                 this._liveVideoEl.style.opacity = '1';
+                this._liveVideoEl.style.visibility = 'visible';
               }
             };
           }
@@ -929,7 +936,7 @@ export class FrigateEventsCard extends LitElement {
           if (video.srcObject !== remoteStream) {
             video.srcObject = remoteStream;
           }
-          video.play().catch(() => {});
+          this._playLiveVideo(video);
           this._startFreezeCanvasCapture(video);
         }
       };
@@ -1088,6 +1095,42 @@ export class FrigateEventsCard extends LitElement {
   }
 
   /**
+   * TV Bro's Android WebView refuses autoplay until a user gesture and paints
+   * its own grey play-button poster over the video element. CSS cannot hide
+   * that poster, so on TV Bro the live <video> is kept out of the DOM until
+   * the first tap.
+   */
+  private _isTvBroBrowser(): boolean {
+    if (this._tvBroBrowser === undefined) {
+      try {
+        this._tvBroBrowser = /TV\s*Bro/i.test(String(navigator.userAgent || ''));
+      } catch (_) {
+        this._tvBroBrowser = false;
+      }
+    }
+    return this._tvBroBrowser;
+  }
+
+  private _shouldSuppressLiveVideo(): boolean {
+    return this._liveAutoplayBlocked || (this._isTvBroBrowser() && !this._liveUserActivated);
+  }
+
+  private _playLiveVideo(videoEl?: HTMLVideoElement | null): void {
+    const video = videoEl ?? this._liveVideoEl;
+    if (!video) return;
+    const attempt = video.play();
+    if (attempt && typeof attempt.catch === 'function') {
+      attempt.catch((err: DOMException) => {
+        if (err?.name === 'NotAllowedError') {
+          // The browser blocked autoplay. Drop the video element so its
+          // native poster (the big grey play button) cannot be painted.
+          this._liveAutoplayBlocked = true;
+        }
+      });
+    }
+  }
+
+  /**
    * Handle clicking the live view video to toggle fullscreen.
    */
   private _handleLiveViewClick(e: Event): void {
@@ -1101,7 +1144,32 @@ export class FrigateEventsCard extends LitElement {
       return;
     }
     const container = e.currentTarget as HTMLElement;
+
+    // No video is mounted while autoplay is blocked (TV Bro). This tap is the
+    // user gesture that lets us mount it and start playback.
+    if (this._shouldSuppressLiveVideo()) {
+      this._liveAutoplayBlocked = false;
+      this._liveUserActivated = true;
+      this.updateComplete.then(() => {
+        if (!this.isConnected) return;
+        const video = this._liveVideoEl || (this.renderRoot?.querySelector('.live-view-video') as HTMLVideoElement | null);
+        if (video) {
+          if (this._remoteStream && video.srcObject !== this._remoteStream) {
+            video.srcObject = this._remoteStream;
+          }
+          this._playLiveVideo(video);
+        }
+      });
+      return;
+    }
+
     const videoEl = this._liveVideoEl || container.querySelector('video');
+
+    // A tap counts as a user gesture, which lets TV browsers that block
+    // autoplay (TV Bro, Android WebView) start the stream on demand.
+    if (videoEl?.paused) {
+      this._playLiveVideo(videoEl);
+    }
 
     // Check if element or document is currently fullscreen
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1129,7 +1197,7 @@ export class FrigateEventsCard extends LitElement {
       }
 
       if (videoEl && videoEl.paused) {
-        videoEl.play().catch(() => {});
+        this._playLiveVideo(videoEl);
       }
       return;
     }
@@ -1242,14 +1310,14 @@ export class FrigateEventsCard extends LitElement {
           videoEl.srcObject = this._remoteStream;
         }
         if (videoEl.paused) {
-          videoEl.play().catch(() => {});
+          this._playLiveVideo(videoEl);
         }
         setTimeout(() => {
           if (videoEl && this._remoteStream && videoEl.srcObject !== this._remoteStream) {
             videoEl.srcObject = this._remoteStream;
           }
           if (videoEl?.paused) {
-            videoEl.play().catch(() => {});
+            this._playLiveVideo(videoEl);
           }
         }, 150);
       }
@@ -9302,6 +9370,8 @@ export class FrigateEventsCard extends LitElement {
                   this._config.live_view_show_mute,
                   this._config.live_view_mute_position,
                   this._isLiveMuted,
+                  this._liveAutoplayBlocked,
+                  this._liveUserActivated,
                   this._liveViewError,
                   this._isFrigateOffline()
                 ],
@@ -9339,6 +9409,11 @@ export class FrigateEventsCard extends LitElement {
     if (videoEl) {
       videoEl.muted = this._isLiveMuted;
       if (videoEl !== prevVideoEl) {
+        // Keep the element (and Android WebView's default video poster) hidden
+        // until a real frame is playing. Otherwise TV Bro paints its big grey
+        // play button over the live view on every refresh.
+        videoEl.style.opacity = '0';
+        videoEl.style.visibility = 'hidden';
         videoEl.addEventListener('waiting', () => {
           this._diagLog('Live video WAITING (buffering)');
           videoEl.style.opacity = '0';
@@ -9349,11 +9424,16 @@ export class FrigateEventsCard extends LitElement {
         });
         videoEl.addEventListener('playing', () => {
           this._diagLog('Live video PLAYING');
+          this._liveAutoplayBlocked = false;
           videoEl.style.opacity = '1';
+          videoEl.style.visibility = 'visible';
         });
         videoEl.addEventListener('timeupdate', () => {
           if (videoEl.style.opacity === '0') {
             videoEl.style.opacity = '1';
+          }
+          if (videoEl.style.visibility === 'hidden') {
+            videoEl.style.visibility = 'visible';
           }
         });
         if (this._boundFullscreenHandler) {
@@ -9376,7 +9456,7 @@ export class FrigateEventsCard extends LitElement {
       videoEl.srcObject !== this._remoteStream
     ) {
       videoEl.srcObject = this._remoteStream;
-      videoEl.play().catch(() => {});
+      this._playLiveVideo(videoEl);
     }
   };
 
@@ -9444,7 +9524,7 @@ export class FrigateEventsCard extends LitElement {
     if (this._liveVideoEl) {
       this._liveVideoEl.muted = this._isLiveMuted;
       if (!this._isLiveMuted && this._liveVideoEl.paused) {
-        this._liveVideoEl.play().catch(() => {});
+        this._playLiveVideo(this._liveVideoEl);
       }
     }
   }
@@ -9493,26 +9573,31 @@ export class FrigateEventsCard extends LitElement {
           class="live-view-freeze-canvas"
           ${ref(this._handleFreezeCanvasRef)}
         ></canvas>
-        <video
-          class="live-view-video"
-          autoplay
-          .muted=${this._isLiveMuted}
-          ?muted=${this._isLiveMuted}
-          playsinline
-          webkit-playsinline
-          disablepictureinpicture
-          disableremoteplayback
-          @click=${(e: Event) => {
-            e.preventDefault();
-          }}
-          @pause=${(e: Event) => {
-            const v = e.target as HTMLVideoElement;
-            if (v && this._remoteStream && v.paused) {
-              v.play().catch(() => {});
-            }
-          }}
-          ${ref(this._handleLiveVideoRef)}
-        ></video>
+        ${this._shouldSuppressLiveVideo()
+          ? ''
+          : html`
+              <video
+                class="live-view-video"
+                autoplay
+                .muted=${this._isLiveMuted}
+                ?muted=${this._isLiveMuted}
+                playsinline
+                webkit-playsinline
+                disablepictureinpicture
+                disableremoteplayback
+                poster="data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw=="
+                @click=${(e: Event) => {
+                  e.preventDefault();
+                }}
+                @pause=${(e: Event) => {
+                  const v = e.target as HTMLVideoElement;
+                  if (v && this._remoteStream && v.paused) {
+                    this._playLiveVideo(v);
+                  }
+                }}
+                ${ref(this._handleLiveVideoRef)}
+              ></video>
+            `}
         ${showMuteBtn
           ? html`
               <button
@@ -9609,6 +9694,7 @@ export class FrigateEventsCard extends LitElement {
                    .muted=${true}
                    loop
                    playsinline
+                   poster="data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw=="
                    @loadedmetadata=${(ev: Event) => this._handleHoverVideoMetadata(ev, event)}
                    @timeupdate=${(ev: Event) => this._handleVideoTimeUpdate(ev, event)}
                    style="position: absolute; top: 0; left: 0; z-index: 2; width: 100%; height: 100%; object-fit: cover; pointer-events: none;"
@@ -9843,7 +9929,7 @@ export class FrigateEventsCard extends LitElement {
       .live-view-container {
         width: 100%;
         aspect-ratio: 16 / 9;
-        background: #1c1c1c;
+        background: var(--ha-card-background, var(--card-background-color, #1c1c1c));
         border-radius: 12px;
         overflow: hidden;
         margin-bottom: 8px;
@@ -9877,6 +9963,8 @@ export class FrigateEventsCard extends LitElement {
         object-fit: contain;
         display: block;
         background-color: transparent !important;
+        opacity: 0;
+        visibility: hidden;
         transform: translateZ(0);
         will-change: transform, opacity;
         transition: opacity 0.05s ease-out;
