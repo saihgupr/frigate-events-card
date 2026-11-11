@@ -10,7 +10,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.6.47';
+const CARD_VERSION = '2.6.49';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -9788,6 +9788,7 @@ export class FrigateEventsCard extends LitElement {
         border-radius: 12px;
         overflow: hidden;
         background: var(--secondary-background-color);
+        box-shadow: var(--ha-card-box-shadow, 0 2px 4px rgba(0, 0, 0, 0.1));
         transition: transform 0.2s, opacity 0.2s;
         -webkit-touch-callout: none !important;
         -webkit-user-select: none !important;

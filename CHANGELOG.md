@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+- Fixed: **Event tiles lost their shadow in light mode** — only the empty placeholders had one, so the grid looked flat as soon as real snapshots loaded. Event tiles now use the same theme card shadow.
 - Fixed: **Expired masks prune themselves again** — the integration was building `ServiceCall` objects by hand for every automatic removal (expiration timers, the 30-second sync prune pass, the config audit pass, and the card's "Prune expired" button). Home Assistant's `ServiceCall` now takes `hass` as its first argument, so those calls arrived with an empty payload and `remove_mask` bailed out at its empty-id guard, which is why an expired mask sat there until you removed it by hand. Internal callers now go through the removal helper directly, so masks that expire while Frigate is off get queued and then cleaned out of Frigate's config as soon as it comes back.
 - Fixed: **Adopted masks can expire** — a mask adopted from Frigate's config (no persisted expiry) stayed marked as an orphan after you gave it a duration, so the prune pass always skipped it. Picking a finite duration now clears that flag.
 - Added: **`event_click_action` option (issue #24)** — set which modal opens when clicking an event: `timeline` (default, current behavior) or `detail`. Takes precedence over legacy `timeline_on_click: false`, which keeps working as `detail` for backward compatibility.
