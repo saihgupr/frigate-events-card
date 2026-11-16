@@ -59,6 +59,8 @@ interface FrigateEventsCardConfig extends LovelaceCardConfig {
   camera?: string;
   labels?: string[];
   zones?: string[];
+  dedupe_events?: boolean;          // default: false — collapse near-simultaneous events per camera and label
+  dedupe_window_seconds?: number;   // default: 5 — max start-time gap for two events to count as duplicates
   show_label?: boolean;
   show_timestamp?: boolean;
   show_date?: boolean;
@@ -114,6 +116,8 @@ interface FrigateEventsCardConfig extends LovelaceCardConfig {
 const DEFAULT_CONFIG: Partial<FrigateEventsCardConfig> = {
   frigate_client_id: 'frigate',
   event_count: 5,
+  dedupe_events: false,
+  dedupe_window_seconds: 5,
   show_label: true,
   show_timestamp: true,
   show_date: false,
@@ -1495,6 +1499,36 @@ export class FrigateEventsCard extends LitElement {
     return true;
   }
 
+  /**
+   * Collapse events Frigate logged separately for the same moment, such as two
+   * people detected next to each other on one camera. Events are grouped by
+   * camera and label, and the earliest event in each group is kept.
+   */
+  private _dedupeEvents(events: FrigateEvent[]): FrigateEvent[] {
+    if (!this._config?.dedupe_events) return events;
+
+    const configuredWindow = Number(this._config.dedupe_window_seconds ?? 5);
+    if (!Number.isFinite(configuredWindow) || configuredWindow < 0) return events;
+    const windowMs = configuredWindow * 1000;
+
+    const ordered = [...events].sort((a, b) => (a.start_time || 0) - (b.start_time || 0));
+    const lastKeptStart = new Map<string, number>();
+    const kept: FrigateEvent[] = [];
+
+    for (const event of ordered) {
+      const key = `${event.camera}\u0000${event.label}`;
+      const start = event.start_time || 0;
+      const previousStart = lastKeptStart.get(key);
+      if (previousStart !== undefined && start - previousStart <= windowMs) {
+        continue;
+      }
+      lastKeptStart.set(key, start);
+      kept.push(event);
+    }
+
+    return kept.sort((a, b) => (b.start_time || 0) - (a.start_time || 0));
+  }
+
   private async _loadEvents(): Promise<void> {
     if (!this.hass || !this._config) return;
 
@@ -1515,13 +1549,17 @@ export class FrigateEventsCard extends LitElement {
       const limit = isScroll ? scrollLimit : visibleCount;
       const offset = this._config.offset || 0;
       const fetchLimit = limit + offset;
+      // Deduplication drops tiles, so ask for extra events to keep the gallery full.
+      const requestLimit = this._config.dedupe_events
+        ? Math.max(fetchLimit, Math.min(fetchLimit * 2, 200))
+        : fetchLimit;
 
       const events = await getEvents(this.hass, {
         instance_id: this._config.frigate_client_id,
         cameras: this._config.cameras,
         labels: this._config.labels,
         zones: this._config.zones,
-        limit: fetchLimit,
+        limit: requestLimit,
         has_snapshot: true,
       });
 
@@ -1532,8 +1570,9 @@ export class FrigateEventsCard extends LitElement {
       }
 
       const sorted = events.sort((a, b) => (b.start_time || 0) - (a.start_time || 0));
-      if (!this._areEventsEqual(this._events, sorted)) {
-        this._events = sorted;
+      const visible = this._dedupeEvents(sorted).slice(0, fetchLimit);
+      if (!this._areEventsEqual(this._events, visible)) {
+        this._events = visible;
       }
     } catch (e: any) {
       console.warn('Temporary connection issue loading Frigate events:', e);

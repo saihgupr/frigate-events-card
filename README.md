@@ -426,6 +426,8 @@ The most common settings to get you started:
 | `cameras` | list | all | Filter to specific cameras |
 | `labels` | list | all | Filter to specific labels (person, car, etc.) |
 | `zones` | list | all | Filter to specific Frigate zones |
+| `dedupe_events` | boolean | `false` | Collapse events Frigate logged separately for the same moment, such as two people detected next to each other on one camera. Events are grouped by camera and label, and the earliest event in each group is kept. The Timeline still shows every event. |
+| `dedupe_window_seconds` | number | `5` | How many seconds apart two events on the same camera and label can start and still count as duplicates. Only used when `dedupe_events` is on. |
 | `video` | boolean | `true` | Whether to play video clips instead of snapshots in the gallery and modal. |
 | `video_on_hover` | boolean | `true` | Play video clips automatically when hovering over an event snapshot in the gallery. |
 | `scroll` | boolean | `true` | Enable horizontal scrolling gallery. When enabled, `event_count` sets the visible thumbnail count at once. |

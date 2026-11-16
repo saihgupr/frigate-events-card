@@ -19,6 +19,7 @@
 - Added: **Edit masks in the Temporary Mask Manager** — each active mask now has an Edit button opening an inline editor with a draggable-polygon preview over the camera snapshot, Expand/Shrink/Reset size controls, and a label field. Saving updates the mask geometry in Frigate via `add_mask`.
 - Improved: `add_mask` service now converts normalized polygons to pixel coordinates when the target Frigate config uses the pre-0.14 list format. Previously, saving an edited mask on Frigate 0.13 wrote decimal coordinates the old Frigate can't parse, which prevented it from starting.
 - Improved: `add_mask` service docs now list the `polygon` and `label` fields used by mask editing.
+- Added: **Optional event deduplication (`dedupe_events`, issue #18)** — Frigate logs a separate event for every object it tracks, so two people walking up together produce two tiles of the same moment. Turning this on collapses events on the same camera and label whose start times fall within `dedupe_window_seconds` (default 5), keeping the earliest one. The card fetches extra events while deduplication is on so the gallery stays full, and the Timeline still shows every event.
 
 ## [2.6.2] - 2026-10-27
 - Added: **Mobile, tablet and TV timeline** — the timeline now picks a layout for the device: video first with the scrubber sitting under it on phones, a compact popup card on tablets, and D-pad friendly controls on Android TV and TVBro. Desktop is unchanged.
