@@ -264,10 +264,11 @@ The Timeline modal plays continuous recordings from Frigate 0.13+ VOD, so you ca
 
 - **Interactive scrubber**: Drag anywhere on the track to seek. The current time is shown above the playhead, with the window start and end times on either side.
 - **Event markers**: Color-coded markers highlight detections across the selected window, making it easy to jump between moments.
-- **Start picker**: Click `Start` to step the window start by day, hour, or minute. It opens a small in-card picker instead of the browser's date/time calendar, shows `Today` or `Yesterday` with the time, and keeps the quick jumps one click away.
-- **Quick jumps**: Choose `Now`, `-15m`, `-1h`, `-3h`, `-12h`, or `Start of Day` to move the playhead instantly.
+- **Start picker**: Click `Start` to type or step the window start by day, hour, or minute. It opens a small in-card picker instead of the browser's date/time calendar, shows `Today` or `Yesterday` with the time, and keeps the quick jumps one click away.
+- **Quick jumps**: Choose `Now`, `-15m`, `-1h`, `-3h`, `-12h`, or `Start of Day` to jump relative to the current time, not the playhead. `-1h` always lands one hour before now, wherever the timeline happens to be.
 - **Window size**: Switch between `15m`, `30m`, `1h`, `2h`, `3h`, and `24h` recording windows.
-- **Fine controls**: Nudge playback with `-5m`, `-1m`, `-30s`, `+30s`, `+1m`, and `+5m` buttons. They move by wall-clock time, cross recording gaps and window edges, and stop at the start of footage or now.
+- **Opening window**: Opening from an event uses 30 minutes on desktop and 15 minutes on phone/tablet/TV. Opening without an event, such as from the live feed, starts with the last 24 hours.
+- **Fine controls**: Nudge playback with `-1m`, `-30s`, `-10s`, `+10s`, `+30s`, and `+1m` buttons. They move by wall-clock time, cross recording gaps and window edges, and stop at the start of footage or now.
 - **Variable speed**: Use the `-`/`+` controls to step from `0.5x` up to `4096x` (speeds above `16x` use frame stepping), with gapless auto-advance across recording chunks.
 
 > **Note:** Timeline playback requires the Frigate integration and access to Frigate's VOD recordings. Streams are signed automatically, so HLS playback works on iOS Safari, the Home Assistant Companion App, and authenticated reverse proxies.
@@ -467,7 +468,7 @@ The most common settings to get you started:
 | `show_timeline` | boolean | `true` | Enable the continuous playback Timeline modal. |
 | `event_click_action` | string | `timeline` | Which modal opens when clicking an event: `timeline` or `detail`. Takes precedence over legacy `timeline_on_click`. |
 | `timeline_on_click` | boolean | `true` | Legacy: `false` opens details instead of Timeline (same as `event_click_action: detail`). Open the Timeline directly when clicking an event thumbnail (requires `video` and `show_timeline`). |
-| `timeline_default_window_hours` | number | `1` | Default recording window shown when the Timeline opens. |
+| `timeline_default_window_hours` | number | `0.5` desktop / `0.25` mobile | Default window when opening from an event. When unset, desktop uses 30 minutes and phone/tablet/TV uses 15 minutes. Opening without an event always starts at 24 hours. |
 | `timeline_event_seek_offset` | number \| map | `video_start_skip_seconds` | Seconds added/subtracted when seeking to an event in the Timeline (e.g. `5` or `-5`). Supports per-label/zone map. When unset, the Timeline reuses `video_start_skip_seconds` so it starts where event clips start instead of on the lead-in; set `0` to start exactly on Frigate's reported event start. |
 | `timeline_show_mute` | boolean | `true` | Show the mute toggle button on hover over the Timeline video player. Setting `show_mute: false` (or `live_view_show_mute: false`) also hides it; an explicit `timeline_show_mute` wins. |
 

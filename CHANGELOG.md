@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.7.2] - 2026-11-16
+- Fixed: **Timeline quick jumps now use the current time** — `-15m`, `-1h`, `-3h`, and `-12h` moved relative to the playhead, so the same button landed in a different place depending on where the timeline was sitting. They now always jump to that amount before the current wall-clock time, and `Start of day` goes to the first footage from today.
+- Improved: **Finer timeline skips** — the transport now uses `-1m`, `-30s`, `-10s`, `+10s`, `+30s`, and `+1m` instead of the coarse `±5m` buttons, so it is easier to nudge a few seconds without overshooting.
+- Added: **Editable start time** — the hour and minute values in the Start picker can be typed directly, with a one-click AM/PM toggle. The steppers still work.
+- Improved: **Timeline controls restyled** — the Start and Window controls, scrubber, transport, and speed stepper now sit in grouped tonal panels that match the dashboard's rounded card language. The scrubber has a progress fill and a real round handle.
+- Changed: **Timeline open defaults** — opening from an event now uses a 30-minute window on desktop while phone/tablet/TV keep 15 minutes. Opening without an event, such as from the live feed, starts with the last 24 hours.
+
 ## [2.7.1] - 2026-11-16
 - Release: **Event click behavior, TV live view polish, and mask cleanup** — adds `event_click_action`, drag-to-edit masks, TV theater mode, and fixes expired masks, light-mode placeholders, and live-view flashes.
 - Fixed: **Timeline Start time opened a native calendar** — the old `datetime-local` field is gone. A `Start` chip opens an in-card picker with day arrows, hour and minute steppers, and the quick jumps, so you can set an exact minute without a browser calendar popping up. The chip reads `Today 8:37 AM` or `Yesterday 11:39 PM` when the window crosses a day.
