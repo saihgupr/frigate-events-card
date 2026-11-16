@@ -10,7 +10,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.7.0';
+const CARD_VERSION = '2.7.1';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -277,6 +277,17 @@ export class FrigateEventsCard extends LitElement {
   private _timelineAdvanceTimeout?: number;
   private _timelineSlotTransitionTimeout?: number;
   private _timelineWindowRequestId = 0;
+  // Start-time popover draft and per-camera earliest-footage cache used by the
+  // skip controls so a backward skip never walks past the oldest recording.
+  private _timelineStartDraftTs = 0;
+  private _timelineStartOutsideHandler?: (e: PointerEvent) => void;
+  private _timelineEarliestFootageTs = 0;
+  private _timelineSkipStateKey = '';
+  // Requested wall-clock position while a chunk is still buffering, so rapid
+  // skip presses accumulate instead of reading video.currentTime = 0.
+  private _timelinePendingSeekTs = 0;
+  private _timelinePendingSeekUntil = 0;
+  private _timelineKeyDownHandler?: (e: KeyboardEvent) => void;
 
 
   /**
@@ -2831,6 +2842,13 @@ export class FrigateEventsCard extends LitElement {
         border-color: var(--mm-accent);
       }
 
+      .mask-edit-hint {
+        font-size: 11px;
+        line-height: 1.4;
+        color: var(--mm-text-2);
+        margin-top: 2px;
+      }
+
       .mask-edit-actions {
         display: flex;
         justify-content: flex-end;
@@ -3124,7 +3142,12 @@ export class FrigateEventsCard extends LitElement {
       .timeline-transport-btn:focus-visible,
       .timeline-stepper-btn:focus-visible,
       .timeline-speed-display:focus-visible,
-      .timeline-datetime-input:focus-visible,
+      .timeline-start-chip:focus-visible,
+      .timeline-start-popover:focus-visible,
+      .timeline-start-day-btn:focus-visible,
+      .timeline-start-step-btn:focus-visible,
+      .timeline-start-apply:focus-visible,
+      .timeline-start-cancel:focus-visible,
       .timeline-mute-btn:focus-visible {
         outline: 2px solid var(--tl-accent);
         outline-offset: 2px;
@@ -3134,12 +3157,13 @@ export class FrigateEventsCard extends LitElement {
       .timeline-controls-bar {
         display: flex;
         flex-wrap: wrap;
-        align-items: flex-end;
+        align-items: center;
         justify-content: space-between;
-        gap: 12px 24px;
+        gap: 10px 20px;
       }
 
       .timeline-datetime-group {
+        position: relative;
         display: flex;
         align-items: center;
         gap: 8px;
@@ -3147,31 +3171,304 @@ export class FrigateEventsCard extends LitElement {
       }
 
       .timeline-datetime-label {
-        font-size: 13px;
+        font-size: 12px;
+        font-weight: 500;
         color: var(--tl-text-2);
       }
 
-      .timeline-datetime-input {
-        background: var(--tl-fill);
-        border: 1px solid transparent;
-        color: var(--tl-text);
-        color-scheme: dark light;
-        height: 32px;
+      /* Start-of-window chip. Reads "Start 7:39 AM" and opens the picker. */
+      .timeline-start-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        height: 34px;
         padding: 0 10px;
-        border-radius: 8px;
-        font-size: 13px;
+        border: 1px solid transparent;
+        border-radius: 10px;
+        background: var(--tl-fill);
+        color: var(--tl-text);
         font-family: inherit;
-        box-sizing: border-box;
-        transition: background 0.15s ease;
+        font-size: 13px;
+        line-height: 1;
+        cursor: pointer;
+        transition: background 0.15s ease, border-color 0.15s ease;
       }
 
-      .timeline-datetime-input:hover {
+      .timeline-start-chip:hover {
         background: var(--tl-fill-hover);
       }
 
-      .timeline-datetime-input:focus {
-        outline: none;
+      .timeline-datetime-group.is-open .timeline-start-chip {
         border-color: var(--tl-accent);
+        background: var(--tl-fill-hover);
+      }
+
+      .timeline-start-chip-icon {
+        width: 15px;
+        height: 15px;
+        flex: 0 0 auto;
+        fill: currentColor;
+        opacity: 0.65;
+        pointer-events: none;
+      }
+
+      .timeline-start-chip-label {
+        color: var(--tl-text-2);
+        font-weight: 500;
+      }
+
+      .timeline-start-chip-value {
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+      }
+
+      .timeline-start-chip-caret {
+        width: 12px;
+        height: 12px;
+        flex: 0 0 auto;
+        margin-left: 1px;
+        fill: currentColor;
+        opacity: 0.5;
+        pointer-events: none;
+        transition: transform 0.15s ease;
+      }
+
+      .timeline-datetime-group.is-open .timeline-start-chip-caret {
+        transform: rotate(180deg);
+      }
+
+      /* Anchored picker. Sits inside the controls row, layered above video. */
+      .timeline-start-popover {
+        position: absolute;
+        top: calc(100% + 8px);
+        left: 0;
+        z-index: 60;
+        box-sizing: border-box;
+        width: min(320px, calc(100vw - 40px));
+        max-height: min(420px, calc(100dvh - 160px));
+        overflow-y: auto;
+        padding: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        border: 1px solid var(--tl-line);
+        border-radius: 14px;
+        background: var(--card-background-color, #1c1c1e);
+        box-shadow: 0 18px 40px rgba(0, 0, 0, 0.55);
+        animation: timeline-popover-in 0.14s ease;
+      }
+
+      .timeline-start-popover[hidden] {
+        display: none;
+      }
+
+      @keyframes timeline-popover-in {
+        from { opacity: 0; transform: translateY(-4px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+
+      .timeline-start-day-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .timeline-start-day-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 32px;
+        height: 32px;
+        flex: 0 0 auto;
+        padding: 0;
+        border: none;
+        border-radius: 9px;
+        background: var(--tl-fill);
+        color: var(--tl-text-2);
+        cursor: pointer;
+        transition: background 0.15s ease, color 0.15s ease;
+      }
+
+      .timeline-start-day-btn svg {
+        width: 18px;
+        height: 18px;
+        fill: currentColor;
+        pointer-events: none;
+      }
+
+      .timeline-start-day-btn:hover:not(:disabled) {
+        background: var(--tl-fill-hover);
+        color: var(--tl-text);
+      }
+
+      .timeline-start-day-btn:disabled {
+        opacity: 0.45;
+        cursor: default;
+      }
+
+      .timeline-start-day-label {
+        flex: 1 1 auto;
+        min-width: 0;
+        text-align: center;
+        font-size: 13px;
+        font-weight: 600;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .timeline-start-steppers {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+      }
+
+      .timeline-start-step-cell {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 2px;
+        padding: 4px;
+        border-radius: 11px;
+        background: var(--tl-fill);
+      }
+
+      .timeline-start-step-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 30px;
+        height: 40px;
+        flex: 0 0 auto;
+        padding: 0;
+        border: none;
+        border-radius: 8px;
+        background: none;
+        color: var(--tl-text-2);
+        font-family: inherit;
+        font-size: 18px;
+        font-weight: 500;
+        line-height: 1;
+        cursor: pointer;
+        transition: background 0.15s ease, color 0.15s ease;
+      }
+
+      .timeline-start-step-btn:hover:not(:disabled) {
+        background: var(--tl-fill-hover);
+        color: var(--tl-text);
+      }
+
+      .timeline-start-step-btn:disabled {
+        opacity: 0.3;
+        cursor: default;
+      }
+
+      .timeline-start-step-value {
+        flex: 1 1 auto;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 1px;
+        line-height: 1.05;
+      }
+
+      .timeline-start-step-number {
+        font-size: 19px;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .timeline-start-step-unit {
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--tl-text-2);
+      }
+
+      .timeline-start-step-unit:empty {
+        display: none;
+      }
+
+      .timeline-start-popover .timeline-quick-jumps {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        padding: 10px 0 0;
+        border-top: 1px solid var(--tl-line);
+        border-radius: 0;
+        background: none;
+        gap: 4px;
+      }
+
+      .timeline-start-popover .timeline-quick-btn {
+        width: 100%;
+        height: 30px;
+        padding: 0 4px;
+        font-size: 12px;
+        text-align: center;
+        background: var(--tl-fill);
+      }
+
+      .timeline-start-popover .timeline-quick-btn:hover {
+        background: var(--tl-fill-hover);
+      }
+
+      .timeline-start-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+
+      .timeline-start-cancel,
+      .timeline-start-apply {
+        height: 34px;
+        padding: 0 14px;
+        border: 1px solid transparent;
+        border-radius: 9px;
+        font-family: inherit;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      .timeline-start-cancel {
+        background: none;
+        color: var(--tl-text-2);
+      }
+
+      .timeline-start-cancel:hover {
+        background: var(--tl-fill-hover);
+        color: var(--tl-text);
+      }
+
+      .timeline-start-apply {
+        background: var(--tl-accent);
+        color: #ffffff;
+      }
+
+      .timeline-start-apply:hover {
+        background: color-mix(in srgb, var(--tl-accent) 85%, #000000);
+      }
+
+      .timeline-sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        clip-path: inset(50%);
+        white-space: nowrap;
+        border: 0;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .timeline-start-popover { animation: none; }
+        .timeline-start-chip-caret { transition: none; }
       }
 
       .timeline-quick-jumps,
@@ -3380,12 +3677,22 @@ export class FrigateEventsCard extends LitElement {
         display: flex;
         align-items: center;
         justify-content: space-between;
+        gap: 10px;
         font-size: 12px;
         color: var(--tl-text-2);
         font-variant-numeric: tabular-nums;
       }
 
+      .timeline-track-labels > span:first-child,
+      .timeline-track-labels > span:last-child {
+        min-width: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
       .timeline-time-badge {
+        flex: 0 0 auto;
         font-size: 13px;
         font-weight: 600;
         color: var(--tl-text);
@@ -3429,6 +3736,14 @@ export class FrigateEventsCard extends LitElement {
       .timeline-transport-btn:hover {
         background: var(--tl-fill-hover);
         color: var(--tl-text);
+      }
+
+      .timeline-transport-btn:disabled,
+      .timeline-transport-btn:disabled:hover {
+        background: none;
+        color: var(--tl-text-2);
+        opacity: 0.35;
+        cursor: default;
       }
 
       .timeline-transport-btn.play-btn {
@@ -4231,11 +4546,53 @@ export class FrigateEventsCard extends LitElement {
         gap: 10px;
       }
 
-      .frigate-timeline-modal.is-compact .timeline-settings-sheet .timeline-datetime-input,
-      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-datetime-input {
+      .frigate-timeline-modal.is-compact .timeline-settings-sheet .timeline-start-chip,
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-start-chip {
         width: 100%;
+        height: 46px;
+        padding: 0 12px;
+        font-size: 15px;
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-settings-sheet .timeline-start-chip-caret,
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-start-chip-caret {
+        margin-left: auto;
+      }
+
+      /* Inside the compact sheet / TV dialog the picker expands in place so it
+         can never be clipped by the sheet's own scroll area. */
+      .frigate-timeline-modal.is-compact .timeline-settings-sheet .timeline-start-popover,
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-start-popover {
+        position: static;
+        width: 100%;
+        max-width: none;
+        max-height: none;
+        margin-top: 2px;
+        padding: 12px;
+        border-radius: 12px;
+        background: transparent;
+        box-shadow: none;
+        animation: none;
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-settings-sheet .timeline-start-day-btn,
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-start-day-btn {
+        width: 40px;
+        height: 40px;
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-settings-sheet .timeline-start-step-btn,
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-start-step-btn {
+        width: 36px;
         height: 44px;
-        font-size: 16px;
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-settings-sheet .timeline-start-cancel,
+      .frigate-timeline-modal.is-compact .timeline-settings-sheet .timeline-start-apply,
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-start-cancel,
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-start-apply {
+        height: 44px;
+        flex: 1 1 0;
       }
 
       .frigate-timeline-modal.is-compact .timeline-settings-sheet .timeline-quick-jumps,
@@ -4494,7 +4851,11 @@ export class FrigateEventsCard extends LitElement {
       .frigate-timeline-modal.is-tv .timeline-transport-btn:focus-visible,
       .frigate-timeline-modal.is-tv .timeline-stepper-btn:focus-visible,
       .frigate-timeline-modal.is-tv .timeline-speed-display:focus-visible,
-      .frigate-timeline-modal.is-tv .timeline-datetime-input:focus-visible,
+      .frigate-timeline-modal.is-tv .timeline-start-chip:focus-visible,
+      .frigate-timeline-modal.is-tv .timeline-start-day-btn:focus-visible,
+      .frigate-timeline-modal.is-tv .timeline-start-step-btn:focus-visible,
+      .frigate-timeline-modal.is-tv .timeline-start-apply:focus-visible,
+      .frigate-timeline-modal.is-tv .timeline-start-cancel:focus-visible,
       .frigate-timeline-modal.is-tv .timeline-mute-btn:focus-visible,
       .frigate-timeline-modal.is-tv .timeline-settings-btn:focus-visible,
       .frigate-timeline-modal.is-tv .timeline-compact-topbar .frigate-events-modal-close:focus-visible,
@@ -4654,11 +5015,7 @@ export class FrigateEventsCard extends LitElement {
         min-width: 0 !important;
       }
 
-      /* Playback spans the full dialog width; Time | Window sit side by side. */
-      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-controls-bar > .timeline-sheet-section:first-child {
-        grid-column: 1 / -1 !important;
-      }
-
+      /* Time | Window sit side by side under the full-width Playback row. */
       .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-datetime-group,
       .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-window-group {
         flex-direction: column !important;
@@ -4666,10 +5023,26 @@ export class FrigateEventsCard extends LitElement {
         gap: 12px !important;
       }
 
-      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-datetime-input {
-        width: 100% !important;
-        height: 48px !important;
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-start-chip {
+        height: 52px !important;
         font-size: 16px !important;
+      }
+
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-start-day-btn {
+        width: 48px !important;
+        height: 48px !important;
+      }
+
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-start-step-btn {
+        width: 48px !important;
+        height: 52px !important;
+        font-size: 22px !important;
+      }
+
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-start-cancel,
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-start-apply {
+        height: 52px !important;
+        font-size: 15px !important;
       }
 
       .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-quick-btn,
@@ -6149,7 +6522,8 @@ export class FrigateEventsCard extends LitElement {
           </div>
           <div class="mask-edit-label-row">
             <span class="mask-control-label">Label</span>
-            <input type="text" class="mask-edit-input" data-edit-label maxlength="64" aria-label="Mask label" />
+            <input type="text" class="mask-edit-input" data-edit-label maxlength="64" placeholder="person, dog" aria-label="Mask label" />
+            <span class="mask-edit-hint">Comma-separated labels apply the same mask to each object type.</span>
           </div>
           <div class="mask-edit-actions">
             <button type="button" class="mask-edit-cancel" data-action="edit-cancel" data-mask-id="${escapeHtml(vm.maskId)}">Cancel</button>
@@ -7061,15 +7435,28 @@ export class FrigateEventsCard extends LitElement {
      ───────────────────────────────────────────────────────────── */
 
   private _getEventSeekOffset(event?: FrigateEvent): number {
-    const raw = this._config?.timeline_event_seek_offset;
-    if (raw === undefined || raw === null) return 0;
-    if (typeof raw === 'number') return raw;
-    if (typeof raw === 'string' && !isNaN(Number(raw))) return Number(raw);
-    if (typeof raw === 'object' && event) {
-      const val = this._getConfigValueForEvent(raw as Record<string, number>, event, 0);
-      return typeof val === 'number' ? val : (Number(val) || 0);
+    const configured = this._userConfig?.timeline_event_seek_offset;
+    if (configured !== undefined && configured !== null) {
+      if (typeof configured === 'number') return configured;
+      if (typeof configured === 'string' && !isNaN(Number(configured))) return Number(configured);
+      if (typeof configured === 'object' && event) {
+        const val = this._getConfigValueForEvent(configured as Record<string, number>, event, 0);
+        return typeof val === 'number' ? val : (Number(val) || 0);
+      }
+      return 0;
     }
-    return 0;
+
+    // No explicit timeline offset. Reuse the skip already tuned for event clips
+    // and hover previews, so the timeline opens closer to the visible action
+    // instead of the seconds Frigate records before it.
+    if (!event) return 0;
+    const clipSkip = this._userConfig?.video_start_skip_seconds
+      || this._userConfig?.video_start_padding;
+    if (clipSkip === undefined || clipSkip === null) return 0;
+    const resolved = this._getConfigValueForEvent(clipSkip, event, 0);
+    return typeof resolved === 'number' && Number.isFinite(resolved)
+      ? Math.max(0, resolved)
+      : 0;
   }
 
   private _getTimelineLayoutMode(): 'desktop' | 'compact' | 'tv' {
@@ -7157,30 +7544,107 @@ export class FrigateEventsCard extends LitElement {
     `;
   }
 
-  private _timelineControlsMarkup(dtValue: string, windowMinutes: number, withHeadings = false): string {
-    const timeGroup = `
+  private _timelineQuickJumpMarkup(): string {
+    return `
+      <div class="timeline-quick-jumps">
+        <button type="button" class="timeline-quick-btn" data-jump="now">Now</button>
+        <button type="button" class="timeline-quick-btn" data-jump="-15m">-15m</button>
+        <button type="button" class="timeline-quick-btn" data-jump="-1h">-1h</button>
+        <button type="button" class="timeline-quick-btn" data-jump="-3h">-3h</button>
+        <button type="button" class="timeline-quick-btn" data-jump="-12h">-12h</button>
+        <button type="button" class="timeline-quick-btn" data-jump="day-start">Start of day</button>
+      </div>
+    `;
+  }
+
+  /**
+   * Start-of-window control. A chip reads the current start in plain language
+   * ("Start 7:39 AM", "Start Yesterday 11:39 PM") and opens a small picker with
+   * day stepping, hour/minute steppers and the quick jumps. No native date or
+   * time picker is involved, so no calendar popup can appear.
+   */
+  private _timelineStartControlMarkup(includeQuickJumps: boolean): string {
+    const startTs = this._timelineStartTs;
+    const { hourText, meridiem } = this._timelineHourParts(startTs);
+    const minuteText = new Date(startTs * 1000).getMinutes().toLocaleString(undefined, { minimumIntegerDigits: 2, useGrouping: false });
+    return `
       <div class="timeline-datetime-group">
-        <span class="timeline-datetime-label">Start time</span>
-        <input type="datetime-local" class="timeline-datetime-input" value="${dtValue}" />
-        <div class="timeline-quick-jumps">
-          <button class="timeline-quick-btn" data-jump="now">Now</button>
-          <button class="timeline-quick-btn" data-jump="-15m">-15m</button>
-          <button class="timeline-quick-btn" data-jump="-1h">-1h</button>
-          <button class="timeline-quick-btn" data-jump="-3h">-3h</button>
-          <button class="timeline-quick-btn" data-jump="-12h">-12h</button>
-          <button class="timeline-quick-btn" data-jump="day-start">Start of day</button>
+        <button
+          type="button"
+          class="timeline-start-chip"
+          data-action="toggle-start-popover"
+          aria-haspopup="dialog"
+          aria-expanded="false"
+          aria-controls="timeline-start-popover"
+          aria-label="Change window start time. Starts ${escapeHtml(this._formatTimelineStartFull(startTs))}"
+          title="Window starts ${escapeHtml(this._formatTimelineStartFull(startTs))}"
+        >
+          <svg class="timeline-start-chip-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12,20A8,8 0 0,1 4,12A8,8 0 0,1 12,4A8,8 0 0,1 20,12A8,8 0 0,1 12,20M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12.5,7V12.25L17,14.92L16.25,16.15L11,13V7H12.5Z"/></svg>
+          <span class="timeline-start-chip-label">Start</span>
+          <span class="timeline-start-chip-value" data-timeline-start-summary>${escapeHtml(this._formatTimelineStartSummary(startTs))}</span>
+          <svg class="timeline-start-chip-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="M7.41,8.58L12,13.17L16.59,8.58L18,10L12,16L6,10L7.41,8.58Z"/></svg>
+        </button>
+        <div
+          class="timeline-start-popover"
+          id="timeline-start-popover"
+          role="dialog"
+          aria-label="Change window start time"
+          aria-describedby="timeline-start-live"
+          tabindex="-1"
+          hidden
+        >
+          <div class="timeline-start-day-row">
+            <button type="button" class="timeline-start-day-btn" data-start-day="-1" title="Previous day" aria-label="Previous day">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.41,16.58L10.83,12L15.41,7.41L14,6L8,12L14,18L15.41,16.58Z"/></svg>
+            </button>
+            <span class="timeline-start-day-label" data-start-day-label>Today</span>
+            <button type="button" class="timeline-start-day-btn" data-start-day="1" title="Next day" aria-label="Next day">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z"/></svg>
+            </button>
+          </div>
+          <div class="timeline-start-steppers">
+            <div class="timeline-start-step-cell" role="group" aria-label="Hour">
+              <button type="button" class="timeline-start-step-btn" data-start-step="hour" data-step="-1" title="One hour earlier" aria-label="One hour earlier">−</button>
+              <div class="timeline-start-step-value">
+                <span class="timeline-start-step-number" data-start-hour>${escapeHtml(hourText)}</span>
+                <span class="timeline-start-step-unit" data-start-meridiem>${escapeHtml(meridiem)}</span>
+              </div>
+              <button type="button" class="timeline-start-step-btn" data-start-step="hour" data-step="1" title="One hour later" aria-label="One hour later">+</button>
+            </div>
+            <div class="timeline-start-step-cell" role="group" aria-label="Minutes">
+              <button type="button" class="timeline-start-step-btn" data-start-step="minute" data-step="-1" title="One minute earlier" aria-label="One minute earlier">−</button>
+              <div class="timeline-start-step-value">
+                <span class="timeline-start-step-number" data-start-minute>${minuteText}</span>
+                <span class="timeline-start-step-unit">min</span>
+              </div>
+              <button type="button" class="timeline-start-step-btn" data-start-step="minute" data-step="1" title="One minute later" aria-label="One minute later">+</button>
+            </div>
+          </div>
+          ${includeQuickJumps ? this._timelineQuickJumpMarkup() : ''}
+          <div class="timeline-start-actions">
+            <button type="button" class="timeline-start-cancel" data-action="close-start-popover">Cancel</button>
+            <button type="button" class="timeline-start-apply" data-action="apply-start">Go</button>
+          </div>
+          <span class="timeline-sr-only" id="timeline-start-live" data-start-live aria-live="polite"></span>
         </div>
       </div>
     `;
+  }
+
+  private _timelineControlsMarkup(windowMinutes: number, withHeadings = false): string {
+    // Desktop keeps the quick jumps inside the picker; the compact/TV sheet
+    // shows them directly so a jump stays one tap away.
+    const timeGroup = this._timelineStartControlMarkup(!withHeadings);
     const windowGroup = `
       <div class="timeline-window-group">
         <span class="timeline-datetime-label">Window</span>
         <div class="timeline-window-pills">
-          <button class="timeline-window-pill ${windowMinutes === 15 ? 'active' : ''}" data-window="15">15m</button>
-          <button class="timeline-window-pill ${windowMinutes === 30 ? 'active' : ''}" data-window="30">30m</button>
-          <button class="timeline-window-pill ${windowMinutes === 60 ? 'active' : ''}" data-window="60">1h</button>
-          <button class="timeline-window-pill ${windowMinutes === 180 ? 'active' : ''}" data-window="180">3h</button>
-          <button class="timeline-window-pill ${windowMinutes === 1440 ? 'active' : ''}" data-window="1440">24h</button>
+          <button type="button" class="timeline-window-pill ${windowMinutes === 15 ? 'active' : ''}" data-window="15" aria-pressed="${windowMinutes === 15}">15m</button>
+          <button type="button" class="timeline-window-pill ${windowMinutes === 30 ? 'active' : ''}" data-window="30" aria-pressed="${windowMinutes === 30}">30m</button>
+          <button type="button" class="timeline-window-pill ${windowMinutes === 60 ? 'active' : ''}" data-window="60" aria-pressed="${windowMinutes === 60}">1h</button>
+          <button type="button" class="timeline-window-pill ${windowMinutes === 120 ? 'active' : ''}" data-window="120" aria-pressed="${windowMinutes === 120}">2h</button>
+          <button type="button" class="timeline-window-pill ${windowMinutes === 180 ? 'active' : ''}" data-window="180" aria-pressed="${windowMinutes === 180}">3h</button>
+          <button type="button" class="timeline-window-pill ${windowMinutes === 1440 ? 'active' : ''}" data-window="1440" aria-pressed="${windowMinutes === 1440}">24h</button>
         </div>
       </div>
     `;
@@ -7198,6 +7662,7 @@ export class FrigateEventsCard extends LitElement {
         <div class="timeline-sheet-section">
           <div class="timeline-sheet-heading">Time</div>
           ${timeGroup}
+          ${this._timelineQuickJumpMarkup()}
         </div>
 
         <div class="timeline-sheet-section">
@@ -7243,7 +7708,7 @@ export class FrigateEventsCard extends LitElement {
     `;
   }
 
-  private _timelineScrubberMarkup(startDate: Date, endDate: Date, enhancedA11y = false): string {
+  private _timelineScrubberMarkup(startTs: number, endTs: number, enhancedA11y = false): string {
     const a11y = enhancedA11y
       ? ` tabindex="0" role="slider" aria-label="Timeline scrubber" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"`
       : '';
@@ -7254,9 +7719,9 @@ export class FrigateEventsCard extends LitElement {
           <div class="timeline-playhead"></div>
         </div>
         <div class="timeline-track-labels">
-          <span>${startDate.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}</span>
+          <span>${escapeHtml(this._formatTimelineAxisLabel(startTs))}</span>
           <span class="timeline-time-badge" data-timeline-current-time>--:--:--</span>
-          <span>${endDate.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}</span>
+          <span>${escapeHtml(this._formatTimelineAxisLabel(endTs))}</span>
         </div>
       </div>
     `;
@@ -7323,6 +7788,11 @@ export class FrigateEventsCard extends LitElement {
       ? 15 * 60
       : configuredDuration;
     this._timelineWindowDurationSec = duration;
+    this._timelineEarliestFootageTs = 0;
+    this._timelineSkipStateKey = '';
+    this._timelineStartDraftTs = 0;
+    this._timelinePendingSeekTs = 0;
+    this._timelinePendingSeekUntil = 0;
 
     let seekOffset = this._getEventSeekOffset(initialEvent);
 
@@ -7410,27 +7880,37 @@ export class FrigateEventsCard extends LitElement {
       }
       if (e.key === 'Escape') {
         const c = this._timelineContainer;
+        if (c && c.querySelector('.timeline-datetime-group.is-open')) {
+          e.stopPropagation();
+          this._closeTimelineStartPopover(true);
+          return;
+        }
         if (c && c.classList.contains('settings-open')) {
           c.classList.remove('settings-open');
           const settingsBtn = c.querySelector('[data-action="toggle-settings"]') as HTMLElement | null;
           settingsBtn?.setAttribute('aria-expanded', 'false');
+          this._closeTimelineStartPopover(false);
           e.stopPropagation();
           return;
         }
         this._removeTimelineModal();
-        window.removeEventListener('keydown', onKeyDown);
       } else if (e.code === 'Space' || e.key === ' ') {
         const target = e.target as HTMLElement | null;
         if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
           return;
         }
-        // TV: a focused button already activates natively — skip the global
-        // toggle so Space/Enter doesn't double-toggle play/pause.
-        if (isTvKeys && target && target.tagName === 'BUTTON') return;
+        // A focused button (transport, quick jump, start picker) already
+        // activates natively on Space. Skip the global toggle so the key never
+        // double-fires or blocks the button.
+        if (target && target.tagName === 'BUTTON') return;
         e.preventDefault();
         this._toggleTimelinePlayPause();
       }
     };
+    if (this._timelineKeyDownHandler) {
+      window.removeEventListener('keydown', this._timelineKeyDownHandler);
+    }
+    this._timelineKeyDownHandler = onKeyDown;
     window.addEventListener('keydown', onKeyDown);
 
     document.body.appendChild(container);
@@ -7488,7 +7968,7 @@ export class FrigateEventsCard extends LitElement {
 
     // If play is triggered while sitting at the end of the loaded VOD chunk,
     // page to the next chunk (or next window) instead of doing nothing.
-    if (v.currentTime >= maxSeek && v.paused) {
+    if (v.currentTime >= maxSeek && v.paused && !this._timelinePendingSeekTs) {
       this._advanceToNextTimelineWindow();
       return;
     }
@@ -7692,7 +8172,7 @@ export class FrigateEventsCard extends LitElement {
         const maxSeek = (Number.isFinite(v.duration) && v.duration > 0)
           ? Math.max(0, v.duration - 0.5)
           : duration;
-        if (v.currentTime >= maxSeek) {
+        if (v.currentTime >= maxSeek && !this._timelinePendingSeekTs && !this._isTimelineStartPopoverOpen()) {
           this._clearTimelineSpeedInterval();
           this._updateTimelinePlayheadUI();
           this._advanceToNextTimelineWindow();
@@ -7706,6 +8186,16 @@ export class FrigateEventsCard extends LitElement {
   }
 
   private _removeTimelineModal(): void {
+    if (this._timelineKeyDownHandler) {
+      window.removeEventListener('keydown', this._timelineKeyDownHandler);
+      this._timelineKeyDownHandler = undefined;
+    }
+    this._closeTimelineStartPopover(false);
+    this._timelineStartDraftTs = 0;
+    this._timelineEarliestFootageTs = 0;
+    this._timelineSkipStateKey = '';
+    this._timelinePendingSeekTs = 0;
+    this._timelinePendingSeekUntil = 0;
     this._isAdvancingTimeline = false;
     this._clearTimelineSpeedInterval();
     if (this._timelineLoadingTimeout) {
@@ -7897,7 +8387,7 @@ export class FrigateEventsCard extends LitElement {
     return lastEnd;
   }
 
-  private _loadTimelineVideo(seekTargetTs?: number, isAutoAdvance = false): void {
+  private _loadTimelineVideo(seekTargetTs?: number, isAutoAdvance = false, keepPaused = false): void {
     if (!this._timelineContainer || !this._timelineCamera) return;
     if (!isAutoAdvance) this._timelineWindowRequestId++;
 
@@ -7996,8 +8486,7 @@ export class FrigateEventsCard extends LitElement {
         }
         const currentBadge = this._timelineContainer.querySelector('[data-timeline-current-time]') as HTMLElement | null;
         if (currentBadge) {
-          const curDate = new Date(seekTargetTs * 1000);
-          currentBadge.textContent = curDate.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+          currentBadge.textContent = this._formatTimelineBadge(seekTargetTs);
         }
       }
     }
@@ -8041,6 +8530,10 @@ export class FrigateEventsCard extends LitElement {
 
         // Start playback on the newly active slot
         this._applyTimelinePlaybackRate(this._timelinePlaybackRate);
+        if (keepPaused) {
+          video.pause();
+          this._isAdvancingTimeline = false;
+        }
 
         // Smooth cross-dissolve: let incoming video render for 200ms on top,
         // then retire the old video to standby and cleanly destroy its stream.
@@ -8084,6 +8577,9 @@ export class FrigateEventsCard extends LitElement {
           video.currentTime = offset;
         }
         this._applyTimelinePlaybackRate(this._timelinePlaybackRate);
+        if (keepPaused) {
+          video.pause();
+        }
         this._isAdvancingTimeline = false;
       }
     };
@@ -8105,7 +8601,7 @@ export class FrigateEventsCard extends LitElement {
     };
 
     video.onended = () => {
-      if (this._timelineActiveVideo === slot && !this._isAdvancingTimeline) {
+      if (this._timelineActiveVideo === slot && !this._isAdvancingTimeline && !this._timelinePendingSeekTs && !this._isTimelineStartPopoverOpen()) {
         this._clearTimelineSpeedInterval();
         video.pause();
         if (Number.isFinite(video.duration) && video.duration > 0) {
@@ -8230,9 +8726,12 @@ export class FrigateEventsCard extends LitElement {
       if (!this._timelineIsDragging && !this._isAdvancingTimeline) {
         this._updateTimelinePlayheadUI();
         const v = this._timelineVideoEl;
+        const pickerOpen = this._isTimelineStartPopoverOpen();
         if (
           this._timelinePlaybackRate <= 16 &&
           !v.paused &&
+          !this._timelinePendingSeekTs &&
+          !pickerOpen &&
           Number.isFinite(v.duration) &&
           v.duration > 0 &&
           v.currentTime >= Math.max(0, v.duration - 0.3)
@@ -8253,6 +8752,12 @@ export class FrigateEventsCard extends LitElement {
 
     const currentOffset = video.currentTime || 0;
     const currentTs = this._videoOffsetToWallClock(currentOffset);
+    if (
+      this._timelinePendingSeekTs > 0 &&
+      (Math.abs(currentTs - this._timelinePendingSeekTs) <= 2 || Date.now() > this._timelinePendingSeekUntil)
+    ) {
+      this._timelinePendingSeekTs = 0;
+    }
     const pct = Math.max(0, Math.min(100, ((currentTs - this._timelineStartTs) / duration) * 100));
 
     const playhead = this._timelineContainer.querySelector('.timeline-playhead') as HTMLElement | null;
@@ -8268,9 +8773,9 @@ export class FrigateEventsCard extends LitElement {
 
     const currentBadge = this._timelineContainer.querySelector('[data-timeline-current-time]') as HTMLElement | null;
     if (currentBadge) {
-      const curDate = new Date(currentTs * 1000);
-      currentBadge.textContent = curDate.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+      currentBadge.textContent = this._formatTimelineBadge(currentTs);
     }
+    this._updateTimelineSkipStates(currentTs);
 
     const playPauseBtns = this._timelineContainer.querySelectorAll('[data-action="toggle-play"]');
     playPauseBtns.forEach(playPauseBtn => {
@@ -8355,8 +8860,7 @@ export class FrigateEventsCard extends LitElement {
             }
             const currentBadge = this._timelineContainer.querySelector('[data-timeline-current-time]') as HTMLElement | null;
             if (currentBadge) {
-              const curDate = new Date(targetTs * 1000);
-              currentBadge.textContent = curDate.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+              currentBadge.textContent = this._formatTimelineBadge(targetTs);
             }
           }
           this._updateTimelinePlayheadUI();
@@ -8375,50 +8879,465 @@ export class FrigateEventsCard extends LitElement {
     });
   }
 
+  private _timelineDayOffset(ts: number): number {
+    const date = new Date(ts * 1000);
+    const dayStart = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    return Math.round((dayStart - todayStart) / 86400000);
+  }
+
+  private _formatTimelineDayContext(ts: number): string {
+    const offset = this._timelineDayOffset(ts);
+    if (offset === 0) return 'Today';
+    if (offset === -1) return 'Yesterday';
+    if (offset === 1) return 'Tomorrow';
+    const date = new Date(ts * 1000);
+    const options: Intl.DateTimeFormatOptions = { weekday: 'short', month: 'short', day: 'numeric' };
+    if (date.getFullYear() !== new Date().getFullYear()) options.year = 'numeric';
+    return date.toLocaleDateString(undefined, options);
+  }
+
+  private _formatTimelineClock(ts: number, withSeconds = false): string {
+    return new Date(ts * 1000).toLocaleTimeString(undefined, withSeconds
+      ? { hour: 'numeric', minute: '2-digit', second: '2-digit' }
+      : { hour: 'numeric', minute: '2-digit' });
+  }
+
+  private _formatTimelineStartSummary(ts: number): string {
+    const time = this._formatTimelineClock(ts);
+    if (this._timelineDayOffset(ts) === 0) return time;
+    return `${this._formatTimelineDayContext(ts)} ${time}`;
+  }
+
+  private _formatTimelineAxisLabel(ts: number): string {
+    const time = this._formatTimelineClock(ts);
+    if (this._timelineDayOffset(ts) === 0) return time;
+    return `${this._formatTimelineDayContext(ts)} ${time}`;
+  }
+
+  private _formatTimelineBadge(ts: number): string {
+    return this._formatTimelineClock(ts, true);
+  }
+
+  private _formatTimelineStartFull(ts: number): string {
+    return new Date(ts * 1000).toLocaleString(undefined, {
+      weekday: 'long',
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+  }
+
+  private _timelineHourParts(ts: number): { hourText: string; meridiem: string } {
+    const date = new Date(ts * 1000);
+    let hourText = String(date.getHours());
+    let meridiem = date.getHours() >= 12 ? 'PM' : 'AM';
+    try {
+      const parts = new Intl.DateTimeFormat(undefined, { hour: 'numeric' }).formatToParts(date);
+      const hourPart = parts.find(part => part.type === 'hour');
+      const dayPeriod = parts.find(part => part.type === 'dayPeriod');
+      if (hourPart?.value) hourText = hourPart.value;
+      meridiem = dayPeriod?.value || '';
+    } catch (_) {}
+    return { hourText, meridiem };
+  }
+
+  private _updateTimelineStartChip(): void {
+    const container = this._timelineContainer;
+    if (!container) return;
+    const summary = this._formatTimelineStartSummary(this._timelineStartTs);
+    const full = this._formatTimelineStartFull(this._timelineStartTs);
+    container.querySelectorAll('[data-timeline-start-summary]').forEach(element => {
+      element.textContent = summary;
+    });
+    container.querySelectorAll('[data-action="toggle-start-popover"]').forEach(chip => {
+      chip.setAttribute('aria-label', `Change window start time. Starts ${full}`);
+      chip.setAttribute('title', `Window starts ${full}`);
+    });
+  }
+
+  private _renderTimelineStartDraft(): void {
+    const container = this._timelineContainer;
+    if (!container) return;
+    const draft = this._timelineStartDraftTs || this._timelineStartTs;
+    const now = Math.floor(Date.now() / 1000);
+    const { hourText, meridiem } = this._timelineHourParts(draft);
+    const minuteText = new Date(draft * 1000).getMinutes().toLocaleString(undefined, { minimumIntegerDigits: 2, useGrouping: false });
+    container.querySelectorAll('[data-start-day-label]').forEach(element => {
+      element.textContent = this._formatTimelineDayContext(draft);
+    });
+    container.querySelectorAll('[data-start-hour]').forEach(element => {
+      element.textContent = hourText;
+    });
+    container.querySelectorAll('[data-start-meridiem]').forEach(element => {
+      element.textContent = meridiem || 'hr';
+    });
+    container.querySelectorAll('[data-start-minute]').forEach(element => {
+      element.textContent = minuteText;
+    });
+    const canGoForward = draft < now;
+    container.querySelectorAll<HTMLButtonElement>('[data-start-step]').forEach(button => {
+      if (parseInt(button.getAttribute('data-step') || '0', 10) > 0) {
+        button.disabled = !canGoForward;
+      }
+    });
+    const atToday = this._timelineDayOffset(draft) >= 0;
+    container.querySelectorAll<HTMLButtonElement>('[data-start-day]').forEach(button => {
+      button.disabled = parseInt(button.getAttribute('data-start-day') || '0', 10) > 0 && atToday;
+    });
+    const live = container.querySelector('[data-start-live]');
+    if (live) live.textContent = `Window start ${this._formatTimelineStartFull(draft)}`;
+  }
+
+  private _openTimelineStartPopover(): void {
+    const container = this._timelineContainer;
+    if (!container) return;
+    const group = container.querySelector('.timeline-datetime-group') as HTMLElement | null;
+    const popover = group?.querySelector('.timeline-start-popover') as HTMLElement | null;
+    if (!group || !popover) return;
+    this._timelineStartDraftTs = Math.floor(this._timelineStartTs / 60) * 60;
+    this._renderTimelineStartDraft();
+    popover.hidden = false;
+    group.classList.add('is-open');
+    group.querySelector('[data-action="toggle-start-popover"]')?.setAttribute('aria-expanded', 'true');
+    if (this._timelineStartOutsideHandler) {
+      document.removeEventListener('pointerdown', this._timelineStartOutsideHandler, true);
+    }
+    this._timelineStartOutsideHandler = (e: PointerEvent) => {
+      const target = e.target as Node | null;
+      if (target && group.contains(target)) return;
+      this._closeTimelineStartPopover(false);
+    };
+    document.addEventListener('pointerdown', this._timelineStartOutsideHandler, true);
+    const firstStep = popover.querySelector<HTMLElement>('[data-start-step][data-step="-1"]');
+    (firstStep || popover).focus({ preventScroll: true });
+    popover.scrollIntoView?.({ block: 'nearest' });
+  }
+
+  private _closeTimelineStartPopover(restoreFocus = false): void {
+    if (this._timelineStartOutsideHandler) {
+      document.removeEventListener('pointerdown', this._timelineStartOutsideHandler, true);
+      this._timelineStartOutsideHandler = undefined;
+    }
+    const container = this._timelineContainer;
+    if (!container) return;
+    container.querySelectorAll('.timeline-datetime-group.is-open').forEach(group => {
+      group.classList.remove('is-open');
+      const popover = group.querySelector('.timeline-start-popover') as HTMLElement | null;
+      if (popover) popover.hidden = true;
+      const chip = group.querySelector('[data-action="toggle-start-popover"]') as HTMLElement | null;
+      chip?.setAttribute('aria-expanded', 'false');
+      if (restoreFocus) chip?.focus({ preventScroll: true });
+    });
+  }
+
+  private _stepTimelineStartDraft(kind: 'hour' | 'minute', step: number): void {
+    if (!step) return;
+    const base = this._timelineStartDraftTs || this._timelineStartTs;
+    const date = new Date(base * 1000);
+    if (kind === 'hour') {
+      date.setHours(date.getHours() + step);
+    } else {
+      date.setMinutes(date.getMinutes() + step);
+    }
+    date.setSeconds(0, 0);
+    const now = Math.floor(Date.now() / 1000);
+    this._timelineStartDraftTs = Math.max(0, Math.min(Math.floor(date.getTime() / 1000), now));
+    this._renderTimelineStartDraft();
+  }
+
+  private _shiftTimelineStartDraftDay(delta: number): void {
+    if (!delta) return;
+    const base = this._timelineStartDraftTs || this._timelineStartTs;
+    const date = new Date(base * 1000);
+    date.setDate(date.getDate() + delta);
+    date.setSeconds(0, 0);
+    const now = Math.floor(Date.now() / 1000);
+    this._timelineStartDraftTs = Math.max(0, Math.min(Math.floor(date.getTime() / 1000), now));
+    this._renderTimelineStartDraft();
+  }
+
+  private async _applyTimelineStartDraft(): Promise<void> {
+    const now = Math.floor(Date.now() / 1000);
+    const duration = Math.max(60, this._timelineWindowDurationSec || (this._timelineEndTs - this._timelineStartTs) || 3600);
+    let target = Math.floor((this._timelineStartDraftTs || this._timelineStartTs) / 60) * 60;
+    target = Math.max(0, Math.min(target, now));
+    // A start within the last few minutes would leave a sliver of a window, so
+    // snap back to a full window ending now.
+    if (now - target < 300) target = Math.max(0, now - duration);
+    this._closeTimelineStartPopover(true);
+    await this._seekTimelineTo(target, 'start');
+  }
+
+  private _timelinePlayheadTs(): number {
+    const video = this._timelineVideoEl;
+    if (video && Number.isFinite(video.currentTime) && this._timelineVodEndTs > this._timelineVodStartTs) {
+      return Math.floor(this._videoOffsetToWallClock(video.currentTime || 0));
+    }
+    return Math.floor(this._timelineStartTs);
+  }
+
+  /** Base for relative jumps: the in-flight target while a chunk buffers. */
+  private _timelineNavigationBaseTs(): number {
+    const video = this._timelineVideoEl;
+    const buffering = !video || video.readyState < 2;
+    if (this._timelinePendingSeekTs > 0 && buffering && Date.now() < this._timelinePendingSeekUntil) {
+      return this._timelinePendingSeekTs;
+    }
+    this._timelinePendingSeekTs = 0;
+    return this._timelinePlayheadTs();
+  }
+
+  /**
+   * Backward base. When the loaded chunk opens on the first footage of a
+   * window that started earlier (a leading gap), using the frame's wall clock
+   * would keep the skip inside the gap forever. Anchoring on the window start
+   * lets the skip cross the boundary and shift the window back.
+   */
+  private _timelineBackwardBaseTs(): number {
+    const base = this._timelineNavigationBaseTs();
+    if (this._timelineRecordings.length > 0) {
+      const earliest = this._timelineRecordings[0].start_time;
+      if (earliest > this._timelineStartTs && base <= earliest + 1) {
+        return this._timelineStartTs;
+      }
+    }
+    return base;
+  }
+
+  private _cancelTimelineAdvance(): void {
+    this._isAdvancingTimeline = false;
+    if (this._timelineAdvanceTimeout) {
+      clearTimeout(this._timelineAdvanceTimeout);
+      this._timelineAdvanceTimeout = undefined;
+    }
+  }
+
+  private _isTimelineStartPopoverOpen(): boolean {
+    return Boolean(this._timelineContainer?.querySelector('.timeline-datetime-group.is-open'));
+  }
+
+  private _updateTimelineSkipStates(currentTs: number): void {
+    const container = this._timelineContainer;
+    if (!container) return;
+    const now = Math.floor(Date.now() / 1000);
+    // Frigate's newest segment trails wall clock by roughly 10-15 seconds.
+    // Treat that tail, and the end of the latest known recording, as live so
+    // forward skips disable instead of silently doing nothing.
+    const liveEdgeTolerance = 15;
+    const latestRecording = this._timelineRecordings[this._timelineRecordings.length - 1];
+    const latestFootageEnd = latestRecording ? latestRecording.end_time : 0;
+    const atLiveFootageEnd = latestFootageEnd > 0
+      && latestFootageEnd >= now - 60
+      && currentTs >= latestFootageEnd - 2;
+    const atNow = currentTs >= now - liveEdgeTolerance || atLiveFootageEnd;
+    const earliest = this._timelineEarliestFootageTs;
+    const atEarliest = earliest > 0 && currentTs <= earliest + 1;
+    const key = `${atNow ? 1 : 0}:${atEarliest ? 1 : 0}`;
+    if (key === this._timelineSkipStateKey) return;
+    this._timelineSkipStateKey = key;
+    container.querySelectorAll<HTMLButtonElement>('[data-skip]').forEach(button => {
+      const delta = parseFloat(button.getAttribute('data-skip') || '0');
+      button.disabled = delta > 0 ? atNow : atEarliest;
+    });
+  }
+
+  /**
+   * Move the playhead to a wall-clock timestamp. When the target sits outside
+   * the visible window the window shifts with it (same duration, clamped at
+   * now) and events/recordings are refetched before the VOD chunk reloads.
+   */
+  private async _seekTimelineTo(
+    targetTs: number,
+    placement: 'preserve' | 'start' | 'end' = 'preserve'
+  ): Promise<void> {
+    const container = this._timelineContainer;
+    if (!container) return;
+
+    const wasAdvancing = this._isAdvancingTimeline;
+    this._cancelTimelineAdvance();
+    if (wasAdvancing) this._timelineWindowRequestId++;
+
+    const now = Math.floor(Date.now() / 1000);
+    const duration = Math.max(60, this._timelineWindowDurationSec || (this._timelineEndTs - this._timelineStartTs) || 3600);
+    let target = Math.max(0, Math.floor(targetTs));
+    let newStart = this._timelineStartTs;
+    let newEnd = this._timelineEndTs;
+
+    if (placement === 'end') {
+      target = Math.min(target, now);
+      newEnd = target;
+      newStart = Math.max(0, newEnd - duration);
+    } else if (placement === 'start') {
+      newStart = Math.max(0, target);
+      newEnd = Math.min(now, newStart + duration);
+      if (newEnd - newStart < 60) {
+        newEnd = now;
+        newStart = Math.max(0, newEnd - duration);
+        target = Math.max(newStart, Math.min(target, newEnd));
+      }
+    } else if (target < this._timelineStartTs || target > this._timelineEndTs) {
+      const current = this._timelineNavigationBaseTs();
+      newStart = Math.max(0, this._timelineStartTs + (target - current));
+      newEnd = Math.min(now, newStart + duration);
+      if (newEnd - newStart < 60) newEnd = newStart + duration;
+    }
+    target = Math.max(0, Math.min(target, now));
+    this._timelinePendingSeekTs = Math.max(newStart, Math.min(newEnd, target));
+    this._timelinePendingSeekUntil = Date.now() + 6000;
+
+    const windowChanged = newStart !== this._timelineStartTs || newEnd !== this._timelineEndTs;
+    if (windowChanged) {
+      const expectedStart = Math.floor(newStart);
+      const expectedEnd = Math.floor(Math.max(newEnd, newStart + 1));
+      this._timelineStartTs = expectedStart;
+      this._timelineEndTs = expectedEnd;
+      this._timelineVodStartTs = 0;
+      this._timelineVodEndTs = 0;
+      this._timelineEarliestFootageTs = 0;
+      this._updateTimelineWindowUI();
+      await this._fetchTimelineEvents();
+      if (
+        !this._timelineContainer ||
+        this._timelineStartTs !== expectedStart ||
+        this._timelineEndTs !== expectedEnd
+      ) {
+        return;
+      }
+      this._updateTimelineScrubberEvents();
+    }
+
+    const clampedTarget = Math.max(this._timelineStartTs, Math.min(this._timelineEndTs, target));
+    const video = this._timelineVideoEl;
+    const keepPaused = this._timelinePlaybackRate <= 16
+      && !this._timelineSpeedInterval
+      && !!video
+      && video.readyState >= 2
+      && video.paused;
+    if (
+      windowChanged ||
+      wasAdvancing ||
+      !video ||
+      !Number.isFinite(video.duration) ||
+      video.duration <= 0 ||
+      clampedTarget < this._timelineVodStartTs ||
+      clampedTarget > this._timelineVodEndTs
+    ) {
+      this._loadTimelineVideo(clampedTarget, false, keepPaused);
+      return;
+    }
+
+    const targetOffset = this._wallClockToVideoOffset(clampedTarget);
+    const maxSeek = Math.max(0, video.duration - 0.5);
+    video.currentTime = Math.max(0, Math.min(targetOffset, maxSeek));
+    this._updateTimelinePlayheadUI();
+  }
+
+  private async _skipTimelineBy(deltaSec: number): Promise<void> {
+    if (!this._timelineContainer || !deltaSec) return;
+    const now = Math.floor(Date.now() / 1000);
+    const base = deltaSec < 0 ? this._timelineBackwardBaseTs() : this._timelineNavigationBaseTs();
+    let target = base + deltaSec;
+    if (deltaSec > 0) {
+      target = Math.min(target, now);
+    } else if (target < this._timelineStartTs) {
+      target = await this._clampBackwardTimelineTarget(target);
+    }
+    await this._seekTimelineTo(target, 'preserve');
+  }
+
+  private async _clampBackwardTimelineTarget(targetTs: number): Promise<number> {
+    const target = Math.max(0, Math.floor(targetTs));
+    const windowStart = this._timelineStartTs;
+    if (target >= windowStart) return target;
+    if (this._timelineEarliestFootageTs > 0) return Math.max(target, this._timelineEarliestFootageTs);
+    if (!this.hass || !this._timelineCamera) return target;
+    try {
+      const clientId = this._config?.frigate_client_id || 'frigate';
+      // Pad the query so a segment that starts just before the target is still
+      // found (recordings are stored as short segments).
+      const recordings = await getRecordings(
+        this.hass,
+        clientId,
+        this._timelineCamera,
+        Math.max(0, target - 300),
+        Math.max(0, windowStart - 1)
+      );
+      if (Array.isArray(recordings) && recordings.length > 0) return target;
+      if (this._timelineRecordings.length > 0) {
+        const earliestKnown = Math.floor(Math.min(...this._timelineRecordings.map(recording => recording.start_time)));
+        this._timelineEarliestFootageTs = Math.min(windowStart, earliestKnown);
+        return Math.max(target, this._timelineEarliestFootageTs);
+      }
+    } catch (_) {}
+    return target;
+  }
+
+  private async _runTimelineQuickJump(jump: string): Promise<void> {
+    if (!this._timelineContainer) return;
+    if (jump === 'now') {
+      await this._seekTimelineTo(Math.floor(Date.now() / 1000), 'end');
+      return;
+    }
+    if (jump === 'day-start') {
+      const reference = new Date(this._timelineNavigationBaseTs() * 1000);
+      const dayStart = Math.floor(new Date(reference.getFullYear(), reference.getMonth(), reference.getDate(), 0, 0, 0, 0).getTime() / 1000);
+      const dayEnd = Math.floor(new Date(reference.getFullYear(), reference.getMonth(), reference.getDate(), 23, 59, 59, 999).getTime() / 1000);
+      let target = dayStart;
+      if (this.hass && this._timelineCamera) {
+        try {
+          const clientId = this._config?.frigate_client_id || 'frigate';
+          const dayRecordings = await getRecordings(this.hass, clientId, this._timelineCamera, dayStart, dayEnd);
+          if (Array.isArray(dayRecordings) && dayRecordings.length > 0) {
+            dayRecordings.sort((a, b) => a.start_time - b.start_time);
+            target = Math.floor(dayRecordings[0].start_time);
+          }
+        } catch (_) {}
+      }
+      if (!this._timelineContainer) return;
+      await this._seekTimelineTo(target, 'start');
+      return;
+    }
+    const deltas: Record<string, number> = { '-15m': 900, '-1h': 3600, '-3h': 10800, '-12h': 43200 };
+    const delta = deltas[jump] || 0;
+    if (!delta) return;
+    // Quick jumps are explicit, so they move even across a recording gap; the
+    // VOD resolver picks the nearest footage in the new window.
+    const target = this._timelineBackwardBaseTs() - delta;
+    if (!this._timelineContainer) return;
+    await this._seekTimelineTo(target, 'preserve');
+  }
+
   private _updateTimelineWindowUI(): void {
     if (!this._timelineContainer) return;
     const container = this._timelineContainer;
-    const startDate = new Date(this._timelineStartTs * 1000);
-    const endDate = new Date(this._timelineEndTs * 1000);
-
-    // Format ISO string for datetime-local input (YYYY-MM-DDTHH:mm)
-    const pad = (n: number) => String(n).padStart(2, '0');
-    const dtValue = `${startDate.getFullYear()}-${pad(startDate.getMonth() + 1)}-${pad(startDate.getDate())}T${pad(startDate.getHours())}:${pad(startDate.getMinutes())}`;
-
-    const dtInput = container.querySelector('.timeline-datetime-input') as HTMLInputElement | null;
-    if (dtInput && dtInput.value !== dtValue) {
-      dtInput.value = dtValue;
-    }
+    // A moved window makes any open picker draft stale.
+    this._closeTimelineStartPopover(false);
+    this._updateTimelineStartChip();
 
     const labels = container.querySelectorAll('.timeline-track-labels > span');
     if (labels.length >= 3) {
-      labels[0].textContent = startDate.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
-      labels[2].textContent = endDate.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+      labels[0].textContent = this._formatTimelineAxisLabel(this._timelineStartTs);
+      labels[2].textContent = this._formatTimelineAxisLabel(this._timelineEndTs);
     }
 
     const windowMinutes = Math.round(this._timelineWindowDurationSec / 60);
     container.querySelectorAll('.timeline-window-pill').forEach(pill => {
-      const mins = parseInt(pill.getAttribute('data-window') || '60', 10);
-      if (mins === windowMinutes) {
-        pill.classList.add('active');
-      } else {
-        pill.classList.remove('active');
-      }
+      const active = parseInt(pill.getAttribute('data-window') || '60', 10) === windowMinutes;
+      pill.classList.toggle('active', active);
+      pill.setAttribute('aria-pressed', active ? 'true' : 'false');
     });
 
+    this._timelineSkipStateKey = '';
     this._updateTimelinePlayheadUI();
   }
 
   private _renderTimelineContent(container: HTMLElement): void {
     const availableCameras = this._getAvailableCameras();
     const currentCamera = this._timelineCamera || (availableCameras[0] || 'Camera');
-    const startDate = new Date(this._timelineStartTs * 1000);
-    const endDate = new Date(this._timelineEndTs * 1000);
-
-    // Format ISO string for datetime-local input (YYYY-MM-DDTHH:mm)
-    const pad = (n: number) => String(n).padStart(2, '0');
-    const dtValue = `${startDate.getFullYear()}-${pad(startDate.getMonth() + 1)}-${pad(startDate.getDate())}T${pad(startDate.getHours())}:${pad(startDate.getMinutes())}`;
-
     const windowMinutes = Math.round(this._timelineWindowDurationSec / 60);
     // Source of truth is dataset.timelineLayout (set from _getTimelineLayoutMode
     // at open); fall back to the live classes for containers built before it.
@@ -8444,14 +9363,14 @@ export class FrigateEventsCard extends LitElement {
         <div class="timeline-modal-body">
           ${this._timelineCameraTabsMarkup(availableCameras, currentCamera)}
 
-          <!-- Controls: DateTime picker, Quick jumps, Window duration -->
-          ${this._timelineControlsMarkup(dtValue, windowMinutes)}
+          <!-- Controls: Start time picker and window duration -->
+          ${this._timelineControlsMarkup(windowMinutes)}
 
           <!-- Video Player -->
           ${this._timelinePlayerMarkup()}
 
           <!-- Scrubber Track -->
-          ${this._timelineScrubberMarkup(startDate, endDate, false)}
+          ${this._timelineScrubberMarkup(this._timelineStartTs, this._timelineEndTs, false)}
 
           <!-- Transport & Speed Controls -->
           ${this._timelineTransportMarkup(false)}
@@ -8464,7 +9383,7 @@ export class FrigateEventsCard extends LitElement {
       // sheet Playback section. The body transport markup below stays in place
       // (hidden by CSS for compact, visible on-stage for TV); tapping the
       // video toggles play/pause.
-      const compactSheetInner = `<div class="timeline-sheet-section"><div class="timeline-sheet-heading">Playback</div>${this._timelineTransportMarkup(true)}</div>${this._timelineControlsMarkup(dtValue, windowMinutes, true)}`;
+      const compactSheetInner = `<div class="timeline-sheet-section"><div class="timeline-sheet-heading">Playback</div>${this._timelineTransportMarkup(true)}</div>${this._timelineControlsMarkup(windowMinutes, true)}`;
       container.innerHTML = `
       <div class="frigate-events-modal-content" role="dialog" aria-modal="true" aria-label="Timeline">
         <div class="timeline-compact-topbar">
@@ -8489,7 +9408,7 @@ export class FrigateEventsCard extends LitElement {
           ${this._timelinePlayerMarkup()}
 
           <!-- Scrubber Track -->
-          ${this._timelineScrubberMarkup(startDate, endDate, true)}
+          ${this._timelineScrubberMarkup(this._timelineStartTs, this._timelineEndTs, true)}
           <!-- Transport & Speed Controls (TV on-stage; hidden for compact via CSS, served by the settings sheet) -->
           ${this._timelineTransportMarkup(true)}
         </div>
@@ -8540,6 +9459,7 @@ export class FrigateEventsCard extends LitElement {
     const closeSettings = () => {
       container.classList.remove('settings-open');
       settingsBtn?.setAttribute('aria-expanded', 'false');
+      this._closeTimelineStartPopover(false);
     };
     const openSettings = () => {
       container.classList.add('settings-open');
@@ -8562,10 +9482,14 @@ export class FrigateEventsCard extends LitElement {
     container.querySelectorAll('.timeline-camera-tab').forEach(tab => {
       tab.addEventListener('click', async (e) => {
         e.stopPropagation();
-        this._isAdvancingTimeline = false;
+        this._cancelTimelineAdvance();
         const cam = (tab as HTMLElement).getAttribute('data-camera');
         if (cam && cam !== this._timelineCamera) {
           this._timelineCamera = cam;
+          this._timelineEarliestFootageTs = 0;
+          this._timelineSkipStateKey = '';
+          this._timelinePendingSeekTs = 0;
+          this._closeTimelineStartPopover(false);
           container.querySelectorAll('.timeline-camera-tab').forEach(t => {
             t.classList.toggle('active', t.getAttribute('data-camera') === cam);
           });
@@ -8581,74 +9505,61 @@ export class FrigateEventsCard extends LitElement {
       });
     });
 
-    // Datetime change
-    const dtInput = container.querySelector('.timeline-datetime-input') as HTMLInputElement | null;
-    dtInput?.addEventListener('change', async () => {
-      if (!dtInput.value) return;
-      this._isAdvancingTimeline = false;
-      const parsed = new Date(dtInput.value).getTime() / 1000;
-      if (!isNaN(parsed) && parsed > 0) {
-        this._timelineStartTs = Math.floor(parsed);
-        this._timelineEndTs = Math.floor(this._timelineStartTs + this._timelineWindowDurationSec);
-        this._updateTimelineWindowUI();
-        await this._fetchTimelineEvents();
-        this._updateTimelineScrubberEvents();
-        this._loadTimelineVideo(this._timelineStartTs);
+    // Start time chip + picker
+    const startGroup = container.querySelector('.timeline-datetime-group') as HTMLElement | null;
+    const startChip = startGroup?.querySelector('[data-action="toggle-start-popover"]') as HTMLElement | null;
+    startChip?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (startGroup?.classList.contains('is-open')) {
+        this._closeTimelineStartPopover(true);
+      } else {
+        this._openTimelineStartPopover();
       }
     });
 
-    // Quick jump buttons
-    container.querySelectorAll('[data-jump]').forEach(btn => {
-      btn.addEventListener('click', async (e) => {
+    container.querySelectorAll('[data-start-step]').forEach(stepBtn => {
+      stepBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        this._isAdvancingTimeline = false;
-        const jump = (btn as HTMLElement).getAttribute('data-jump');
-        const now = Math.floor(Date.now() / 1000);
+        const kind = (stepBtn as HTMLElement).getAttribute('data-start-step') === 'minute' ? 'minute' : 'hour';
+        const step = parseInt((stepBtn as HTMLElement).getAttribute('data-step') || '0', 10);
+        this._stepTimelineStartDraft(kind, step);
+      });
+    });
 
-        if (jump === 'now') {
-          // Snap window to end at now
-          this._timelineEndTs = now;
-          this._timelineStartTs = Math.max(0, this._timelineEndTs - this._timelineWindowDurationSec);
-        } else if (jump === 'day-start') {
-          // Find the beginning of the currently viewed day (based on current timeline start)
-          const refDate = new Date(this._timelineStartTs * 1000);
-          const startOfDay = new Date(refDate.getFullYear(), refDate.getMonth(), refDate.getDate(), 0, 0, 0, 0);
-          const endOfDay = new Date(refDate.getFullYear(), refDate.getMonth(), refDate.getDate(), 23, 59, 59, 999);
-          const dayStartTs = Math.floor(startOfDay.getTime() / 1000);
-          const dayEndTs = Math.floor(endOfDay.getTime() / 1000);
+    container.querySelectorAll('[data-start-day]').forEach(dayBtn => {
+      dayBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const delta = parseInt((dayBtn as HTMLElement).getAttribute('data-start-day') || '0', 10);
+        this._shiftTimelineStartDraftDay(delta);
+      });
+    });
 
-          let targetTs = dayStartTs;
-          if (this.hass && this._timelineCamera) {
-            try {
-              const clientId = this._config?.frigate_client_id || 'frigate';
-              const dayRecordings = await getRecordings(this.hass, clientId, this._timelineCamera, dayStartTs, dayEndTs);
-              if (Array.isArray(dayRecordings) && dayRecordings.length > 0) {
-                dayRecordings.sort((a, b) => a.start_time - b.start_time);
-                targetTs = dayRecordings[0].start_time;
-              }
-            } catch (err) {
-              console.debug('Failed to fetch recordings for day-start jump:', err);
-            }
-          }
+    container.querySelectorAll('[data-action="apply-start"]').forEach(applyBtn => {
+      applyBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        void this._applyTimelineStartDraft();
+      });
+    });
 
-          this._timelineStartTs = targetTs;
-          this._timelineEndTs = Math.floor(this._timelineStartTs + this._timelineWindowDurationSec);
-        } else {
-          // Relative shifts backward from current window start time
-          let deltaSec = 3600;
-          if (jump === '-15m') deltaSec = 900;
-          else if (jump === '-1h') deltaSec = 3600;
-          else if (jump === '-3h') deltaSec = 10800;
-          else if (jump === '-12h') deltaSec = 43200;
+    container.querySelectorAll('[data-action="close-start-popover"]').forEach(cancelBtn => {
+      cancelBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._closeTimelineStartPopover(true);
+      });
+    });
 
-          this._timelineStartTs = Math.max(0, this._timelineStartTs - deltaSec);
-          this._timelineEndTs = Math.floor(this._timelineStartTs + this._timelineWindowDurationSec);
+    // Quick jumps move the playhead, not the window start, and close the picker.
+    container.querySelectorAll('[data-jump]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const jump = (btn as HTMLElement).getAttribute('data-jump') || '';
+        this._closeTimelineStartPopover(false);
+        if (isCompactLayout) {
+          container.classList.remove('settings-open');
+          settingsBtn?.setAttribute('aria-expanded', 'false');
+          settingsBtn?.focus({ preventScroll: true });
         }
-
-        this._updateTimelineWindowUI();
-        await this._fetchTimelineEvents();
-        this._updateTimelineScrubberEvents();
-        this._loadTimelineVideo(jump === 'now' ? now : this._timelineStartTs);
+        void this._runTimelineQuickJump(jump);
       });
     });
 
@@ -8656,13 +9567,13 @@ export class FrigateEventsCard extends LitElement {
     container.querySelectorAll('.timeline-window-pill').forEach(pill => {
       pill.addEventListener('click', async (e) => {
         e.stopPropagation();
-        this._isAdvancingTimeline = false;
+        this._cancelTimelineAdvance();
         const mins = parseInt((pill as HTMLElement).getAttribute('data-window') || '60', 10);
-        const currentWallClock = this._videoOffsetToWallClock(this._timelineVideoEl?.currentTime || 0);
+        const currentWallClock = this._timelineNavigationBaseTs();
         this._timelineWindowDurationSec = mins * 60;
         this._timelineWindowUserChosen = true;
 
-        // Keep currentWallClock centered in new window duration, constrained by now
+        // Center the playhead in the new window, constrained by now.
         const now = Math.floor(Date.now() / 1000);
         let newStart = Math.floor(currentWallClock - this._timelineWindowDurationSec / 2);
         if (newStart + this._timelineWindowDurationSec > now) {
@@ -8670,9 +9581,15 @@ export class FrigateEventsCard extends LitElement {
         }
         this._timelineStartTs = Math.max(0, newStart);
         this._timelineEndTs = Math.floor(this._timelineStartTs + this._timelineWindowDurationSec);
+        this._timelineWindowRequestId++;
+        this._timelineVodStartTs = 0;
+        this._timelineVodEndTs = 0;
+        this._timelineEarliestFootageTs = 0;
+        this._timelinePendingSeekTs = 0;
 
         this._updateTimelineWindowUI();
         await this._fetchTimelineEvents();
+        if (!this._timelineContainer) return;
         this._updateTimelineScrubberEvents();
         this._loadTimelineVideo(currentWallClock);
       });
@@ -8694,18 +9611,13 @@ export class FrigateEventsCard extends LitElement {
       });
     });
 
-    // Skip buttons
+    // Skip buttons move by wall-clock time, not video time, so they also work
+    // at video 0 and across the loaded VOD chunk / window boundary.
     container.querySelectorAll('[data-skip]').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
-        if (!this._timelineVideoEl) return;
         const delta = parseFloat((btn as HTMLElement).getAttribute('data-skip') || '0');
-        const duration = this._timelineEndTs - this._timelineStartTs;
-        const maxSeek = (Number.isFinite(this._timelineVideoEl.duration) && this._timelineVideoEl.duration > 0)
-          ? Math.max(0, this._timelineVideoEl.duration - 0.5)
-          : duration;
-        this._timelineVideoEl.currentTime = Math.max(0, Math.min(maxSeek, this._timelineVideoEl.currentTime + delta));
-        this._updateTimelinePlayheadUI();
+        void this._skipTimelineBy(delta);
       });
     });
 
@@ -8767,8 +9679,7 @@ export class FrigateEventsCard extends LitElement {
         }
         const currentBadge = container.querySelector('[data-timeline-current-time]') as HTMLElement | null;
         if (currentBadge) {
-          const curDate = new Date(targetTs * 1000);
-          currentBadge.textContent = curDate.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+          currentBadge.textContent = this._formatTimelineBadge(targetTs);
         }
 
         // Seeking outside the loaded VOD chunk requires loading a new chunk.
@@ -8835,13 +9746,9 @@ export class FrigateEventsCard extends LitElement {
       // Scoped to non-desktop layouts so desktop keyboard behavior is untouched.
       if (isCompactLayout) {
         const seekBySeconds = (deltaSec: number) => {
-          if (!this._timelineVideoEl) return;
-          const duration = this._timelineEndTs - this._timelineStartTs;
-          const maxSeek = (Number.isFinite(this._timelineVideoEl.duration) && this._timelineVideoEl.duration > 0)
-            ? Math.max(0, this._timelineVideoEl.duration - 0.5)
-            : duration;
-          this._timelineVideoEl.currentTime = Math.max(0, Math.min(maxSeek, this._timelineVideoEl.currentTime + deltaSec));
-          this._updateTimelinePlayheadUI();
+          // Use the wall-clock skip path so D-pad seeking crosses chunk and
+          // window boundaries exactly like the transport buttons.
+          void this._skipTimelineBy(deltaSec);
         };
         const jumpToEdge = (edge: 'start' | 'end') => {
           const targetTs = edge === 'start' ? this._timelineStartTs : this._timelineEndTs;
@@ -8882,24 +9789,21 @@ export class FrigateEventsCard extends LitElement {
       }
     }
 
-    // Compact/TV: close the settings sheet on selection or backdrop tap.
+    // Compact/TV: close the settings sheet after a window choice or Go.
     if (isCompactLayout) {
-      container.querySelectorAll('.timeline-settings-sheet [data-jump]').forEach(btn => {
-        btn.addEventListener('click', () => {
-          container.classList.remove('settings-open');
-          settingsBtn?.setAttribute('aria-expanded', 'false');
-        });
-      });
       container.querySelectorAll('.timeline-settings-sheet .timeline-window-pill').forEach(pill => {
         pill.addEventListener('click', () => {
           container.classList.remove('settings-open');
           settingsBtn?.setAttribute('aria-expanded', 'false');
+          settingsBtn?.focus({ preventScroll: true });
         });
       });
-      const sheetDtInput = container.querySelector('.timeline-settings-sheet .timeline-datetime-input') as HTMLInputElement | null;
-      sheetDtInput?.addEventListener('change', () => {
-        container.classList.remove('settings-open');
-        settingsBtn?.setAttribute('aria-expanded', 'false');
+      container.querySelectorAll('.timeline-settings-sheet [data-action="apply-start"]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          container.classList.remove('settings-open');
+          settingsBtn?.setAttribute('aria-expanded', 'false');
+          settingsBtn?.focus({ preventScroll: true });
+        });
       });
     }
   }

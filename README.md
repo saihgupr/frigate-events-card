@@ -264,9 +264,10 @@ The Timeline modal plays continuous recordings from Frigate 0.13+ VOD, so you ca
 
 - **Interactive scrubber**: Drag anywhere on the track to seek. The current time is shown above the playhead, with the window start and end times on either side.
 - **Event markers**: Color-coded markers highlight detections across the selected window, making it easy to jump between moments.
-- **Quick jumps**: Choose `Now`, `-15m`, `-1h`, `-3h`, `-12h`, or `Start of Day` to reposition the timeline instantly.
-- **Window size**: Switch between `15m`, `30m`, `1h`, `2h`, and `3h` recording windows.
-- **Fine controls**: Nudge playback with `-5m`, `-1m`, `-30s`, `+30s`, `+1m`, and `+5m` buttons.
+- **Start picker**: Click `Start` to step the window start by day, hour, or minute. It opens a small in-card picker instead of the browser's date/time calendar, shows `Today` or `Yesterday` with the time, and keeps the quick jumps one click away.
+- **Quick jumps**: Choose `Now`, `-15m`, `-1h`, `-3h`, `-12h`, or `Start of Day` to move the playhead instantly.
+- **Window size**: Switch between `15m`, `30m`, `1h`, `2h`, `3h`, and `24h` recording windows.
+- **Fine controls**: Nudge playback with `-5m`, `-1m`, `-30s`, `+30s`, `+1m`, and `+5m` buttons. They move by wall-clock time, cross recording gaps and window edges, and stop at the start of footage or now.
 - **Variable speed**: Use the `-`/`+` controls to step from `0.5x` up to `4096x` (speeds above `16x` use frame stepping), with gapless auto-advance across recording chunks.
 
 > **Note:** Timeline playback requires the Frigate integration and access to Frigate's VOD recordings. Streams are signed automatically, so HLS playback works on iOS Safari, the Home Assistant Companion App, and authenticated reverse proxies.
@@ -294,6 +295,7 @@ The card works standalone. The [`frigate_temp_mask`](https://github.com/saihgupr
 </p>
 
 * **Flexible durations**: Set a mask for 1h, 4h, 8h, 12h, 24h, 48h, 7d, or custom hours.
+* **Multiple object labels**: Enter `person, dog` in a mask's Label field to write the same mask under each object filter. Removing or expiring the mask removes every copy.
 * **Live previews**: The Mask Manager captures a fresh camera snapshot and overlays each active mask polygon.
 * **Instant removal**: Remove a mask from the context menu without waiting for a detector restart on Frigate 0.18+.
 
@@ -466,7 +468,7 @@ The most common settings to get you started:
 | `event_click_action` | string | `timeline` | Which modal opens when clicking an event: `timeline` or `detail`. Takes precedence over legacy `timeline_on_click`. |
 | `timeline_on_click` | boolean | `true` | Legacy: `false` opens details instead of Timeline (same as `event_click_action: detail`). Open the Timeline directly when clicking an event thumbnail (requires `video` and `show_timeline`). |
 | `timeline_default_window_hours` | number | `1` | Default recording window shown when the Timeline opens. |
-| `timeline_event_seek_offset` | number \| map | `0` | Seconds added/subtracted when seeking to an event in the Timeline (e.g. `5` or `-5`). Supports per-label/zone map. |
+| `timeline_event_seek_offset` | number \| map | `video_start_skip_seconds` | Seconds added/subtracted when seeking to an event in the Timeline (e.g. `5` or `-5`). Supports per-label/zone map. When unset, the Timeline reuses `video_start_skip_seconds` so it starts where event clips start instead of on the lead-in; set `0` to start exactly on Frigate's reported event start. |
 | `timeline_show_mute` | boolean | `true` | Show the mute toggle button on hover over the Timeline video player. Setting `show_mute: false` (or `live_view_show_mute: false`) also hides it; an explicit `timeline_show_mute` wins. |
 
 ### Advanced Detail Modal & Debug Settings

@@ -561,19 +561,72 @@ def _parse_temp_masks_from_config(config_text: str) -> list[dict[str, str]]:
                 "context": context,
             })
 
-    return masks
+    # The same mask_id may legally exist under several labels after a
+    # multi-label save. Merge those entries so the card and storage keep every
+    # label instead of only the last one scanned.
+    merged: list[dict[str, str]] = []
+    merged_by_key: dict[tuple[str, str], dict[str, str]] = {}
+    for mask in masks:
+        key = (mask.get("mask_id", ""), mask.get("camera", ""))
+        existing_entry = merged_by_key.get(key)
+        if existing_entry is None:
+            entry = dict(mask)
+            entry["label"] = ", ".join(_parse_mask_labels(mask.get("label", "")))
+            merged_by_key[key] = entry
+            merged.append(entry)
+            continue
+        entry_labels = _parse_mask_labels(existing_entry.get("label", ""))
+        for item_label in _parse_mask_labels(mask.get("label", "")):
+            if item_label not in entry_labels:
+                entry_labels.append(item_label)
+        existing_entry["label"] = ", ".join(entry_labels)
+
+    return merged
 
 
-def _inject_temp_mask(config_text: str, camera: str, polygon: str, mask_id: str, label: str = "", is_dict: bool = True) -> str:
-    """Inject a temporary mask into the Frigate config text cleanly scoped to camera."""
+def _parse_mask_labels(label: str) -> list[str]:
+    """Split a label string into normalized, unique Frigate object labels.
+
+    Commas and semicolons separate labels. A blank string returns an empty
+    list, which callers treat as the global camera mask (no filters block)
+    rather than a per-object filter mask.
+    """
+    if not label or not label.strip():
+        return []
+
+    labels: list[str] = []
+    for raw_part in re.split(r"[,;]", label):
+        part = raw_part.strip().lower()
+        if not part:
+            continue
+        if part in ("people", "human", "persons"):
+            part = "person"
+        if part not in labels:
+            labels.append(part)
+    return labels
+
+
+def _inject_temp_mask(
+    config_text: str,
+    camera: str,
+    polygon: str,
+    mask_id: str,
+    label: str = "",
+    is_dict: bool = True,
+    clean_config: bool = True,
+) -> str:
+    """Inject a temporary mask into the Frigate config text cleanly scoped to camera.
+
+    `clean_config=False` keeps the same mask_id already written under another
+    label; the first of several labels cleans, the rest only append.
+    """
     safe_mask_id = re.sub(r"[^a-zA-Z0-9_]", "_", mask_id)
     tag = f"TEMP_MASK_{mask_id}"
-    cleaned = _clean_config_masks(config_text, mask_id)
+    cleaned = _clean_config_masks(config_text, mask_id) if clean_config else _normalize_raw_config(config_text)
     lines = cleaned.splitlines()
 
-    obj_label = label.lower().strip() if label else ""
-    if obj_label in ["people", "human", "persons"]:
-        obj_label = "person"
+    parsed_labels = _parse_mask_labels(label)
+    obj_label = parsed_labels[0] if parsed_labels else ""
 
     cam_start, cam_end, cam_indent = _find_camera_block_bounds(lines, camera)
     if cam_start == -1:
@@ -805,6 +858,11 @@ def _inject_temp_mask(config_text: str, camera: str, polygon: str, mask_id: str,
                     break
 
             if label_mask_idx != -1:
+                # An inline empty mapping/sequence (mask: {} / mask: []) cannot
+                # take children. Expand it to a block first, otherwise the new
+                # entries end up indented under an inline value (invalid YAML).
+                if re.match(r"^\s*mask:\s*(\{\s*\}|\[\s*\])\s*(#.*)?$", lines[label_mask_idx]):
+                    lines[label_mask_idx] = f"{' ' * label_mask_indent}mask:"
                 insert_idx = label_mask_idx + 1
                 m_indent = label_mask_indent + 2
                 if is_dict:
@@ -1438,16 +1496,34 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         if not label_val and event_data and isinstance(event_data, dict):
             label_val = event_data.get("label", "")
 
-        updated_config = _inject_temp_mask(raw_config, camera, poly_str, mask_id, label_val, is_dict=is_dict)
+        labels = _parse_mask_labels(label_val)
+        updated_config = raw_config
+        for idx, item_label in enumerate(labels or [""]):
+            updated_config = _inject_temp_mask(
+                updated_config,
+                camera,
+                poly_str,
+                mask_id,
+                item_label,
+                is_dict=is_dict,
+                clean_config=(idx == 0),
+            )
 
         # Check if the mask is already active and config is unchanged (duration-only update)
         existing_mask = domain_data["active_masks"].get(mask_id)
+        existing_labels = _parse_mask_labels((existing_mask or {}).get("label") or "")
+        labels_changed = set(labels) != set(existing_labels)
         tag_already_in_config = tag in raw_config or f"temp_mask_{mask_id}" in raw_config
         is_same_geometry = existing_mask and existing_mask.get("polygon") == poly_str
         is_config_identical = updated_config.strip() == raw_config.strip()
         is_pending_restart = mask_id in domain_data["pending_restart_masks"]
 
-        is_duration_only = tag_already_in_config and not is_pending_restart and (is_same_geometry or is_config_identical)
+        is_duration_only = (
+            tag_already_in_config
+            and not is_pending_restart
+            and not labels_changed
+            and (is_same_geometry or is_config_identical)
+        )
 
         if is_duration_only:
             _LOGGER.info(
@@ -1505,7 +1581,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
             "duration_hours": -1 if is_infinite else duration_hours,
             "expires_at": None if is_infinite else expires_at.isoformat().replace("+00:00", "Z"),
             "event_id": event_id or mask_id,
-            "label": label_val,
+            "label": ", ".join(labels),
             "box": box_coords if box_coords else None,
             "width": width,
             "height": height,

@@ -31,7 +31,8 @@ add_mask:
         text:
     label:
       name: Label
-      description: Object label for the mask (e.g. person, car). Inferred from event_id if omitted.
+      description: One or more object labels for the mask, comma-separated (e.g. person, dog). The same mask is written under every label. Inferred from event_id if omitted.
+      example: person, dog
       selector:
         text:
     duration_hours:
