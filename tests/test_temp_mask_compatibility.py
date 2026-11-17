@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import MagicMock
 
 # Mock Home Assistant and aiohttp dependencies before import
+sys.modules['voluptuous'] = MagicMock()
 sys.modules['homeassistant'] = MagicMock()
 sys.modules['homeassistant.components'] = MagicMock()
 sys.modules['homeassistant.components.http'] = MagicMock()
@@ -29,7 +30,9 @@ if repo_root not in sys.path:
 from custom_components.frigate_temp_mask import (
     _normalize_raw_config,
     _parse_frigate_version,
+    _parse_mask_timestamp,
     _box_to_polygon,
+    _polygon_to_pixels,
     _detect_config_version_and_format,
     _find_camera_block_bounds,
     _clean_config_masks,
@@ -330,6 +333,48 @@ version: 0.18-0
         self.assertIn("person: {}", cleaned)
         self.assertNotIn("person:\n        car:", cleaned)
 
+    def test_polygon_to_pixels_normalized(self):
+        poly = _polygon_to_pixels("0.277,0.663,0.349,0.663,0.359,0.859,0.272,0.869", 1920, 1080)
+        self.assertEqual(poly, "532,716,670,716,689,928,522,939")
+
+    def test_polygon_to_pixels_passthrough(self):
+        # Already-pixel polygons must not be touched.
+        pixel = "532,716,670,716,689,928,522,939"
+        self.assertEqual(_polygon_to_pixels(pixel, 1920, 1080), pixel)
+        # Degenerate / non-numeric input passes through for the caller to reject.
+        self.assertEqual(_polygon_to_pixels("0.1,0.2,oops", 1920, 1080), "0.1,0.2,oops")
+        self.assertEqual(_polygon_to_pixels("0.1,0.2", 1920, 1080), "0.1,0.2")
+        self.assertEqual(_polygon_to_pixels("", 1920, 1080), "")
+
+    def test_unknown_version_defaults_to_legacy(self):
+        # No version key, no existing masks: assume pre-0.14 list format
+        # (pixels + restart) rather than a modern format old Frigate chokes on.
+        config = """cameras:
+  wyze_camera:
+    objects:
+      filters:
+        person: {}
+"""
+        v, is_dict = _detect_config_version_and_format(config, "wyze_camera")
+        self.assertEqual(v, (0, 0))
+        self.assertFalse(is_dict)
+
+    def test_v13_edit_flow_converts_to_pixels(self):
+        # Simulates the card editor saving a normalized polygon to Frigate 0.13:
+        # format detection must request pixels, conversion must match, and the
+        # injected config must round-trip with pixel coordinates.
+        v, is_dict = _detect_config_version_and_format(self.config_v13, "wyze_camera")
+        self.assertFalse(v >= (0, 14))
+        self.assertFalse(is_dict)
+        converted = _polygon_to_pixels("0.277,0.663,0.349,0.663,0.359,0.859,0.272,0.869", 1920, 1080)
+        updated = _inject_temp_mask(self.config_v13, "wyze_camera", converted, "1792507169.873793", label="person", is_dict=is_dict)
+        self.assertIn(f"- {converted} # TEMP_MASK_1792507169.873793", updated)
+        parsed = _parse_temp_masks_from_config(updated)
+        self.assertEqual(len(parsed), 1)
+        self.assertEqual(parsed[0]["polygon"], converted)
+        cleaned = _clean_config_masks(updated, "1792507169.873793")
+        self.assertNotIn("TEMP_MASK", cleaned)
+
     def test_clean_mask_leaves_valid_yaml_and_no_childless_keys(self):
         raw_id = "1789218715.393093"
         poly = "0.688,0.737,0.716,0.737,0.716,0.813,0.688,0.813"
@@ -351,6 +396,62 @@ version: 0.18-0
                         has_child = True
                     break
                 self.assertTrue(has_child, f"Dangling childless key found: '{stripped}' at line {i+1}")
+
+    def test_parse_mask_timestamp(self):
+        # Valid timestamp format from event / time
+        ts = _parse_mask_timestamp("1793485164.000487")
+        self.assertIsNotNone(ts)
+        self.assertAlmostEqual(ts, 1793485164.000487, places=3)
+
+        # Compound mask id with suffix
+        ts_suffix = _parse_mask_timestamp("1793369474.75646-c769w5")
+        self.assertIsNotNone(ts_suffix)
+        self.assertAlmostEqual(ts_suffix, 1793369474.75646, places=3)
+
+        # Invalid mask id
+        self.assertIsNone(_parse_mask_timestamp("invalid_custom_mask"))
+
+    def test_offline_drain_removes_expired_masks_from_config(self):
+        # Setup config with a stuck expired mask from an offline event
+        config = """cameras:
+  wyze_camera:
+    objects:
+      filters:
+        car:
+          mask:
+            - 0,227,1064,220,1064,784,0,784 # TEMP_MASK_1793485164.000487
+        person:
+          mask:
+            - 518,743,662,743,662,969,518,969 # TEMP_MASK_1792507169.873793
+"""
+        pending_offline_removals = {"1793485164.000487"}
+        cleaned = config
+        for m_id in pending_offline_removals:
+            cleaned = _clean_config_masks(cleaned, m_id)
+
+        self.assertNotIn("TEMP_MASK_1793485164.000487", cleaned)
+        self.assertNotIn("0,227,1064,220,1064,784,0,784", cleaned)
+        # Verify the active person mask was preserved
+        self.assertIn("TEMP_MASK_1792507169.873793", cleaned)
+        self.assertIn("518,743,662,743,662,969,518,969", cleaned)
+
+
+class TestInternalRemovalEntryPoint(unittest.TestCase):
+    """Guard the internal prune path against hand-built ServiceCall objects.
+
+    Home Assistant's ServiceCall takes `hass` as its first argument, so
+    building one internally as ServiceCall(domain, service, data) produced a
+    call whose data was empty. remove_mask then returned at its empty-id guard
+    and expired masks were never pruned automatically.
+    """
+
+    def test_module_never_builds_servicecall_directly(self):
+        import inspect
+        import custom_components.frigate_temp_mask as temp_mask_module
+
+        source = inspect.getsource(temp_mask_module)
+        self.assertNotIn("ServiceCall(", source)
+        self.assertIn("async def _async_remove_mask", source)
 
 
 if __name__ == "__main__":

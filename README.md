@@ -13,7 +13,7 @@ An all-in-one Lovelace card for Frigate: recent detection gallery, WebRTC live v
 <details>
 <summary><strong>Contents</strong></summary>
 
-- [What's New](#whats-new-in-v26)
+- [What's New](#whats-new-in-v27)
 - [Features](#features)
 - [Installation](#installation)
 - [Usage](#usage)
@@ -29,14 +29,14 @@ An all-in-one Lovelace card for Frigate: recent detection gallery, WebRTC live v
 
 </details>
 
-## What's New in v2.6
+## What's New in v2.7
 
-- **Temporary Mask Manager overhaul**: Live camera snapshots with mask polygon overlays, accurate countdowns, per-mask duration changes, instant removal, and reliable cleanup of expired or orphaned masks — including after Frigate reconnects from an outage.
-- **Active Masks sensor**: New `sensor.frigate_active_masks` diagnostic entity exposing the active mask count, mask details, pending-restart state, and detected Frigate version for dashboards and automations.
-- **Frigate 0.18+ mask compatibility**: Robust support for dictionary-format object masks, automatic adoption of masks found in Frigate's config, and safer mask retention across restarts.
-- **Timeline & continuous playback**: Integrated VOD timeline with an interactive scrubber, color-coded event markers, quick jumps, variable playback speeds, click-to-timeline navigation, and mute controls.
-- **Security hardening**: Event deletion now goes through the admin-only `frigate_temp_mask.delete_event` service, proxy views require authentication, hard-coded Frigate URL/camera fallbacks were removed, and event/mask details render via `textContent` to prevent HTML injection.
-- **Signed snapshot fix**: `auth/sign_path` requests now use the correct `expires` parameter, so signed thumbnails and camera previews load reliably behind authenticated reverse proxies.
+- **Interactive Temporary Mask Editor**: Click "Edit" on any active mask to modify its polygon directly over a live camera snapshot. Drag the fill to translate the whole mask, drag any edge to slide that boundary, or drag vertex pins to reshape. Includes one-click `Expand (+10%)`, `Shrink (-10%)`, and `Reset` controls.
+- **Multi-Label Masking**: Specify comma-separated labels (such as `person, dog`) to apply the same mask polygon across multiple Frigate object filters simultaneously. All copies synchronize and clean up automatically on expiry.
+- **Directly Editable Timeline Start Time**: Click the `Start` chip to directly type hour and minute values with a one-click AM/PM toggle, or step with day and time steppers—eliminating native browser date picker popups.
+- **Restyled Timeline Controls & Finer Skips**: Control panels are grouped into cohesive tonal cards with a round scrubber handle and progress fill. Transport buttons now feature finer skips (`-1m`, `-30s`, `-10s`, `+10s`, `+30s`, `+1m`) that move by wall-clock time and seamlessly stream past video chunk boundaries, with `2h` and `24h` window options.
+- **iPhone and Apple Watch Notification Actions**: Tapping temporary mask actions from iOS and Apple Watch notifications now works reliably by packing the event ID directly into the action identifier, preventing dropped action data.
+- **Smart TV Theater Mode & Event Deduplication**: Full-bleed 16:9 layout on TV browsers with D-pad friendly settings dialogs, alongside an optional `dedupe_events` setting to collapse near-simultaneous detections per camera and label.
 
 ## Features
 
@@ -155,7 +155,8 @@ offset: 1
 
 # Optional: Timeline (Frigate 0.13 VOD)
 show_timeline: true
-timeline_on_click: true
+event_click_action: timeline # or detail - which modal opens when clicking an event
+timeline_on_click: true # legacy alias: false equals event_click_action detail
 timeline_default_window_hours: 1
 timeline_event_seek_offset: 0
 
@@ -258,14 +259,23 @@ go2rtc_url: http://192.168.1.211:1984
 The Timeline modal plays continuous recordings from Frigate 0.13+ VOD, so you can review footage around an event instead of being limited to the event clip itself. Click any event thumbnail (with `timeline_on_click: true`) or use the live feed's right-click menu to open it.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/timeline.jpeg" width="100%" alt="Timeline player with event markers and playback controls" />
+  <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/timeline-browser.png" width="100%" alt="Timeline player with event markers, fine transport skips, and grouped controls" />
 </p>
 
-- **Interactive scrubber**: Drag anywhere on the track to seek. The current time is shown above the playhead, with the window start and end times on either side.
+<p align="center">
+  <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/timeline-mobile.png" width="38%" alt="Mobile phone timeline layout with under-video scrubber" />
+  &nbsp;&nbsp;
+  <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/timeline-tv.png" width="58%" alt="Smart TV full-bleed theater mode with overlay controls" />
+</p>
+
+- **Interactive scrubber**: Drag anywhere on the track to seek. The current time is shown above the playhead, with the window start and end times on either side. Includes a round drag handle and smooth progress fill.
+- **Device-optimized layouts**: Desktop browsers get full grouped tonal panels, mobile phones get a video-first view with under-video scrubber and settings sheet behind a gear icon, and smart TVs get a 16:9 full-bleed theater mode with overlay scrubber and D-pad friendly transport.
 - **Event markers**: Color-coded markers highlight detections across the selected window, making it easy to jump between moments.
-- **Quick jumps**: Choose `Now`, `-15m`, `-1h`, `-3h`, `-12h`, or `Start of Day` to reposition the timeline instantly.
-- **Window size**: Switch between `15m`, `30m`, `1h`, `2h`, and `3h` recording windows.
-- **Fine controls**: Nudge playback with `-5m`, `-1m`, `-30s`, `+30s`, `+1m`, and `+5m` buttons.
+- **Start picker**: Click `Start` to type or step the window start by day, hour, or minute. It opens a small in-card picker instead of the browser's date/time calendar, shows `Today` or `Yesterday` with the time, and keeps the quick jumps one click away.
+- **Quick jumps**: Choose `Now`, `-15m`, `-1h`, `-3h`, `-12h`, or `Start of Day` to jump relative to the current time, not the playhead. `-1h` always lands one hour before now, wherever the timeline happens to be.
+- **Window size**: Switch between `15m`, `30m`, `1h`, `2h`, `3h`, and `24h` recording windows.
+- **Opening window**: Opening from an event uses 30 minutes on desktop and 15 minutes on phone/tablet/TV. Opening without an event, such as from the live feed, starts with the last 24 hours.
+- **Fine controls**: Nudge playback with `-1m`, `-30s`, `-10s`, `+10s`, `+30s`, and `+1m` buttons. They move by wall-clock time, cross recording gaps and window edges, and stop at the start of footage or now.
 - **Variable speed**: Use the `-`/`+` controls to step from `0.5x` up to `4096x` (speeds above `16x` use frame stepping), with gapless auto-advance across recording chunks.
 
 > **Note:** Timeline playback requires the Frigate integration and access to Frigate's VOD recordings. Streams are signed automatically, so HLS playback works on iOS Safari, the Home Assistant Companion App, and authenticated reverse proxies.
@@ -292,9 +302,16 @@ The card works standalone. The [`frigate_temp_mask`](https://github.com/saihgupr
   <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/temp-mask-1.png" width="49%" alt="Frigate Config Object Mask" />
 </p>
 
-* **Flexible durations**: Set a mask for 1h, 4h, 8h, 12h, 24h, 48h, 7d, or custom hours.
+<p align="center">
+  <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/temp-mask-3.png" width="49%" alt="Temporary mask polygon editor with resize controls and label field" />
+  <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/temp-mask-4.png" width="49%" alt="Temporary mask list showing two active masks" />
+</p>
+
+* **Interactive Polygon Editor**: Edit mask shapes inline over a live camera snapshot. Drag the fill to move the whole mask, drag edges to slide boundaries, or pull vertex pins. Quick controls let you Expand (+10%), Shrink (-10%), or Reset to Frigate's detected bounding box.
+* **Flexible durations**: Set a mask for 1h, 8h, 24h, 7d, or no expiry with live countdowns. Expired masks prune automatically, including across Frigate restarts and outages.
+* **Multiple object labels**: Enter comma-separated labels (such as `person, dog`) in a mask's Label field to write the same mask under each object filter. Removing or expiring the mask cleans up every copy.
 * **Live previews**: The Mask Manager captures a fresh camera snapshot and overlays each active mask polygon.
-* **Instant removal**: Remove a mask from the context menu without waiting for a detector restart on Frigate 0.18+.
+* **Instant removal**: Remove a mask directly from the context menu or Mask Manager without waiting for detector restarts on Frigate 0.18+.
 
 #### Setup
 
@@ -380,9 +397,9 @@ action:
         image: "/api/frigate/notifications/{{ trigger.payload_json['after']['id'] }}/thumbnail.jpg"
         tag: "{{ trigger.payload_json['after']['id'] }}"
         actions:
-          - action: "TEMP_MASK_24H"
+          - action: "TEMP_MASK_24H:{{ trigger.payload_json['after']['id'] }}"
             title: "Temporary Mask"
-          - action: "TEMP_MASK_8H"
+          - action: "TEMP_MASK_8H:{{ trigger.payload_json['after']['id'] }}"
             title: "Mask 8h"
           - action: "URI"
             title: "View Live"
@@ -395,19 +412,25 @@ alias: "Apply Frigate Temporary Mask from Notification"
 trigger:
   - platform: event
     event_type: mobile_app_notification_action
-    event_data:
-      action: "TEMP_MASK_24H"
-  - platform: event
-    event_type: mobile_app_notification_action
-    event_data:
-      action: "TEMP_MASK_8H"
+condition:
+  - condition: template
+    value_template: >
+      {{ (trigger.event.data.action | default(trigger.event.data.actionName, true) | default('', true)).split(':', 1)[0] in ['TEMP_MASK_24H', 'TEMP_MASK_8H'] }}
 action:
   - service: frigate_temp_mask.add_mask
     data:
-      event_id: "{{ trigger.event.data.tag | default(trigger.event.data.action_data, true) }}"
+      event_id: >
+        {% set d = trigger.event.data %}
+        {% set action = d.action | default(d.actionName, true) | default('', true) %}
+        {% if ':' in action %}{{ action.split(':', 1)[1] }}
+        {% elif d.action_data is defined and d.action_data.event_id %}{{ d.action_data.event_id }}
+        {% else %}{{ d.tag | default('', true) }}{% endif %}
       duration_hours: >
-        {% if trigger.event.data.action == 'TEMP_MASK_8H' %}8{% else %}24{% endif %}
+        {% set action = trigger.event.data.action | default(trigger.event.data.actionName, true) | default('', true) %}
+        {{ 8 if action.split(':', 1)[0] == 'TEMP_MASK_8H' else 24 }}
 ```
+
+The event id travels inside the action identifier (`TEMP_MASK_24H:<event id>`) because iOS, and Apple Watch in particular, only returns the action name when a button is tapped. Action data and tags are dropped on that path, so a handler that reads `action_data.event_id` finds nothing and the mask is never created.
 
 </details>
 
@@ -425,6 +448,8 @@ The most common settings to get you started:
 | `cameras` | list | all | Filter to specific cameras |
 | `labels` | list | all | Filter to specific labels (person, car, etc.) |
 | `zones` | list | all | Filter to specific Frigate zones |
+| `dedupe_events` | boolean | `false` | Collapse events Frigate logged separately for the same moment, such as two people detected next to each other on one camera. Events are grouped by camera and label, and the earliest event in each group is kept. The Timeline still shows every event. |
+| `dedupe_window_seconds` | number | `5` | How many seconds apart two events on the same camera and label can start and still count as duplicates. Only used when `dedupe_events` is on. |
 | `video` | boolean | `true` | Whether to play video clips instead of snapshots in the gallery and modal. |
 | `video_on_hover` | boolean | `true` | Play video clips automatically when hovering over an event snapshot in the gallery. |
 | `scroll` | boolean | `true` | Enable horizontal scrolling gallery. When enabled, `event_count` sets the visible thumbnail count at once. |
@@ -460,9 +485,10 @@ The most common settings to get you started:
 | `offset` | number | `0` | Number of recent events to skip/hide from the start of the list. Useful for excluding the newest event if it's already shown in another card. |
 | `daily_clear_time` | string | none | Optional. Time to reset the display daily (24hr format, e.g., "04:00"). If set, events before this time are hidden and shown as grey placeholders. |
 | `show_timeline` | boolean | `true` | Enable the continuous playback Timeline modal. |
-| `timeline_on_click` | boolean | `true` | Open the Timeline directly when clicking an event thumbnail (requires `video` and `show_timeline`). |
-| `timeline_default_window_hours` | number | `1` | Default recording window shown when the Timeline opens. |
-| `timeline_event_seek_offset` | number \| map | `0` | Seconds added/subtracted when seeking to an event in the Timeline (e.g. `5` or `-5`). Supports per-label/zone map. |
+| `event_click_action` | string | `timeline` | Which modal opens when clicking an event: `timeline` or `detail`. Takes precedence over legacy `timeline_on_click`. |
+| `timeline_on_click` | boolean | `true` | Legacy: `false` opens details instead of Timeline (same as `event_click_action: detail`). Open the Timeline directly when clicking an event thumbnail (requires `video` and `show_timeline`). |
+| `timeline_default_window_hours` | number | `0.5` desktop / `0.25` mobile | Default window when opening from an event. When unset, desktop uses 30 minutes and phone/tablet/TV uses 15 minutes. Opening without an event always starts at 24 hours. |
+| `timeline_event_seek_offset` | number \| map | `video_start_skip_seconds` | Seconds added/subtracted when seeking to an event in the Timeline (e.g. `5` or `-5`). Supports per-label/zone map. When unset, the Timeline reuses `video_start_skip_seconds` so it starts where event clips start instead of on the lead-in; set `0` to start exactly on Frigate's reported event start. |
 | `timeline_show_mute` | boolean | `true` | Show the mute toggle button on hover over the Timeline video player. Setting `show_mute: false` (or `live_view_show_mute: false`) also hides it; an explicit `timeline_show_mute` wins. |
 
 ### Advanced Detail Modal & Debug Settings

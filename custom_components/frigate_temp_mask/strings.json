@@ -1,0 +1,14 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Frigate Temporary Mask",
+        "description": "Do you want to set up the Frigate Temporary Mask integration? It coordinates with the Frigate Events Card to inject and manage temporary false-positive masks."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Only a single instance of Frigate Temporary Mask is needed."
+    }
+  }
+}
+

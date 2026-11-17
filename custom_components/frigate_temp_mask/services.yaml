@@ -24,6 +24,17 @@ add_mask:
       description: Optional [x, y, width, height] coordinates, in pixels or normalized to 0–1. Normally inferred from event_id.
       selector:
         text:
+    polygon:
+      name: Polygon
+      description: Optional polygon coordinate string (e.g. from mask edit). If supplied with an existing mask_id, updates the mask geometry.
+      selector:
+        text:
+    label:
+      name: Label
+      description: One or more object labels for the mask, comma-separated (e.g. person, dog). The same mask is written under every label. Inferred from event_id if omitted.
+      example: person, dog
+      selector:
+        text:
     duration_hours:
       name: Duration (Hours)
       description: Hours before the mask is automatically pruned (default 24).
@@ -78,6 +89,10 @@ remove_mask:
 prune_all:
   name: Prune All Temporary Masks
   description: Removes all temporary masks from Frigate configuration.
+
+prune_expired:
+  name: Prune Expired Temporary Masks
+  description: Automatically removes any temporary masks whose expiration time has passed.
 
 restart:
   name: Restart Frigate

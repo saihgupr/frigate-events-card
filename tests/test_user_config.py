@@ -1,5 +1,6 @@
 import sys
 from unittest.mock import MagicMock
+sys.modules['voluptuous'] = MagicMock()
 sys.modules['homeassistant'] = MagicMock()
 sys.modules['homeassistant.components'] = MagicMock()
 sys.modules['homeassistant.components.http'] = MagicMock()

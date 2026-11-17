@@ -4,12 +4,13 @@
 import { LitElement, html, css, PropertyValues, TemplateResult, CSSResult } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { ref } from 'lit/directives/ref.js';
+import { guard } from 'lit/directives/guard.js';
 import { HomeAssistant, LovelaceCardConfig, LovelaceLayoutOptions } from './ha/types';
 import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint } from './frigate/types';
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.6.2';
+const CARD_VERSION = '2.7.3';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -58,6 +59,8 @@ interface FrigateEventsCardConfig extends LovelaceCardConfig {
   camera?: string;
   labels?: string[];
   zones?: string[];
+  dedupe_events?: boolean;          // default: false — collapse near-simultaneous events per camera and label
+  dedupe_window_seconds?: number;   // default: 5 — max start-time gap for two events to count as duplicates
   show_label?: boolean;
   show_timestamp?: boolean;
   show_date?: boolean;
@@ -78,6 +81,7 @@ interface FrigateEventsCardConfig extends LovelaceCardConfig {
   video_start_padding?: number | Record<string, number>;
   video_end_skip_seconds?: number | Record<string, number>;
   debug?: boolean;
+  testing?: boolean;
   tracking_pan_delay?: number | Record<string, number>;
   tracking_smoothing?: number;
   scroll?: boolean;
@@ -102,7 +106,8 @@ interface FrigateEventsCardConfig extends LovelaceCardConfig {
   // Timeline options
   show_timeline?: boolean;          // default: true
   timeline?: boolean;               // alias for show_timeline: default: true
-  timeline_on_click?: boolean;      // default: true (when timeline is on and video is enabled)
+  timeline_on_click?: boolean;      // default: true (when timeline is on and video is enabled) — legacy, use event_click_action
+  event_click_action?: 'timeline' | 'detail'; // default: 'timeline' — which modal opens when clicking an event
   timeline_show_mute?: boolean;     // default: true
   timeline_default_window_hours?: number; // default: 1
   timeline_event_seek_offset?: number | Record<string, number>;    // default: 0 (seconds added/subtracted, e.g. -26 or { car: -26, person: -10 })
@@ -111,6 +116,8 @@ interface FrigateEventsCardConfig extends LovelaceCardConfig {
 const DEFAULT_CONFIG: Partial<FrigateEventsCardConfig> = {
   frigate_client_id: 'frigate',
   event_count: 5,
+  dedupe_events: false,
+  dedupe_window_seconds: 5,
   show_label: true,
   show_timestamp: true,
   show_date: false,
@@ -126,6 +133,7 @@ const DEFAULT_CONFIG: Partial<FrigateEventsCardConfig> = {
   show_timeline: true,
   timeline: true,
   timeline_on_click: true,
+  event_click_action: 'timeline',
   timeline_show_mute: true,
   timeline_default_window_hours: 1,
   timeline_event_seek_offset: 0,
@@ -141,6 +149,7 @@ const DEFAULT_CONFIG: Partial<FrigateEventsCardConfig> = {
   video_start_skip_seconds: 0,
   video_end_skip_seconds: 0,
   debug: false,
+  testing: false,
   tracking_smoothing: HOVER_CROP_DEFAULT_SMOOTHING,
   scroll: true,
   scroll_limit: 20,
@@ -180,15 +189,26 @@ export class FrigateEventsCard extends LitElement {
   @state() private _hoveredEventId?: string;
   @state() private _liveViewError?: string;   // Set when live feed fails gracefully
   @state() private _isLiveMuted = true;
+  @state() private _liveAutoplayBlocked = false;
+  @state() private _liveUserActivated = false;
+  private _tvBroBrowser?: boolean;
   @state() private _maskManagerSelectedCamera = 'all';
   // undefined = default (first mask expanded), '' = all collapsed, otherwise a mask id
   private _maskManagerExpandedId?: string;
+  private _maskEditingId?: string;
+  private _maskEditSavingIds = new Set<string>();
   @state() private _localPendingMasks: any[] = [];
+  /** Hotkey override for the version badge; independent of config.debug. */
+  @state() private _showVersionOverride?: boolean;
 
   private _unsubscribe?: () => void;
+  private _subscribing = false;
+  private _loadRetryTimer?: number;
+  private _webrtcReconnectTimer?: number;
   private _pollInterval?: number;
   private _boundVisibilityHandler?: () => void;
   private _boundKeyDownHandler?: (e: KeyboardEvent) => void;
+  private _boundDebugVersionHandler?: (e: KeyboardEvent) => void;
   private _modalContainer?: HTMLDivElement;
   private _maskManagerContainer?: HTMLDivElement;
   private _maskManagerTimer?: ReturnType<typeof setInterval>;
@@ -207,6 +227,8 @@ export class FrigateEventsCard extends LitElement {
   private _intersectionGraceTimer?: number;
   private _disconnectTimer?: number;
   private _liveVideoEl: HTMLVideoElement | null = null;
+  private _freezeCanvasEl: HTMLCanvasElement | null = null;
+  private _statsInterval?: number;
   private _remoteStream?: MediaStream;
   private _contextMenuEl?: HTMLElement;
   private _isIntersecting = false;
@@ -240,9 +262,9 @@ export class FrigateEventsCard extends LitElement {
   // long windows (e.g. 24h) never exceed Frigate's nginx-vod clip limit.
   private _timelineVodStartTs = 0;
   private _timelineVodEndTs = 0;
-  private _timelineWindowDurationSec = 3600; // default 1 hour
-  /** True once the user picks a window pill, so defaults stop overriding it. */
-  private _timelineWindowUserChosen = false;
+  private _timelineWindowDurationSec = 3600; // current window; set on every open
+  /** Last window size the user picked by hand. Zero means use the open default. */
+  private _timelinePreferredWindowSec = 0;
   private _timelinePlaybackRate = 1;
   private _timelineSpeedInterval?: number;
   private _isTimelineMuted = true;
@@ -255,6 +277,17 @@ export class FrigateEventsCard extends LitElement {
   private _timelineAdvanceTimeout?: number;
   private _timelineSlotTransitionTimeout?: number;
   private _timelineWindowRequestId = 0;
+  // Start-time popover draft and per-camera earliest-footage cache used by the
+  // skip controls so a backward skip never walks past the oldest recording.
+  private _timelineStartDraftTs = 0;
+  private _timelineStartOutsideHandler?: (e: PointerEvent) => void;
+  private _timelineEarliestFootageTs = 0;
+  private _timelineSkipStateKey = '';
+  // Requested wall-clock position while a chunk is still buffering, so rapid
+  // skip presses accumulate instead of reading video.currentTime = 0.
+  private _timelinePendingSeekTs = 0;
+  private _timelinePendingSeekUntil = 0;
+  private _timelineKeyDownHandler?: (e: KeyboardEvent) => void;
 
 
   /**
@@ -314,7 +347,7 @@ export class FrigateEventsCard extends LitElement {
   protected shouldUpdate(changedProps: PropertyValues): boolean {
     // If hass is the only property that changed, and it was already defined previously,
     // check if we need to subscribe, but skip re-rendering the HTML DOM tree unless
-    // active masks changed.
+    // active masks or Frigate online/offline state changed.
     if (changedProps.has('hass') && changedProps.size === 1) {
       const oldHass = changedProps.get('hass') as HomeAssistant | undefined;
       if (oldHass !== undefined) {
@@ -327,6 +360,11 @@ export class FrigateEventsCard extends LitElement {
           if (this._maskManagerContainer) {
             this._renderMaskManagerContent(this._maskManagerContainer);
           }
+          return true;
+        }
+        // Re-render when Frigate goes offline/online so the live box
+        // hides/shows. Polling already skips fetches while offline.
+        if (this._isFrigateOfflineFor(oldHass?.states) !== this._isFrigateOffline()) {
           return true;
         }
         return false;
@@ -348,12 +386,13 @@ export class FrigateEventsCard extends LitElement {
   }
 
   protected async firstUpdated(): Promise<void> {
-    await this._loadEvents();
-    await this._subscribeToEvents();
     this._setupVisibilityHandler();
     this._setupPolling();
+    this._setupDebugVersionToggle();
     this._setupLiveView();
     this._setupFullscreenListener();
+    await this._loadEvents();
+    await this._subscribeToEvents();
   }
 
   protected updated(changedProps: PropertyValues): void {
@@ -393,6 +432,9 @@ export class FrigateEventsCard extends LitElement {
       if (!this._pollInterval) {
         this._setupPolling();
       }
+      if (!this._boundDebugVersionHandler) {
+        this._setupDebugVersionToggle();
+      }
       if (!this._intersectionObserver) {
         this._setupLiveView();
       }
@@ -416,9 +458,31 @@ export class FrigateEventsCard extends LitElement {
       clearInterval(this._pollInterval);
       this._pollInterval = undefined;
     }
+    if (this._loadRetryTimer) {
+      clearTimeout(this._loadRetryTimer);
+      this._loadRetryTimer = undefined;
+    }
+    if (this._intersectionGraceTimer) {
+      clearTimeout(this._intersectionGraceTimer);
+      this._intersectionGraceTimer = undefined;
+    }
+    if (this._webrtcReconnectTimer) {
+      clearTimeout(this._webrtcReconnectTimer);
+      this._webrtcReconnectTimer = undefined;
+    }
+    if (this._intersectionObserver) {
+      this._intersectionObserver.disconnect();
+      this._intersectionObserver = undefined;
+    }
+    this._isIntersecting = false;
+    this._teardownWebRTC(true);
     if (this._boundVisibilityHandler) {
       document.removeEventListener('visibilitychange', this._boundVisibilityHandler);
       this._boundVisibilityHandler = undefined;
+    }
+    if (this._boundDebugVersionHandler) {
+      window.removeEventListener('keydown', this._boundDebugVersionHandler);
+      this._boundDebugVersionHandler = undefined;
     }
     if (this._boundFullscreenHandler) {
       document.removeEventListener('fullscreenchange', this._boundFullscreenHandler);
@@ -499,6 +563,47 @@ export class FrigateEventsCard extends LitElement {
   }
 
   /**
+   * Ctrl+Opt+Cmd+D toggles the version badge without editing Lovelace
+   * config. Uses e.code (not e.key) since Option modifies the character.
+   * Persisted in localStorage so it survives refresh while testing.
+   */
+  private _setupDebugVersionToggle(): void {
+    if (this._boundDebugVersionHandler) return;
+    try {
+      const stored = window.localStorage?.getItem('frigate-events-card-show-version');
+      if (stored === '1') this._showVersionOverride = true;
+      else if (stored === '0') this._showVersionOverride = false;
+    } catch {
+      // Ignore storage errors (private mode, etc.)
+    }
+    this._boundDebugVersionHandler = (e: KeyboardEvent) => {
+      if (e.code === 'KeyD' && e.ctrlKey && e.altKey && e.metaKey) {
+        // Only available when testing: true is in config, so the hotkey
+        // passes through untouched for everyone else.
+        if (this._config?.testing !== true) return;
+        e.preventDefault();
+        const current = this._showVersionOverride ?? false;
+        this._showVersionOverride = !current;
+        try {
+          window.localStorage?.setItem(
+            'frigate-events-card-show-version',
+            this._showVersionOverride ? '1' : '0'
+          );
+        } catch {
+          // Ignore storage errors
+        }
+      }
+    };
+    window.addEventListener('keydown', this._boundDebugVersionHandler);
+  }
+
+  private _diagLog(...args: unknown[]): void {
+    if (this._config?.debug || this._config?.testing) {
+      console.warn('[FrigateEventsCard DIAG]', ...args);
+    }
+  }
+
+  /**
    * Set up an IntersectionObserver to gate the WebRTC connection to card visibility.
    * Opens the peer connection when ≥10% of the card is in the viewport,
    * and closes it (after LIVE_VIEW_TEARDOWN_GRACE_MS) when it leaves.
@@ -522,6 +627,7 @@ export class FrigateEventsCard extends LitElement {
       (entries) => {
         const isVisible = entries.some(e => e.isIntersecting);
         this._isIntersecting = isVisible;
+        this._diagLog(`IntersectionObserver: isIntersecting=${isVisible}, docVisibility=${document.visibilityState}`);
         if (isVisible && document.visibilityState === 'visible') {
           // Cancel any pending teardown grace timer
           if (this._intersectionGraceTimer) {
@@ -586,20 +692,50 @@ export class FrigateEventsCard extends LitElement {
 
       const remoteStream = new MediaStream();
       this._remoteStream = remoteStream;
-      // Attach to the video element if it's already in the DOM
       const videoEl = this._liveVideoEl || (this.renderRoot?.querySelector('.live-view-video') as HTMLVideoElement | null);
       if (videoEl) {
         this._liveVideoEl = videoEl;
         videoEl.muted = this._isLiveMuted;
-        if (videoEl.srcObject !== remoteStream) {
-          videoEl.srcObject = remoteStream;
-          videoEl.play().catch(() => {});
-        }
       }
 
       pc.ontrack = (event) => {
-        // Add each incoming track to the stream that's already attached to the <video>
-        event.streams[0]?.getTracks().forEach(track => remoteStream.addTrack(track));
+        // Attach stream to <video> only once tracks arrive so reconnects keep the last frame visible
+        event.streams[0]?.getTracks().forEach((track) => {
+          remoteStream.addTrack(track);
+          if (track.kind === 'video') {
+            track.onmute = () => {
+              this._diagLog('WebRTC video track MUTED (holding freeze frame)');
+              if (this._liveVideoEl) {
+                this._liveVideoEl.style.opacity = '0';
+              }
+            };
+            track.onunmute = () => {
+              this._diagLog('WebRTC video track UNMUTED (restoring live video)');
+              if (this._liveVideoEl) {
+                this._liveVideoEl.style.opacity = '1';
+                this._liveVideoEl.style.visibility = 'visible';
+              }
+            };
+          }
+        });
+        if (event.track && !remoteStream.getTracks().includes(event.track)) {
+          remoteStream.addTrack(event.track);
+          if (event.track.kind === 'video') {
+            event.track.onmute = () => {
+              this._diagLog('WebRTC video track MUTED (holding freeze frame)');
+              if (this._liveVideoEl) {
+                this._liveVideoEl.style.opacity = '0';
+              }
+            };
+            event.track.onunmute = () => {
+              this._diagLog('WebRTC video track UNMUTED (restoring live video)');
+              if (this._liveVideoEl) {
+                this._liveVideoEl.style.opacity = '1';
+                this._liveVideoEl.style.visibility = 'visible';
+              }
+            };
+          }
+        }
         const video = this._liveVideoEl || (this.renderRoot?.querySelector('.live-view-video') as HTMLVideoElement | null);
         if (video) {
           this._liveVideoEl = video;
@@ -607,7 +743,8 @@ export class FrigateEventsCard extends LitElement {
           if (video.srcObject !== remoteStream) {
             video.srcObject = remoteStream;
           }
-          video.play().catch(() => {});
+          this._playLiveVideo(video);
+          this._startFreezeCanvasCapture(video);
         }
       };
 
@@ -619,7 +756,15 @@ export class FrigateEventsCard extends LitElement {
 
       // --- SDP offer ---
       const offer = await pc.createOffer();
+      if (!this.isConnected || this._peerConnection !== pc) {
+        pc.close();
+        return;
+      }
       await pc.setLocalDescription(offer);
+      if (!this.isConnected || this._peerConnection !== pc) {
+        pc.close();
+        return;
+      }
 
       // Gather ICE candidates before sending the offer (complete gathering or 3s timeout).
       // This is a Vanilla ICE approach — simpler and works well on LAN.
@@ -637,6 +782,10 @@ export class FrigateEventsCard extends LitElement {
         // 3-second fallback to support Trickle ICE if the camera needs it
         setTimeout(() => resolve(pc.localDescription?.sdp || offer.sdp!), 3000);
       });
+      if (!this.isConnected || this._peerConnection !== pc) {
+        pc.close();
+        return;
+      }
 
       // --- Subscribe to HA's WebRTC offer/answer event stream ---
       this._liveViewUnsub = await this.hass.connection.subscribeMessage<HAWebRtcEvent>(
@@ -674,7 +823,7 @@ export class FrigateEventsCard extends LitElement {
               console.warn(
                 `Frigate Events Card: WebRTC stream error (${event.code}): ${event.message}`
               );
-              this._teardownWebRTC();
+              this._teardownWebRTC(false);
               if (allowAudio) {
                 console.info('Frigate Events Card: Retrying WebRTC with video-only...');
                 this._startWebRTC(false);
@@ -687,6 +836,10 @@ export class FrigateEventsCard extends LitElement {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         { type: 'camera/web_rtc_offer', entity_id: entity, offer: sdpOffer } as any
       );
+      if (!this.isConnected || this._peerConnection !== pc) {
+        this._teardownWebRTC(true);
+        return;
+      }
 
       // --- Trickle ICE: send local candidates to HA as they're discovered ---
       pc.onicecandidate = ({ candidate }) => {
@@ -704,7 +857,7 @@ export class FrigateEventsCard extends LitElement {
       this._setupWebRTCMonitoring(pc);
 
     } catch (e: any) {
-      this._teardownWebRTC();
+      this._teardownWebRTC(false);
       if (allowAudio) {
         console.info('Frigate Events Card: Retrying WebRTC with video-only...');
         this._startWebRTC(false);
@@ -719,9 +872,31 @@ export class FrigateEventsCard extends LitElement {
     }
   }
 
+  private _isLanGo2rtcHost(urlStr: string): { isLan: boolean; isIpv4Literal: boolean } {
+    try {
+      const parsed = new URL(urlStr, window.location.origin);
+      const host = parsed.hostname.toLowerCase();
+      const isIpv4Literal = /^\d+\.\d+\.\d+\.\d+$/.test(host);
+      const isLan =
+        host === 'localhost' ||
+        host === '127.0.0.1' ||
+        host.endsWith('.local') ||
+        host.endsWith('.lan') ||
+        /^192\.168\.\d+\.\d+$/.test(host) ||
+        /^10\.\d+\.\d+\.\d+$/.test(host) ||
+        /^172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+$/.test(host);
+      return { isLan, isIpv4Literal };
+    } catch {
+      return { isLan: false, isIpv4Literal: false };
+    }
+  }
+
   private async _startGo2rtcWebRTC(go2rtcUrl: string, streamName: string): Promise<void> {
     try {
-      const pc = new RTCPeerConnection({ iceServers: WEBRTC_STUN_SERVERS });
+      const { isLan, isIpv4Literal } = this._isLanGo2rtcHost(go2rtcUrl);
+      // Skip external STUN servers for local LAN go2rtc endpoints so ICE gathering completes in <20ms
+      // instead of waiting up to 3,000ms on WAN STUN responses or temporary IPv6 STUN candidates.
+      const pc = new RTCPeerConnection({ iceServers: isLan ? [] : WEBRTC_STUN_SERVERS });
       this._peerConnection = pc;
 
       const remoteStream = new MediaStream();
@@ -730,14 +905,45 @@ export class FrigateEventsCard extends LitElement {
       if (videoEl) {
         this._liveVideoEl = videoEl;
         videoEl.muted = this._isLiveMuted;
-        if (videoEl.srcObject !== remoteStream) {
-          videoEl.srcObject = remoteStream;
-          videoEl.play().catch(() => {});
-        }
       }
 
       pc.ontrack = (event) => {
-        event.streams[0]?.getTracks().forEach((track) => remoteStream.addTrack(track));
+        event.streams[0]?.getTracks().forEach((track) => {
+          remoteStream.addTrack(track);
+          if (track.kind === 'video') {
+            track.onmute = () => {
+              this._diagLog('WebRTC video track MUTED (holding freeze frame)');
+              if (this._liveVideoEl) {
+                this._liveVideoEl.style.opacity = '0';
+              }
+            };
+            track.onunmute = () => {
+              this._diagLog('WebRTC video track UNMUTED (restoring live video)');
+              if (this._liveVideoEl) {
+                this._liveVideoEl.style.opacity = '1';
+                this._liveVideoEl.style.visibility = 'visible';
+              }
+            };
+          }
+        });
+        if (event.track && !remoteStream.getTracks().includes(event.track)) {
+          remoteStream.addTrack(event.track);
+          if (event.track.kind === 'video') {
+            event.track.onmute = () => {
+              this._diagLog('WebRTC video track MUTED (holding freeze frame)');
+              if (this._liveVideoEl) {
+                this._liveVideoEl.style.opacity = '0';
+              }
+            };
+            event.track.onunmute = () => {
+              this._diagLog('WebRTC video track UNMUTED (restoring live video)');
+              if (this._liveVideoEl) {
+                this._liveVideoEl.style.opacity = '1';
+                this._liveVideoEl.style.visibility = 'visible';
+              }
+            };
+          }
+        }
         const video = this._liveVideoEl || (this.renderRoot?.querySelector('.live-view-video') as HTMLVideoElement | null);
         if (video) {
           this._liveVideoEl = video;
@@ -745,7 +951,8 @@ export class FrigateEventsCard extends LitElement {
           if (video.srcObject !== remoteStream) {
             video.srcObject = remoteStream;
           }
-          video.play().catch(() => {});
+          this._playLiveVideo(video);
+          this._startFreezeCanvasCapture(video);
         }
       };
 
@@ -753,33 +960,68 @@ export class FrigateEventsCard extends LitElement {
       pc.addTransceiver('audio', { direction: 'recvonly' });
 
       const offer = await pc.createOffer();
+      if (!this.isConnected || this._peerConnection !== pc) {
+        pc.close();
+        return;
+      }
       await pc.setLocalDescription(offer);
+      if (!this.isConnected || this._peerConnection !== pc) {
+        pc.close();
+        return;
+      }
 
-      const sdpOffer = await new Promise<string>((resolve) => {
+      let sdpOffer = await new Promise<string>((resolve) => {
         if (pc.iceGatheringState === 'complete') {
           resolve(pc.localDescription!.sdp);
           return;
         }
-        const onStateChange = () => {
+        let settled = false;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          resolve(pc.localDescription?.sdp || offer.sdp!);
+        };
+        pc.onicegatheringstatechange = () => {
           if (pc.iceGatheringState === 'complete') {
-            resolve(pc.localDescription!.sdp);
+            finish();
           }
         };
-        pc.onicegatheringstatechange = onStateChange;
-        setTimeout(() => resolve(pc.localDescription?.sdp || offer.sdp!), 3000);
+        setTimeout(finish, isLan ? 500 : 3000);
       });
+      if (!this.isConnected || this._peerConnection !== pc) {
+        pc.close();
+        return;
+      }
+
+      // If go2rtcUrl is an explicit IPv4 LAN address and SDP contains IPv4 host candidates,
+      // strip temporary IPv6 host candidates so WebRTC binds to stable LAN IPv4 rather than
+      // ephemeral SLAAC privacy IPv6 addresses.
+      if (isLan && isIpv4Literal && /\ba=candidate:\S+\s+\d+\s+udp\s+\d+\s+\d+\.\d+\.\d+\.\d+\s+/i.test(sdpOffer)) {
+        sdpOffer = sdpOffer
+          .split('\r\n')
+          .filter((line) => !/^a=candidate:\S+\s+\d+\s+udp\s+\d+\s+[0-9a-fA-F:]+:[0-9a-fA-F:]+\s+/i.test(line))
+          .join('\r\n');
+      }
 
       const cleanUrl = go2rtcUrl.replace(/\/+$/, '');
       const res = await fetch(`${cleanUrl}/api/webrtc?src=${encodeURIComponent(streamName)}`, {
         method: 'POST',
         body: sdpOffer,
       });
+      if (!this.isConnected || this._peerConnection !== pc) {
+        pc.close();
+        return;
+      }
 
       if (!res.ok) {
         throw new Error(`go2rtc returned HTTP ${res.status}: ${res.statusText}`);
       }
 
       const text = await res.text();
+      if (!this.isConnected || this._peerConnection !== pc) {
+        pc.close();
+        return;
+      }
       let answerSdp = text;
       try {
         const json = JSON.parse(text);
@@ -790,6 +1032,10 @@ export class FrigateEventsCard extends LitElement {
       }
 
       await pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: answerSdp }));
+      if (!this.isConnected || this._peerConnection !== pc) {
+        pc.close();
+        return;
+      }
       this._liveViewError = undefined;
 
       // --- Monitor for connection failure and 24/7 self-healing recovery ---
@@ -798,7 +1044,7 @@ export class FrigateEventsCard extends LitElement {
       const msg = e?.message || String(e);
       console.error('Frigate Events Card: Failed direct go2rtc WebRTC session:', msg);
       this._liveViewError = `Failed go2rtc stream: ${msg}`;
-      this._teardownWebRTC();
+      this._teardownWebRTC(false);
     }
   }
 
@@ -806,8 +1052,17 @@ export class FrigateEventsCard extends LitElement {
    * Close the WebRTC peer connection and free all associated resources.
    * Sends the close_webrtc_session command to HA so the server-side
    * session is also released. Safe to call multiple times.
+   *
+   * @param clearVideo When true (default), detaches srcObject from the <video>
+   *   element to release the hardware decoder immediately. Pass false during
+   *   in-place reconnects so the last video frame stays visible until the new
+   *   stream's ontrack fires.
    */
-  private _teardownWebRTC(): void {
+  private _teardownWebRTC(clearVideo = true): void {
+    if (this._statsInterval) {
+      clearInterval(this._statsInterval);
+      this._statsInterval = undefined;
+    }
     if (this._disconnectTimer) {
       clearTimeout(this._disconnectTimer);
       this._disconnectTimer = undefined;
@@ -838,16 +1093,55 @@ export class FrigateEventsCard extends LitElement {
       this._liveViewSessionId = undefined;
     }
 
-    // Detach the stream from the video element and stop all tracks
-    if (this._liveVideoEl) {
+    // Stop all tracks on the previous stream
+    if (this._remoteStream) {
+      this._remoteStream.getTracks().forEach((track) => track.stop());
+      this._remoteStream = undefined;
+    }
+
+    // Detach the stream from the video element when fully tearing down
+    if (clearVideo && this._liveVideoEl) {
       try {
         this._liveVideoEl.pause();
       } catch (_) {}
       this._liveVideoEl.srcObject = null;
+      this._liveVideoEl.style.opacity = '1';
     }
-    if (this._remoteStream) {
-      this._remoteStream.getTracks().forEach((track) => track.stop());
-      this._remoteStream = undefined;
+  }
+
+  /**
+   * TV Bro's Android WebView refuses autoplay until a user gesture and paints
+   * its own grey play-button poster over the video element. CSS cannot hide
+   * that poster, so on TV Bro the live <video> is kept out of the DOM until
+   * the first tap.
+   */
+  private _isTvBroBrowser(): boolean {
+    if (this._tvBroBrowser === undefined) {
+      try {
+        this._tvBroBrowser = /TV\s*Bro/i.test(String(navigator.userAgent || ''));
+      } catch (_) {
+        this._tvBroBrowser = false;
+      }
+    }
+    return this._tvBroBrowser;
+  }
+
+  private _shouldSuppressLiveVideo(): boolean {
+    return this._liveAutoplayBlocked || (this._isTvBroBrowser() && !this._liveUserActivated);
+  }
+
+  private _playLiveVideo(videoEl?: HTMLVideoElement | null): void {
+    const video = videoEl ?? this._liveVideoEl;
+    if (!video) return;
+    const attempt = video.play();
+    if (attempt && typeof attempt.catch === 'function') {
+      attempt.catch((err: DOMException) => {
+        if (err?.name === 'NotAllowedError') {
+          // The browser blocked autoplay. Drop the video element so its
+          // native poster (the big grey play button) cannot be painted.
+          this._liveAutoplayBlocked = true;
+        }
+      });
     }
   }
 
@@ -865,7 +1159,32 @@ export class FrigateEventsCard extends LitElement {
       return;
     }
     const container = e.currentTarget as HTMLElement;
+
+    // No video is mounted while autoplay is blocked (TV Bro). This tap is the
+    // user gesture that lets us mount it and start playback.
+    if (this._shouldSuppressLiveVideo()) {
+      this._liveAutoplayBlocked = false;
+      this._liveUserActivated = true;
+      this.updateComplete.then(() => {
+        if (!this.isConnected) return;
+        const video = this._liveVideoEl || (this.renderRoot?.querySelector('.live-view-video') as HTMLVideoElement | null);
+        if (video) {
+          if (this._remoteStream && video.srcObject !== this._remoteStream) {
+            video.srcObject = this._remoteStream;
+          }
+          this._playLiveVideo(video);
+        }
+      });
+      return;
+    }
+
     const videoEl = this._liveVideoEl || container.querySelector('video');
+
+    // A tap counts as a user gesture, which lets TV browsers that block
+    // autoplay (TV Bro, Android WebView) start the stream on demand.
+    if (videoEl?.paused) {
+      this._playLiveVideo(videoEl);
+    }
 
     // Check if element or document is currently fullscreen
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -893,7 +1212,7 @@ export class FrigateEventsCard extends LitElement {
       }
 
       if (videoEl && videoEl.paused) {
-        videoEl.play().catch(() => {});
+        this._playLiveVideo(videoEl);
       }
       return;
     }
@@ -1006,14 +1325,14 @@ export class FrigateEventsCard extends LitElement {
           videoEl.srcObject = this._remoteStream;
         }
         if (videoEl.paused) {
-          videoEl.play().catch(() => {});
+          this._playLiveVideo(videoEl);
         }
         setTimeout(() => {
           if (videoEl && this._remoteStream && videoEl.srcObject !== this._remoteStream) {
             videoEl.srcObject = this._remoteStream;
           }
           if (videoEl?.paused) {
-            videoEl.play().catch(() => {});
+            this._playLiveVideo(videoEl);
           }
         }, 150);
       }
@@ -1066,7 +1385,7 @@ export class FrigateEventsCard extends LitElement {
     const handleStateChange = () => {
       const connState = pc.connectionState;
       const iceState = pc.iceConnectionState;
-      console.debug(`Frigate Events Card: WebRTC state → connection: ${connState}, ice: ${iceState}`);
+      this._diagLog(`WebRTC state: connection=${connState}, ice=${iceState}`);
 
       if (connState === 'connected' || iceState === 'connected' || iceState === 'completed') {
         if (this._disconnectTimer) {
@@ -1079,9 +1398,13 @@ export class FrigateEventsCard extends LitElement {
           this._disconnectTimer = undefined;
         }
         console.warn('Frigate Events Card: WebRTC connection failed; auto-reconnecting in 5s.');
-        this._teardownWebRTC();
-        window.setTimeout(() => {
-          if (this._intersectionObserver && !this._peerConnection) {
+        this._teardownWebRTC(false);
+        if (this._webrtcReconnectTimer) {
+          clearTimeout(this._webrtcReconnectTimer);
+        }
+        this._webrtcReconnectTimer = window.setTimeout(() => {
+          this._webrtcReconnectTimer = undefined;
+          if (this.isConnected && this._intersectionObserver && !this._peerConnection) {
             this._startWebRTC();
           }
         }, 5000);
@@ -1091,13 +1414,14 @@ export class FrigateEventsCard extends LitElement {
           this._disconnectTimer = window.setTimeout(() => {
             this._disconnectTimer = undefined;
             if (
+              this.isConnected &&
               this._peerConnection === pc &&
               (pc.connectionState === 'disconnected' || pc.iceConnectionState === 'disconnected')
             ) {
               console.warn(
                 'Frigate Events Card: WebRTC stream remained disconnected for 10s. Triggering self-healing restart.'
               );
-              this._teardownWebRTC();
+              this._teardownWebRTC(false);
               this._startWebRTC();
             }
           }, 10000);
@@ -1105,14 +1429,129 @@ export class FrigateEventsCard extends LitElement {
       }
     };
 
+    let lastFreezes = 0;
+    let lastFramesDropped = 0;
+    let lastPacketsLost = 0;
+    if (this._statsInterval) {
+      clearInterval(this._statsInterval);
+    }
+    this._statsInterval = window.setInterval(async () => {
+      if (!this.isConnected || this._peerConnection !== pc) {
+        clearInterval(this._statsInterval);
+        this._statsInterval = undefined;
+        return;
+      }
+      try {
+        const stats = await pc.getStats();
+        stats.forEach((report: any) => {
+          if (report.type === 'inbound-rtp' && report.kind === 'video') {
+            const freezes = report.freezeCount || 0;
+            const dropped = report.framesDropped || 0;
+            const lost = report.packetsLost || 0;
+            if (freezes > lastFreezes || dropped > lastFramesDropped || lost > lastPacketsLost) {
+              this._diagLog(
+                `WebRTC stats delta: freezes=+${freezes - lastFreezes} (total ${freezes}), dropped=+${dropped - lastFramesDropped} (total ${dropped}), packetsLost=+${lost - lastPacketsLost} (total ${lost})`
+              );
+              lastFreezes = freezes;
+              lastFramesDropped = dropped;
+              lastPacketsLost = lost;
+            }
+          }
+        });
+      } catch {}
+    }, 5000);
+
     pc.onconnectionstatechange = handleStateChange;
     pc.oniceconnectionstatechange = handleStateChange;
+  }
+
+  /**
+   * True when the Frigate integration reports the server as unreachable.
+   * While offline we freeze the gallery on the last known events so the
+   * boxes don't flash in/out on every poll + retry.
+   */
+  private _isFrigateOfflineFor(states: any): boolean {
+    if (!states) return false;
+    const clientId = this._config?.frigate_client_id || 'frigate';
+    const candidates = [
+      'sensor.frigate_status',
+      `sensor.${clientId}_status`,
+    ];
+    for (const entityId of candidates) {
+      const s = states[entityId];
+      if (!s) continue;
+      const state = String(s.state ?? '').toLowerCase();
+      if (state === 'unavailable' || state === 'unknown' || state === 'none' || state === '') {
+        return true;
+      }
+      // Any other state (e.g. 'running') means online.
+      return false;
+    }
+    return false;
+  }
+
+  private _isFrigateOffline(): boolean {
+    return this._isFrigateOfflineFor(this.hass?.states as any);
+  }
+
+  private _areEventsEqual(a: FrigateEvent[], b: FrigateEvent[]): boolean {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      if (
+        a[i].id !== b[i].id ||
+        a[i].start_time !== b[i].start_time ||
+        a[i].end_time !== b[i].end_time ||
+        a[i].has_snapshot !== b[i].has_snapshot ||
+        a[i].has_clip !== b[i].has_clip
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Collapse events Frigate logged separately for the same moment, such as two
+   * people detected next to each other on one camera. Events are grouped by
+   * camera and label, and the earliest event in each group is kept.
+   */
+  private _dedupeEvents(events: FrigateEvent[]): FrigateEvent[] {
+    if (!this._config?.dedupe_events) return events;
+
+    const configuredWindow = Number(this._config.dedupe_window_seconds ?? 5);
+    if (!Number.isFinite(configuredWindow) || configuredWindow < 0) return events;
+    const windowMs = configuredWindow * 1000;
+
+    const ordered = [...events].sort((a, b) => (a.start_time || 0) - (b.start_time || 0));
+    const lastKeptStart = new Map<string, number>();
+    const kept: FrigateEvent[] = [];
+
+    for (const event of ordered) {
+      const key = `${event.camera}\u0000${event.label}`;
+      const start = event.start_time || 0;
+      const previousStart = lastKeptStart.get(key);
+      if (previousStart !== undefined && start - previousStart <= windowMs) {
+        continue;
+      }
+      lastKeptStart.set(key, start);
+      kept.push(event);
+    }
+
+    return kept.sort((a, b) => (b.start_time || 0) - (a.start_time || 0));
   }
 
   private async _loadEvents(): Promise<void> {
     if (!this.hass || !this._config) return;
 
-    this._error = undefined;
+    // Freeze gallery while Frigate is off: keep last events, skip poll flashing.
+    if (this._events.length > 0 && this._isFrigateOffline()) {
+      if (this._loading) this._loading = false;
+      return;
+    }
+
+    if (this._error !== undefined) {
+      this._error = undefined;
+    }
 
     try {
       const isScroll = !!this._config.scroll;
@@ -1121,37 +1560,58 @@ export class FrigateEventsCard extends LitElement {
       const limit = isScroll ? scrollLimit : visibleCount;
       const offset = this._config.offset || 0;
       const fetchLimit = limit + offset;
+      // Deduplication drops tiles, so ask for extra events to keep the gallery full.
+      const requestLimit = this._config.dedupe_events
+        ? Math.max(fetchLimit, Math.min(fetchLimit * 2, 200))
+        : fetchLimit;
 
       const events = await getEvents(this.hass, {
         instance_id: this._config.frigate_client_id,
         cameras: this._config.cameras,
         labels: this._config.labels,
         zones: this._config.zones,
-        limit: fetchLimit,
+        limit: requestLimit,
         has_snapshot: true,
       });
 
-      this._events = events.sort((a, b) => (b.start_time || 0) - (a.start_time || 0));
+      // Backend can return [] during the shutdown window before sensor.frigate_status
+      // flips to unavailable — keep cached events so boxes don't vanish.
+      if (events.length === 0 && this._events.length > 0 && this._isFrigateOffline()) {
+        return;
+      }
+
+      const sorted = events.sort((a, b) => (b.start_time || 0) - (a.start_time || 0));
+      const visible = this._dedupeEvents(sorted).slice(0, fetchLimit);
+      if (!this._areEventsEqual(this._events, visible)) {
+        this._events = visible;
+      }
     } catch (e: any) {
       console.warn('Temporary connection issue loading Frigate events:', e);
       const msg = e?.message || (typeof e === 'object' ? JSON.stringify(e) : String(e));
       this._error = `Failed to load events: ${msg}`;
       // Automatically retry in 4 seconds in case Home Assistant or Frigate is starting up
-      setTimeout(() => {
+      if (this._loadRetryTimer) {
+        clearTimeout(this._loadRetryTimer);
+      }
+      this._loadRetryTimer = window.setTimeout(() => {
+        this._loadRetryTimer = undefined;
         if (this._error && this.isConnected) {
           this._loadEvents();
         }
       }, 4000);
     } finally {
-      this._loading = false;
+      if (this._loading) {
+        this._loading = false;
+      }
     }
   }
 
   private async _subscribeToEvents(): Promise<void> {
-    if (!this.hass || !this._config || this._unsubscribe) return;
+    if (!this.hass || !this._config || this._unsubscribe || this._subscribing) return;
 
+    this._subscribing = true;
     try {
-      this._unsubscribe = await subscribeToEvents(
+      const unsub = await subscribeToEvents(
         this.hass,
         this._config.frigate_client_id || 'frigate',
         (change: FrigateEventChange) => {
@@ -1164,8 +1624,15 @@ export class FrigateEventsCard extends LitElement {
           }
         }
       );
+      if (!this.isConnected) {
+        unsub();
+        return;
+      }
+      this._unsubscribe = unsub;
     } catch (e) {
       console.warn('Failed to subscribe to Frigate events:', e);
+    } finally {
+      this._subscribing = false;
     }
   }
 
@@ -1206,9 +1673,19 @@ export class FrigateEventsCard extends LitElement {
 
   private _shouldOpenTimelineOnEventClick(): boolean {
     if (!this._isTimelineEnabled()) return false;
-    if (this._config?.timeline_on_click === false) return false;
     // only if video playing is enabled, instead of picture
     if (this._config?.video === false) return false;
+    // Explicit option wins (issue #24). Check user config first so the
+    // merged DEFAULT_CONFIG ('timeline') doesn't mask legacy timeline_on_click: false.
+    const action = this._userConfig?.event_click_action ?? this._config?.event_click_action;
+    if (action === 'detail') return false;
+    if (action === 'timeline') {
+      // Respect legacy opt-out when the new option wasn't explicitly set.
+      if (!this._userConfig?.event_click_action && this._config?.timeline_on_click === false) return false;
+      return true;
+    }
+    // legacy boolean fallback
+    if (this._config?.timeline_on_click === false) return false;
     return true;
   }
 
@@ -1836,6 +2313,31 @@ export class FrigateEventsCard extends LitElement {
         color: var(--mm-text-2);
       }
 
+      .mask-clean-expired-btn {
+        margin-left: auto;
+        margin-right: 8px;
+        padding: 4px 10px;
+        font-size: 12px;
+        font-weight: 500;
+        font-family: inherit;
+        color: #ff9800;
+        background: rgba(255, 152, 0, 0.12);
+        border: 1px solid rgba(255, 152, 0, 0.35);
+        border-radius: 6px;
+        cursor: pointer;
+        transition: all 0.15s ease;
+      }
+
+      .mask-clean-expired-btn:hover:not(:disabled) {
+        background: rgba(255, 152, 0, 0.22);
+        border-color: rgba(255, 152, 0, 0.6);
+      }
+
+      .mask-clean-expired-btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+
       .mask-filter-tabs {
         display: flex;
         gap: 4px;
@@ -1921,7 +2423,7 @@ export class FrigateEventsCard extends LitElement {
         align-items: center;
         gap: 12px;
         width: 100%;
-        min-height: 64px;
+        min-height: 84px;
         padding: 8px 12px;
         box-sizing: border-box;
         font-family: inherit;
@@ -1948,6 +2450,10 @@ export class FrigateEventsCard extends LitElement {
       .mask-seg-btn:focus-visible,
       .mask-chip:focus-visible,
       .mask-remove-btn:focus-visible,
+      .mask-edit-btn:focus-visible,
+      .mask-edit-save:focus-visible,
+      .mask-edit-cancel:focus-visible,
+      .mask-edit-size-btn:focus-visible,
       .mask-text-btn:focus-visible,
       .mask-filter-tab:focus-visible {
         outline: 2px solid var(--mm-accent);
@@ -1962,10 +2468,10 @@ export class FrigateEventsCard extends LitElement {
       }
 
       .mask-thumb {
-        flex: 0 0 72px;
-        width: 72px;
+        flex: 0 0 120px;
+        width: 120px;
         aspect-ratio: 16 / 9;
-        border-radius: 6px;
+        border-radius: 8px;
       }
 
       .mask-row.expanded .mask-thumb {
@@ -2039,6 +2545,11 @@ export class FrigateEventsCard extends LitElement {
 
       .mask-row-time.expiring {
         color: var(--mm-warn);
+      }
+
+      .mask-row-time.expired {
+        color: #ff9800;
+        font-weight: 600;
       }
 
       .mask-row-chevron {
@@ -2188,6 +2699,203 @@ export class FrigateEventsCard extends LitElement {
         background: color-mix(in srgb, var(--mm-accent) 14%, transparent);
       }
 
+      .mask-edit-btn {
+        min-height: 32px;
+        padding: 0 8px;
+        font-size: 13px;
+        font-weight: 500;
+        font-family: inherit;
+        color: var(--mm-accent);
+        background: none;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: background 0.15s ease;
+      }
+
+      .mask-edit-btn:hover {
+        background: color-mix(in srgb, var(--mm-accent) 14%, transparent);
+      }
+
+      .mask-row-actions {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
+
+      .mask-edit-panel {
+        margin: 12px 12px 0;
+        padding: 12px;
+        border: 1px solid var(--mm-line);
+        border-radius: 10px;
+        background: color-mix(in srgb, var(--mm-text) 4%, transparent);
+      }
+
+      .mask-edit-preview {
+        position: relative;
+        aspect-ratio: 16 / 9;
+        border-radius: 8px;
+        overflow: hidden;
+        background: var(--mm-fill);
+        touch-action: none;
+      }
+
+      .mask-edit-preview img {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+        pointer-events: none;
+      }
+
+      .mask-edit-preview svg {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        touch-action: none;
+      }
+
+      .mask-edit-poly {
+        fill: rgba(10, 132, 255, 0.18);
+        stroke: var(--mm-accent);
+        stroke-width: 2px;
+        vector-effect: non-scaling-stroke;
+        cursor: move;
+        touch-action: none;
+      }
+
+      .mask-edit-handle {
+        fill: #fff;
+        stroke: var(--mm-accent);
+        stroke-width: 2px;
+        vector-effect: non-scaling-stroke;
+        cursor: grab;
+        touch-action: none;
+      }
+
+      .mask-edit-handle:active {
+        cursor: grabbing;
+      }
+
+      .mask-edit-edge {
+        fill: none;
+        stroke: transparent;
+        stroke-width: 24;
+        pointer-events: stroke;
+        touch-action: none;
+      }
+
+      .mask-edit-meta {
+        margin-top: 8px;
+        font-size: 12px;
+        line-height: 16px;
+        color: var(--mm-text-2);
+      }
+
+      .mask-edit-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 8px;
+      }
+
+      .mask-edit-size-btn {
+        min-height: 32px;
+        padding: 0 12px;
+        font-size: 13px;
+        font-weight: 500;
+        font-family: inherit;
+        color: var(--mm-text);
+        background: var(--mm-fill);
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+      }
+
+      .mask-edit-size-btn:hover {
+        background: var(--mm-fill-hover);
+      }
+
+      .mask-edit-label-row {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        margin-top: 12px;
+      }
+
+      .mask-edit-input {
+        min-height: 36px;
+        padding: 0 12px;
+        font-size: 14px;
+        font-family: inherit;
+        color: var(--mm-text);
+        background: var(--mm-fill);
+        border: 1px solid var(--mm-line);
+        border-radius: 8px;
+        outline: none;
+      }
+
+      .mask-edit-input:focus {
+        border-color: var(--mm-accent);
+      }
+
+      .mask-edit-hint {
+        font-size: 11px;
+        line-height: 1.4;
+        color: var(--mm-text-2);
+        margin-top: 2px;
+      }
+
+      .mask-edit-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        margin-top: 12px;
+      }
+
+      .mask-edit-cancel {
+        min-height: 32px;
+        padding: 0 14px;
+        font-size: 13px;
+        font-weight: 500;
+        font-family: inherit;
+        color: var(--mm-text-2);
+        background: none;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+      }
+
+      .mask-edit-cancel:hover {
+        background: var(--mm-fill);
+        color: var(--mm-text);
+      }
+
+      .mask-edit-save {
+        min-height: 32px;
+        padding: 0 16px;
+        font-size: 13px;
+        font-weight: 600;
+        font-family: inherit;
+        color: #fff;
+        background: var(--mm-accent);
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+      }
+
+      .mask-edit-save:hover {
+        filter: brightness(1.1);
+      }
+
+      .mask-edit-save:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+
       .mask-pending-section {
         margin-top: 16px;
         padding-top: 8px;
@@ -2240,15 +2948,22 @@ export class FrigateEventsCard extends LitElement {
         .mask-seg-btn,
         .mask-chip,
         .mask-remove-btn,
+        .mask-edit-btn,
+        .mask-edit-save,
+        .mask-edit-cancel,
+        .mask-edit-size-btn,
         .mask-text-btn {
+          min-height: 44px;
+        }
+        .mask-edit-input {
           min-height: 44px;
         }
       }
 
       @media (max-width: 420px) {
         .mask-thumb {
-          flex-basis: 56px;
-          width: 56px;
+          flex-basis: 96px;
+          width: 96px;
         }
       }
 
@@ -2300,7 +3015,6 @@ export class FrigateEventsCard extends LitElement {
         --tl-accent: var(--primary-color, #0a84ff);
         --tl-warn: #ff9f0a;
         --tl-ok: #30d158;
-        --tl-playhead: #ff453a;
         /* Solid fallback first: engines without color-mix (older iPadOS /
            WebViews) dropped the declaration, leaving the scrubber track and
            ghost buttons fully transparent. */
@@ -2325,8 +3039,8 @@ export class FrigateEventsCard extends LitElement {
       }
 
       .frigate-timeline-modal .frigate-events-modal-close {
-        top: 12px;
-        right: 12px;
+        top: 17px;
+        right: 24px;
         width: 32px;
         height: 32px;
         background: var(--tl-fill);
@@ -2341,23 +3055,35 @@ export class FrigateEventsCard extends LitElement {
 
       .timeline-modal-header {
         display: flex;
-        align-items: baseline;
-        gap: 8px;
+        align-items: center;
+        gap: 10px;
         flex-shrink: 0;
-        padding: 20px 56px 12px 24px;
+        padding: 18px 56px 10px 24px;
       }
 
       .timeline-modal-title {
         margin: 0;
-        font-size: 20px;
+        font-size: 18px;
         font-weight: 600;
-        letter-spacing: -0.01em;
+        letter-spacing: -0.02em;
         color: var(--tl-text);
       }
 
       .timeline-camera-badge {
-        font-size: 13px;
+        display: inline-flex;
+        align-items: center;
+        max-width: 240px;
+        padding: 3px 9px;
+        border: 1px solid var(--tl-line);
+        border-radius: 999px;
+        background: var(--tl-fill);
+        font-size: 12px;
+        font-weight: 500;
+        line-height: 1.3;
         color: var(--tl-text-2);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
 
       .timeline-modal-body {
@@ -2367,9 +3093,32 @@ export class FrigateEventsCard extends LitElement {
         overscroll-behavior: contain;
         display: flex;
         flex-direction: column;
-        gap: 16px;
+        gap: 12px;
         padding: 16px 24px 24px;
         box-sizing: border-box;
+      }
+
+      /* Tonal control surfaces match the floating cards behind the modal. */
+      .timeline-panel {
+        padding: 12px 14px;
+        border: 1px solid var(--tl-line);
+        border-radius: 16px;
+        background: rgba(128, 128, 128, 0.07);
+        background: color-mix(in srgb, var(--tl-text) 5%, transparent);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03), 0 8px 20px rgba(0, 0, 0, 0.12);
+        box-sizing: border-box;
+      }
+
+      .timeline-time-panel {
+        padding: 10px 12px;
+      }
+
+      .timeline-scrubber-panel {
+        padding: 12px 14px 14px;
+      }
+
+      .timeline-playback-panel {
+        padding: 8px 12px;
       }
 
       .timeline-camera-tabs {
@@ -2377,7 +3126,7 @@ export class FrigateEventsCard extends LitElement {
         gap: 4px;
         flex-shrink: 0;
         margin: -16px -24px 0;
-        padding: 0 16px;
+        padding: 0 24px;
         overflow-x: auto;
         scrollbar-width: none;
         border-bottom: 1px solid var(--tl-line);
@@ -2427,7 +3176,12 @@ export class FrigateEventsCard extends LitElement {
       .timeline-transport-btn:focus-visible,
       .timeline-stepper-btn:focus-visible,
       .timeline-speed-display:focus-visible,
-      .timeline-datetime-input:focus-visible,
+      .timeline-start-chip:focus-visible,
+      .timeline-start-popover:focus-visible,
+      .timeline-start-day-btn:focus-visible,
+      .timeline-start-step-btn:focus-visible,
+      .timeline-start-apply:focus-visible,
+      .timeline-start-cancel:focus-visible,
       .timeline-mute-btn:focus-visible {
         outline: 2px solid var(--tl-accent);
         outline-offset: 2px;
@@ -2437,12 +3191,13 @@ export class FrigateEventsCard extends LitElement {
       .timeline-controls-bar {
         display: flex;
         flex-wrap: wrap;
-        align-items: flex-end;
+        align-items: center;
         justify-content: space-between;
-        gap: 12px 24px;
+        gap: 10px 20px;
       }
 
       .timeline-datetime-group {
+        position: relative;
         display: flex;
         align-items: center;
         gap: 8px;
@@ -2450,31 +3205,361 @@ export class FrigateEventsCard extends LitElement {
       }
 
       .timeline-datetime-label {
-        font-size: 13px;
+        font-size: 12px;
+        font-weight: 500;
         color: var(--tl-text-2);
       }
 
-      .timeline-datetime-input {
+      /* Start-of-window chip. Reads "Start 7:39 AM" and opens the picker. */
+      .timeline-start-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        height: 38px;
+        padding: 0 12px;
+        border: 1px solid var(--tl-line);
+        border-radius: 12px;
         background: var(--tl-fill);
-        border: 1px solid transparent;
         color: var(--tl-text);
-        color-scheme: dark light;
-        height: 32px;
-        padding: 0 10px;
-        border-radius: 8px;
-        font-size: 13px;
         font-family: inherit;
+        font-size: 13px;
+        line-height: 1;
+        cursor: pointer;
         box-sizing: border-box;
-        transition: background 0.15s ease;
+        transition: background 0.15s ease, border-color 0.15s ease;
       }
 
-      .timeline-datetime-input:hover {
+      .timeline-start-chip:hover {
+        background: var(--tl-fill-hover);
+        border-color: color-mix(in srgb, var(--tl-line) 60%, var(--tl-text) 40%);
+      }
+
+      .timeline-datetime-group.is-open .timeline-start-chip {
+        border-color: var(--tl-accent);
         background: var(--tl-fill-hover);
       }
 
-      .timeline-datetime-input:focus {
-        outline: none;
-        border-color: var(--tl-accent);
+      .timeline-start-chip-icon {
+        width: 15px;
+        height: 15px;
+        flex: 0 0 auto;
+        fill: currentColor;
+        opacity: 0.65;
+        pointer-events: none;
+      }
+
+      .timeline-start-chip-label {
+        color: var(--tl-text-2);
+        font-weight: 500;
+      }
+
+      .timeline-start-chip-value {
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+      }
+
+      .timeline-start-chip-caret {
+        width: 12px;
+        height: 12px;
+        flex: 0 0 auto;
+        margin-left: 1px;
+        fill: currentColor;
+        opacity: 0.5;
+        pointer-events: none;
+        transition: transform 0.15s ease;
+      }
+
+      .timeline-datetime-group.is-open .timeline-start-chip-caret {
+        transform: rotate(180deg);
+      }
+
+      /* Anchored picker. Sits inside the controls row, layered above video. */
+      .timeline-start-popover {
+        position: absolute;
+        top: calc(100% + 8px);
+        left: 0;
+        z-index: 60;
+        box-sizing: border-box;
+        width: min(320px, calc(100vw - 40px));
+        max-height: min(420px, calc(100dvh - 160px));
+        overflow-y: auto;
+        padding: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        border: 1px solid var(--tl-line);
+        border-radius: 14px;
+        background: var(--card-background-color, #1c1c1e);
+        box-shadow: 0 18px 40px rgba(0, 0, 0, 0.55);
+        animation: timeline-popover-in 0.14s ease;
+      }
+
+      .timeline-start-popover[hidden] {
+        display: none;
+      }
+
+      @keyframes timeline-popover-in {
+        from { opacity: 0; transform: translateY(-4px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+
+      .timeline-start-day-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .timeline-start-day-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 32px;
+        height: 32px;
+        flex: 0 0 auto;
+        padding: 0;
+        border: none;
+        border-radius: 9px;
+        background: var(--tl-fill);
+        color: var(--tl-text-2);
+        cursor: pointer;
+        transition: background 0.15s ease, color 0.15s ease;
+      }
+
+      .timeline-start-day-btn svg {
+        width: 18px;
+        height: 18px;
+        fill: currentColor;
+        pointer-events: none;
+      }
+
+      .timeline-start-day-btn:hover:not(:disabled) {
+        background: var(--tl-fill-hover);
+        color: var(--tl-text);
+      }
+
+      .timeline-start-day-btn:disabled {
+        opacity: 0.45;
+        cursor: default;
+      }
+
+      .timeline-start-day-label {
+        flex: 1 1 auto;
+        min-width: 0;
+        text-align: center;
+        font-size: 13px;
+        font-weight: 600;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .timeline-start-steppers {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+      }
+
+      .timeline-start-step-cell {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 2px;
+        padding: 4px;
+        border-radius: 11px;
+        background: var(--tl-fill);
+      }
+
+      .timeline-start-step-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 30px;
+        height: 40px;
+        flex: 0 0 auto;
+        padding: 0;
+        border: none;
+        border-radius: 8px;
+        background: none;
+        color: var(--tl-text-2);
+        font-family: inherit;
+        font-size: 18px;
+        font-weight: 500;
+        line-height: 1;
+        cursor: pointer;
+        transition: background 0.15s ease, color 0.15s ease;
+      }
+
+      .timeline-start-step-btn:hover:not(:disabled) {
+        background: var(--tl-fill-hover);
+        color: var(--tl-text);
+      }
+
+      .timeline-start-step-btn:disabled {
+        opacity: 0.3;
+        cursor: default;
+      }
+
+      .timeline-start-step-value {
+        flex: 1 1 auto;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 1px;
+        line-height: 1.05;
+      }
+
+      .timeline-start-step-input {
+        width: 2.2ch;
+        min-width: 2.2ch;
+        padding: 4px 0;
+        margin: 0;
+        border: 0;
+        border-radius: 4px;
+        background: transparent;
+        color: var(--tl-text);
+        font-family: inherit;
+        font-size: 19px;
+        font-weight: 600;
+        line-height: 1.05;
+        font-variant-numeric: tabular-nums;
+        text-align: center;
+        caret-color: var(--tl-accent);
+        -webkit-appearance: none;
+        appearance: none;
+        box-sizing: content-box;
+      }
+
+      .timeline-start-step-input:hover:not(:focus) {
+        background: var(--tl-fill-hover);
+      }
+
+      .timeline-start-step-input:focus {
+        outline: 2px solid var(--tl-accent);
+        outline-offset: 1px;
+      }
+
+      .timeline-start-step-input::selection {
+        background: var(--tl-accent);
+        color: #ffffff;
+      }
+
+      .timeline-start-step-unit {
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--tl-text-2);
+      }
+
+      .timeline-start-step-unit:empty {
+        display: none;
+      }
+
+      .timeline-meridiem-toggle {
+        padding: 1px 4px;
+        border: 0;
+        border-radius: 4px;
+        background: transparent;
+        font-family: inherit;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        line-height: 1.2;
+        text-transform: uppercase;
+        color: var(--tl-text-2);
+        cursor: pointer;
+        transition: background 0.15s ease, color 0.15s ease;
+      }
+
+      .timeline-meridiem-toggle:hover {
+        background: var(--tl-fill-hover);
+        color: var(--tl-text);
+      }
+
+      .timeline-meridiem-toggle:focus-visible {
+        outline: 2px solid var(--tl-accent);
+        outline-offset: 2px;
+      }
+
+      .timeline-start-popover .timeline-quick-jumps {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        padding: 10px 0 0;
+        border-top: 1px solid var(--tl-line);
+        border-radius: 0;
+        background: none;
+        gap: 4px;
+      }
+
+      .timeline-start-popover .timeline-quick-btn {
+        width: 100%;
+        height: 30px;
+        padding: 0 4px;
+        font-size: 12px;
+        text-align: center;
+        background: var(--tl-fill);
+      }
+
+      .timeline-start-popover .timeline-quick-btn:hover {
+        background: var(--tl-fill-hover);
+      }
+
+      .timeline-start-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+
+      .timeline-start-cancel,
+      .timeline-start-apply {
+        height: 34px;
+        padding: 0 14px;
+        border: 1px solid transparent;
+        border-radius: 9px;
+        font-family: inherit;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      .timeline-start-cancel {
+        background: none;
+        color: var(--tl-text-2);
+      }
+
+      .timeline-start-cancel:hover {
+        background: var(--tl-fill-hover);
+        color: var(--tl-text);
+      }
+
+      .timeline-start-apply {
+        background: var(--tl-accent);
+        color: #ffffff;
+      }
+
+      .timeline-start-apply:hover {
+        background: color-mix(in srgb, var(--tl-accent) 85%, #000000);
+      }
+
+      .timeline-sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        clip-path: inset(50%);
+        white-space: nowrap;
+        border: 0;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .timeline-start-popover { animation: none; }
+        .timeline-start-chip-caret { transition: none; }
       }
 
       .timeline-quick-jumps,
@@ -2524,9 +3609,36 @@ export class FrigateEventsCard extends LitElement {
       }
 
       .timeline-window-group {
-        display: flex;
+        display: inline-flex;
         align-items: center;
         gap: 8px;
+        padding: 3px 4px 3px 10px;
+        border: 1px solid var(--tl-line);
+        border-radius: 12px;
+        background: var(--tl-fill);
+        box-sizing: border-box;
+      }
+
+      .timeline-window-group .timeline-datetime-label {
+        padding-right: 2px;
+      }
+
+      .timeline-window-group .timeline-window-pills {
+        padding: 0;
+        border-radius: 0;
+        background: none;
+        gap: 2px;
+      }
+
+      .timeline-window-group .timeline-window-pill {
+        height: 30px;
+        padding: 0 9px;
+        font-size: 12px;
+        border-radius: 8px;
+      }
+
+      .timeline-window-group .timeline-window-pill.active {
+        box-shadow: 0 2px 6px color-mix(in srgb, var(--tl-accent) 35%, transparent);
       }
 
       /* Video player */
@@ -2535,12 +3647,15 @@ export class FrigateEventsCard extends LitElement {
         width: 100%;
         aspect-ratio: 16 / 9;
         background: #000000;
-        border-radius: 12px;
+        border: 1px solid var(--tl-line);
+        border-radius: 16px;
+        box-shadow: 0 10px 22px rgba(0, 0, 0, 0.26);
         overflow: hidden;
         display: flex;
         align-items: center;
         justify-content: center;
         cursor: pointer;
+        box-sizing: border-box;
       }
 
       .timeline-video {
@@ -2610,19 +3725,124 @@ export class FrigateEventsCard extends LitElement {
         display: flex;
         flex-direction: column;
         gap: 8px;
+        min-width: 0;
+      }
+
+      .timeline-scrubber-meta {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        min-width: 0;
+        font-size: 12px;
+        color: var(--tl-text-2);
+        font-variant-numeric: tabular-nums;
+      }
+
+      .timeline-scrubber-now {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        flex: 0 0 auto;
+        padding: 3px 10px 3px 9px;
+        border: 1px solid var(--tl-line);
+        border-radius: 999px;
+        background: var(--tl-fill);
+        color: var(--tl-text);
+      }
+
+      .timeline-scrubber-now-dot {
+        width: 7px;
+        height: 7px;
+        flex: 0 0 auto;
+        border-radius: 50%;
+        background: var(--tl-accent);
+        box-shadow: 0 0 0 3px color-mix(in srgb, var(--tl-accent) 22%, transparent);
+      }
+
+      .timeline-scrubber-now-time {
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--tl-text);
+        white-space: nowrap;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .timeline-scrubber-range {
+        display: inline-flex;
+        align-items: baseline;
+        gap: 6px;
+        min-width: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .timeline-scrubber-range-start,
+      .timeline-scrubber-range-sep,
+      .timeline-scrubber-range-end {
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .timeline-scrubber-range-start {
+        min-width: 0;
+      }
+
+      .timeline-scrubber-range-end {
+        display: inline-flex;
+        align-items: baseline;
+        flex: 0 0 auto;
+        gap: 4px;
+        color: var(--tl-text);
+        font-weight: 600;
+      }
+
+      .timeline-scrubber-end-prefix {
+        color: var(--tl-text-2);
+        font-weight: 500;
+      }
+
+      /* Desktop has the Start chip, so the track caption only needs its end. */
+      .frigate-timeline-modal:not(.is-compact):not(.is-tv) .timeline-scrubber-range-start,
+      .frigate-timeline-modal:not(.is-compact):not(.is-tv) .timeline-scrubber-range-sep {
+        display: none;
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-scrubber-end-prefix,
+      .frigate-timeline-modal.is-tv .timeline-scrubber-end-prefix {
+        display: none;
       }
 
       .timeline-track-container {
         position: relative;
-        height: 40px;
-        /* Plain grey, no colour functions: the track must always be visible,
-           and this matches the desktop bar on both dark and light themes. */
-        background: rgba(128, 128, 128, 0.16);
-        border-radius: 10px;
+        height: 44px;
+        background: var(--tl-fill);
+        border: 1px solid var(--tl-line);
+        border-radius: 12px;
+        box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.22);
         cursor: pointer;
         user-select: none;
         touch-action: none;
+        overflow: visible;
+      }
+
+      .timeline-track-inner {
+        position: absolute;
+        inset: 0;
         overflow: hidden;
+        border-radius: inherit;
+      }
+
+      .timeline-track-progress {
+        position: absolute;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        width: 0;
+        background: rgba(10, 132, 255, 0.24);
+        background: color-mix(in srgb, var(--tl-accent) 24%, transparent);
+        pointer-events: none;
       }
 
       .timeline-events-layer {
@@ -2633,11 +3853,11 @@ export class FrigateEventsCard extends LitElement {
 
       .timeline-event-marker {
         position: absolute;
-        top: 6px;
-        bottom: 6px;
+        top: 8px;
+        bottom: 8px;
         min-width: 3px;
         background: var(--tl-accent);
-        opacity: 0.85;
+        opacity: 0.9;
         border-radius: 3px;
         cursor: pointer;
         pointer-events: auto;
@@ -2647,8 +3867,8 @@ export class FrigateEventsCard extends LitElement {
 
       .timeline-event-marker:hover {
         opacity: 1;
-        top: 3px;
-        bottom: 3px;
+        top: 5px;
+        bottom: 5px;
         z-index: 4;
       }
 
@@ -2660,8 +3880,10 @@ export class FrigateEventsCard extends LitElement {
         position: absolute;
         top: 0;
         bottom: 0;
+        left: 0;
         width: 2px;
-        background: var(--tl-playhead);
+        border-radius: 2px;
+        background: var(--tl-accent);
         z-index: 5;
         pointer-events: none;
         transform: translateX(-50%);
@@ -2670,44 +3892,38 @@ export class FrigateEventsCard extends LitElement {
       .timeline-playhead::after {
         content: '';
         position: absolute;
-        top: -1px;
+        top: -5px;
         left: 50%;
         transform: translateX(-50%);
-        width: 8px;
-        height: 8px;
-        background: var(--tl-playhead);
+        width: 14px;
+        height: 14px;
+        box-sizing: border-box;
+        background: var(--tl-accent);
+        border: 3px solid var(--card-background-color, #1c1c1e);
         border-radius: 50%;
+        box-shadow: 0 0 0 1px var(--tl-line), 0 3px 8px rgba(0, 0, 0, 0.35);
       }
 
-      .timeline-track-labels {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        font-size: 12px;
-        color: var(--tl-text-2);
-        font-variant-numeric: tabular-nums;
-      }
-
-      .timeline-time-badge {
-        font-size: 13px;
-        font-weight: 600;
-        color: var(--tl-text);
-        font-variant-numeric: tabular-nums;
-      }
-
-      /* Transport & speed */
+      /* Playback */
       .timeline-transport-bar {
-        display: flex;
-        flex-wrap: wrap;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
         align-items: center;
-        justify-content: space-between;
         gap: 12px;
       }
 
       .timeline-transport-controls {
-        display: flex;
+        grid-column: 2;
+        justify-self: center;
+        display: inline-flex;
         align-items: center;
-        gap: 4px;
+        gap: 8px;
+      }
+
+      .timeline-transport-group {
+        display: inline-flex;
+        align-items: center;
+        gap: 2px;
       }
 
       .timeline-transport-btn {
@@ -2715,18 +3931,19 @@ export class FrigateEventsCard extends LitElement {
         align-items: center;
         justify-content: center;
         min-width: 44px;
-        height: 36px;
-        background: none;
-        border: none;
-        color: var(--tl-text-2);
-        padding: 0 10px;
+        height: 44px;
+        padding: 0 8px;
+        border: 1px solid transparent;
         border-radius: 10px;
-        font-size: 13px;
-        font-weight: 500;
+        background: none;
+        color: var(--tl-text-2);
         font-family: inherit;
+        font-size: 12px;
+        font-weight: 600;
         font-variant-numeric: tabular-nums;
         cursor: pointer;
-        transition: background 0.15s ease, color 0.15s ease;
+        box-sizing: border-box;
+        transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
       }
 
       .timeline-transport-btn:hover {
@@ -2734,15 +3951,26 @@ export class FrigateEventsCard extends LitElement {
         color: var(--tl-text);
       }
 
+      .timeline-transport-btn:disabled,
+      .timeline-transport-btn:disabled:hover {
+        background: none;
+        color: var(--tl-text-2);
+        opacity: 0.35;
+        cursor: default;
+      }
+
       .timeline-transport-btn.play-btn {
-        width: 44px;
-        height: 44px;
+        width: 48px;
+        height: 48px;
         min-width: 0;
         padding: 0;
         margin: 0 4px;
+        border: none;
         border-radius: 50%;
         background: var(--tl-accent);
         color: #ffffff;
+        box-shadow: 0 6px 16px rgba(10, 132, 255, 0.28);
+        box-shadow: 0 6px 16px color-mix(in srgb, var(--tl-accent) 30%, transparent);
       }
 
       .timeline-transport-btn.play-btn:hover {
@@ -2758,20 +3986,25 @@ export class FrigateEventsCard extends LitElement {
       }
 
       .timeline-speed-controls {
+        grid-column: 3;
+        justify-self: end;
         display: inline-flex;
         align-items: center;
         gap: 2px;
+        height: 44px;
+        padding: 4px;
+        border: 1px solid var(--tl-line);
+        border-radius: 12px;
         background: var(--tl-fill);
-        border-radius: 10px;
-        padding: 2px;
+        box-sizing: border-box;
       }
 
       .timeline-stepper-btn {
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        width: 28px;
-        height: 28px;
+        width: 34px;
+        height: 34px;
         background: none;
         color: var(--tl-text-2);
         border: none;
@@ -2795,14 +4028,17 @@ export class FrigateEventsCard extends LitElement {
       }
 
       .timeline-speed-display {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 52px;
+        height: 34px;
+        padding: 0 4px;
+        border-radius: 8px;
         font-size: 13px;
         font-weight: 600;
-        min-width: 48px;
-        text-align: center;
         color: var(--tl-text);
         font-variant-numeric: tabular-nums;
-        padding: 4px;
-        border-radius: 8px;
         cursor: pointer;
         user-select: none;
         transition: background 0.15s ease;
@@ -2814,8 +4050,7 @@ export class FrigateEventsCard extends LitElement {
 
       @media (max-width: 560px) {
         .timeline-modal-body { padding: 12px 16px 20px; gap: 12px; }
-        .timeline-camera-tabs { margin: -12px -16px 0; }
-        .timeline-transport-bar { justify-content: center; }
+        .timeline-camera-tabs { margin: -12px -16px 0; padding: 0 16px; }
       }
 
       /* Timeline mute button base. The modal lives on document.body outside the
@@ -3056,7 +4291,9 @@ export class FrigateEventsCard extends LitElement {
         min-height: 0;
         width: 100%;
         aspect-ratio: auto;
+        border: none;
         border-radius: 0;
+        box-shadow: none;
         background: #000000;
       }
 
@@ -3111,20 +4348,19 @@ export class FrigateEventsCard extends LitElement {
 
       .frigate-timeline-modal.is-compact .timeline-playhead::after,
       .frigate-timeline-modal.is-tv .timeline-playhead::after {
-        width: 12px;
-        height: 12px;
-        top: -2px;
+        width: 16px;
+        height: 16px;
+        top: -6px;
       }
 
-      .frigate-timeline-modal.is-compact .timeline-track-labels,
-      .frigate-timeline-modal.is-tv .timeline-track-labels {
+      .frigate-timeline-modal.is-compact .timeline-scrubber-meta,
+      .frigate-timeline-modal.is-tv .timeline-scrubber-meta {
         font-size: 13px;
       }
 
-      .frigate-timeline-modal.is-compact .timeline-time-badge,
-      .frigate-timeline-modal.is-tv .timeline-time-badge {
-        font-size: 16px;
-        font-variant-numeric: tabular-nums;
+      .frigate-timeline-modal.is-compact .timeline-scrubber-now-time,
+      .frigate-timeline-modal.is-tv .timeline-scrubber-now-time {
+        font-size: 15px;
       }
 
       /* Transport row: large targets, play button dominant. */
@@ -3161,13 +4397,6 @@ export class FrigateEventsCard extends LitElement {
         margin: 0 6px;
       }
 
-      .frigate-timeline-modal.is-compact .timeline-transport-btn[data-skip="-300"],
-      .frigate-timeline-modal.is-compact .timeline-transport-btn[data-skip="300"],
-      .frigate-timeline-modal.is-tv .timeline-transport-btn[data-skip="-300"],
-      .frigate-timeline-modal.is-tv .timeline-transport-btn[data-skip="300"] {
-        display: none;
-      }
-
       .frigate-timeline-modal.is-compact .timeline-speed-controls,
       .frigate-timeline-modal.is-tv .timeline-speed-controls {
         padding: 4px;
@@ -3183,7 +4412,7 @@ export class FrigateEventsCard extends LitElement {
       .frigate-timeline-modal.is-compact .timeline-speed-display,
       .frigate-timeline-modal.is-tv .timeline-speed-display {
         min-width: 56px;
-        min-height: 40px;
+        min-height: 34px;
         display: inline-flex;
         align-items: center;
         justify-content: center;
@@ -3205,6 +4434,22 @@ export class FrigateEventsCard extends LitElement {
         min-width: 0;
       }
 
+      .frigate-timeline-modal.is-compact .timeline-sheet-section,
+      .frigate-timeline-modal.is-tv .timeline-sheet-section {
+        padding: 12px;
+        border: 1px solid var(--tl-line);
+        border-radius: 14px;
+        background: var(--tl-fill);
+        box-sizing: border-box;
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-settings-sheet .timeline-window-group,
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-window-group {
+        padding: 0;
+        border-color: transparent;
+        background: transparent;
+      }
+
       .frigate-timeline-modal.is-compact .timeline-sheet-heading {
         font-size: 12px;
         font-weight: 600;
@@ -3213,40 +4458,55 @@ export class FrigateEventsCard extends LitElement {
         color: var(--tl-text-2);
       }
 
-      .frigate-timeline-modal.is-compact .timeline-settings-sheet .timeline-transport-bar {
+      .frigate-timeline-modal.is-compact .timeline-settings-sheet .timeline-transport-bar,
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-transport-bar {
+        display: flex;
+        flex-wrap: wrap;
         align-items: center;
         justify-content: center;
-        gap: 12px;
+        gap: 10px;
         padding: 0;
         overflow: visible;
       }
 
-      .frigate-timeline-modal.is-compact .timeline-settings-sheet .timeline-transport-controls {
+      .frigate-timeline-modal.is-compact .timeline-settings-sheet .timeline-transport-controls,
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-transport-controls {
         flex-wrap: wrap;
         justify-content: center;
         gap: 6px;
         flex-shrink: 0;
       }
 
+      .frigate-timeline-modal.is-compact .timeline-settings-sheet .timeline-transport-controls {
+        gap: 4px;
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-settings-sheet .timeline-transport-group {
+        gap: 0;
+      }
+
       .frigate-timeline-modal.is-compact .timeline-settings-sheet .timeline-transport-btn {
-        min-width: 48px;
-        height: 48px;
-        padding: 0 12px;
+        min-width: 44px;
+        height: 44px;
+        padding: 0 4px;
+        font-size: 13px;
       }
 
       .frigate-timeline-modal.is-compact .timeline-settings-sheet .timeline-transport-btn.play-btn {
-        width: 56px;
-        height: 56px;
-        margin: 0 6px;
+        width: 48px;
+        height: 48px;
+        margin: 0 4px;
       }
 
       .frigate-timeline-modal.is-compact .timeline-settings-sheet .timeline-speed-controls {
         align-self: center;
         justify-content: center;
-        max-width: 110px;
+        max-width: 118px;
         flex-shrink: 0;
+        height: 44px;
         gap: 2px;
-        padding: 2px;
+        padding: 4px;
+        margin-left: auto;
       }
 
       .frigate-timeline-modal.is-compact .timeline-settings-sheet .timeline-stepper-btn {
@@ -3417,27 +4677,6 @@ export class FrigateEventsCard extends LitElement {
         border-radius: 3px !important;
       }
 
-      .frigate-timeline-modal.is-compact .timeline-playhead {
-        width: 2px !important;
-      }
-
-      .frigate-timeline-modal.is-compact .timeline-playhead::after {
-        width: 8px !important;
-        height: 8px !important;
-        top: -1px !important;
-      }
-
-      .frigate-timeline-modal.is-compact .timeline-track-labels {
-        font-size: 12px !important;
-        line-height: 1.2 !important;
-        color: var(--tl-text-2) !important;
-      }
-
-      .frigate-timeline-modal.is-compact .timeline-time-badge {
-        font-size: 13px !important;
-        font-weight: 600 !important;
-        color: var(--tl-text) !important;
-      }
 
       /* Compact: no on-stage transport — skips, play/pause and speed live in
          the settings sheet Playback section. The body markup stays in place
@@ -3534,11 +4773,66 @@ export class FrigateEventsCard extends LitElement {
         gap: 10px;
       }
 
-      .frigate-timeline-modal.is-compact .timeline-settings-sheet .timeline-datetime-input,
-      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-datetime-input {
+      .frigate-timeline-modal.is-compact .timeline-settings-sheet .timeline-start-chip,
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-start-chip {
         width: 100%;
+        height: 46px;
+        padding: 0 12px;
+        font-size: 15px;
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-settings-sheet .timeline-start-chip-caret,
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-start-chip-caret {
+        margin-left: auto;
+      }
+
+      /* Inside the compact sheet / TV dialog the picker expands in place so it
+         can never be clipped by the sheet's own scroll area. */
+      .frigate-timeline-modal.is-compact .timeline-settings-sheet .timeline-start-popover,
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-start-popover {
+        position: static;
+        width: 100%;
+        max-width: none;
+        max-height: none;
+        margin-top: 2px;
+        padding: 12px;
+        border-radius: 12px;
+        background: transparent;
+        box-shadow: none;
+        animation: none;
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-settings-sheet .timeline-start-day-btn,
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-start-day-btn {
+        width: 40px;
+        height: 40px;
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-settings-sheet .timeline-start-step-btn,
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-start-step-btn {
+        width: 36px;
         height: 44px;
-        font-size: 16px;
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-settings-sheet .timeline-start-step-input,
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-start-step-input {
+        width: 2.4ch;
+        min-width: 2.4ch;
+        font-size: 21px;
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-settings-sheet .timeline-meridiem-toggle,
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-meridiem-toggle {
+        padding: 3px 6px;
+        font-size: 11px;
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-settings-sheet .timeline-start-cancel,
+      .frigate-timeline-modal.is-compact .timeline-settings-sheet .timeline-start-apply,
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-start-cancel,
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-start-apply {
+        height: 44px;
+        flex: 1 1 0;
       }
 
       .frigate-timeline-modal.is-compact .timeline-settings-sheet .timeline-quick-jumps,
@@ -3674,11 +4968,11 @@ export class FrigateEventsCard extends LitElement {
           top: 5px !important;
           bottom: 5px !important;
         }
-        .frigate-timeline-modal.is-compact .timeline-track-labels {
-          color: rgba(255, 255, 255, 0.85) !important;
+        .frigate-timeline-modal.is-compact .timeline-scrubber-meta {
+          color: rgba(255, 255, 255, 0.8) !important;
         }
-        .frigate-timeline-modal.is-compact .timeline-time-badge {
-          font-size: 14px !important;
+        .frigate-timeline-modal.is-compact .timeline-scrubber-now,
+        .frigate-timeline-modal.is-compact .timeline-scrubber-range-end {
           color: #ffffff !important;
         }
       }
@@ -3702,13 +4996,18 @@ export class FrigateEventsCard extends LitElement {
         bottom: var(--tl-tv-marker);
       }
 
-      .frigate-timeline-modal.is-tv .timeline-track-labels {
+      .frigate-timeline-modal.is-tv .timeline-scrubber-meta {
         font-size: var(--tl-tv-labels);
-        color: rgba(255, 255, 255, 0.9);
+        color: rgba(255, 255, 255, 0.82);
       }
 
-      .frigate-timeline-modal.is-tv .timeline-time-badge {
-        font-size: var(--tl-tv-badge);
+      .frigate-timeline-modal.is-tv .timeline-scrubber-now {
+        background: rgba(255, 255, 255, 0.1);
+        border-color: rgba(255, 255, 255, 0.16);
+      }
+
+      .frigate-timeline-modal.is-tv .timeline-scrubber-now-time,
+      .frigate-timeline-modal.is-tv .timeline-scrubber-range-end {
         color: #ffffff;
       }
 
@@ -3797,7 +5096,12 @@ export class FrigateEventsCard extends LitElement {
       .frigate-timeline-modal.is-tv .timeline-transport-btn:focus-visible,
       .frigate-timeline-modal.is-tv .timeline-stepper-btn:focus-visible,
       .frigate-timeline-modal.is-tv .timeline-speed-display:focus-visible,
-      .frigate-timeline-modal.is-tv .timeline-datetime-input:focus-visible,
+      .frigate-timeline-modal.is-tv .timeline-start-chip:focus-visible,
+      .frigate-timeline-modal.is-tv .timeline-start-day-btn:focus-visible,
+      .frigate-timeline-modal.is-tv .timeline-start-step-btn:focus-visible,
+      .frigate-timeline-modal.is-tv .timeline-start-apply:focus-visible,
+      .frigate-timeline-modal.is-tv .timeline-start-cancel:focus-visible,
+      .frigate-timeline-modal.is-tv .timeline-meridiem-toggle:focus-visible,
       .frigate-timeline-modal.is-tv .timeline-mute-btn:focus-visible,
       .frigate-timeline-modal.is-tv .timeline-settings-btn:focus-visible,
       .frigate-timeline-modal.is-tv .timeline-compact-topbar .frigate-events-modal-close:focus-visible,
@@ -3805,6 +5109,235 @@ export class FrigateEventsCard extends LitElement {
         outline: 3px solid #ffffff !important;
         outline-offset: 3px;
         box-shadow: 0 0 0 5px rgba(10, 132, 255, 0.65);
+      }
+
+      /* ── TV theater (is-tv ONLY): undo the compact popup card so 16:9 footage
+         fills the panel. Compact (phone/tablet) selectors above are untouched. */
+      .frigate-timeline-modal.is-tv {
+        padding: 0 !important;
+        align-items: stretch !important;
+        justify-content: stretch !important;
+      }
+
+      .frigate-timeline-modal.is-tv .frigate-events-modal-content {
+        position: absolute !important;
+        inset: 0 !important;
+        width: auto !important;
+        height: auto !important;
+        min-width: 0 !important;
+        max-width: none !important;
+        max-height: none !important;
+        margin: 0 !important;
+        border: none !important;
+        border-radius: 0 !important;
+        box-shadow: none !important;
+        overflow: hidden !important;
+        animation: none !important;
+        background: #000000 !important;
+      }
+
+      /* Slim header bar over the stage. */
+      .frigate-timeline-modal.is-tv .timeline-compact-topbar {
+        position: relative !important;
+        height: auto !important;
+        min-height: var(--tl-tv-topbar-h) !important;
+        padding: var(--tl-tv-topbar-pad) 16px !important;
+        padding-top: max(var(--tl-tv-topbar-pad), env(safe-area-inset-top, 0px)) !important;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.12) !important;
+        background: #101013 !important;
+        z-index: 8 !important;
+      }
+
+      /* Stage body: header-height chrome, video takes the rest. */
+      .frigate-timeline-modal.is-tv .timeline-modal-body {
+        position: static !important;
+        inset: auto !important;
+        flex: 1 1 auto !important;
+        min-height: 0 !important;
+        gap: 0 !important;
+        padding: 0 !important;
+        overflow: hidden !important;
+        background: #000000 !important;
+      }
+
+      .frigate-timeline-modal.is-tv .timeline-player-container {
+        position: relative !important;
+        inset: auto !important;
+        flex: 1 1 auto !important;
+        min-height: 0 !important;
+        width: 100% !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        overflow: hidden !important;
+        border-radius: 0 !important;
+        background: #000000 !important;
+        aspect-ratio: auto !important;
+      }
+
+      .frigate-timeline-modal.is-tv .timeline-video {
+        grid-area: auto !important;
+        position: absolute !important;
+        inset: 0 !important;
+        width: 100% !important;
+        height: 100% !important;
+        max-height: none !important;
+        object-fit: contain !important;
+      }
+
+      /* Scrubber overlays the video bottom edge so the video keeps its height. */
+      .frigate-timeline-modal.is-tv .timeline-scrubber-wrapper {
+        position: relative !important;
+        left: auto !important;
+        right: auto !important;
+        bottom: auto !important;
+        z-index: 7 !important;
+        flex-shrink: 0 !important;
+        margin-top: calc(-1 * (var(--tl-tv-scrim-top) + var(--tl-tv-track) + 6px + var(--tl-tv-badge) + 6px + var(--tl-tv-bar-pad))) !important;
+        padding: var(--tl-tv-scrim-top) 16px var(--tl-tv-bar-pad) !important;
+        padding-left: max(16px, env(safe-area-inset-left, 16px)) !important;
+        padding-right: max(16px, env(safe-area-inset-right, 16px)) !important;
+        gap: 6px !important;
+        background: linear-gradient(to top, rgba(0, 0, 0, 0.9) 62%, rgba(0, 0, 0, 0)) !important;
+        border-top: none !important;
+      }
+
+      /* On-stage transport stays visible on TV (compact hides it). */
+      .frigate-timeline-modal.is-tv .timeline-modal-body > .timeline-transport-bar {
+        display: grid !important;
+        grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) !important;
+        flex-shrink: 0 !important;
+        background: #000000 !important;
+      }
+
+      /* ── TV settings (is-tv ONLY): centered dialog, not a bottom sheet.
+         Phone/tablet bottom-sheet selectors above are untouched. */
+      .frigate-timeline-modal.is-tv .timeline-settings-backdrop {
+        position: absolute !important;
+        inset: 0 !important;
+      }
+
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet {
+        position: absolute !important;
+        left: 50% !important;
+        right: auto !important;
+        top: 50% !important;
+        bottom: auto !important;
+        width: min(880px, 92vw) !important;
+        max-height: 84vh !important;
+        max-height: 84dvh !important;
+        overflow-y: auto !important;
+        background: #17171b !important;
+        border: 1px solid rgba(255, 255, 255, 0.14) !important;
+        border-radius: 16px !important;
+        box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6) !important;
+        padding: 20px 24px 24px !important;
+        transform: translate(-50%, calc(-50% + 12px)) !important;
+        visibility: hidden !important;
+        transition: transform 0.22s ease, visibility 0s linear 0.25s !important;
+      }
+
+      .frigate-timeline-modal.is-tv.settings-open .timeline-settings-sheet {
+        transform: translate(-50%, -50%) !important;
+        visibility: visible !important;
+        transition: transform 0.22s ease !important;
+      }
+
+      .frigate-timeline-modal.is-tv .timeline-settings-handle {
+        display: none !important;
+      }
+
+      /* Two-column Time | Window grid inside the dialog. */
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-controls-bar {
+        display: grid !important;
+        grid-template-columns: 1fr 1fr !important;
+        align-items: start !important;
+        gap: 20px 24px !important;
+        margin-top: 16px;
+      }
+
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-sheet-section {
+        display: flex !important;
+        flex-direction: column !important;
+        gap: 12px !important;
+        min-width: 0 !important;
+      }
+
+      /* Time | Window sit side by side under the full-width Playback row. */
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-datetime-group,
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-window-group {
+        flex-direction: column !important;
+        align-items: stretch !important;
+        gap: 12px !important;
+      }
+
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-start-chip {
+        height: 52px !important;
+        font-size: 16px !important;
+      }
+
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-start-day-btn {
+        width: 48px !important;
+        height: 48px !important;
+      }
+
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-start-step-btn {
+        width: 48px !important;
+        height: 52px !important;
+        font-size: 22px !important;
+      }
+
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-start-step-input {
+        width: 2.6ch !important;
+        min-width: 2.6ch !important;
+        font-size: 24px !important;
+      }
+
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-start-cancel,
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-start-apply {
+        height: 52px !important;
+        font-size: 15px !important;
+      }
+
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-quick-btn,
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-window-pill {
+        min-height: 48px !important;
+        height: 48px !important;
+        padding: 0 16px !important;
+        font-size: 15px !important;
+        flex: 1 1 auto !important;
+      }
+
+      /* D-pad targets: every TV control is at least 48px tall. */
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-transport-btn {
+        min-width: 48px !important;
+        height: 48px !important;
+      }
+
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-transport-btn.play-btn {
+        width: 60px !important;
+        height: 60px !important;
+      }
+
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-transport-bar {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+      }
+
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-speed-controls {
+        height: 56px !important;
+      }
+
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-stepper-btn {
+        width: 48px !important;
+        height: 48px !important;
+        font-size: 20px !important;
+      }
+
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-speed-display {
+        min-width: 64px !important;
+        min-height: 48px !important;
+        font-size: 15px !important;
       }
 
       @media (prefers-reduced-motion: reduce) {
@@ -4158,6 +5691,7 @@ export class FrigateEventsCard extends LitElement {
     const isCurrentlyActive: boolean = Boolean(
       Array.isArray(activeMasks) && activeMasks.some((m: any) => m.mask_id === maskId)
     );
+    const toggleDynamic = this._getTemporaryMaskSensor(this.hass.states)?.attributes?.supports_dynamic_toggle === true;
 
     try {
       if (isCurrentlyActive) {
@@ -4178,7 +5712,9 @@ export class FrigateEventsCard extends LitElement {
           { mask_id: maskId, camera: event.camera, label: event.label, event_id: event.id, removed_at: new Date().toISOString() }
         ];
         this.dispatchEvent(new CustomEvent('hass-notification', {
-          detail: { message: `Temporary mask removed for ${event.camera}` },
+          detail: { message: toggleDynamic
+            ? `Mask removed.`
+            : `Mask removed. Frigate is restarting.` },
           bubbles: true,
           composed: true,
         }));
@@ -4198,7 +5734,9 @@ export class FrigateEventsCard extends LitElement {
         });
         this._localPendingMasks = [];
         this.dispatchEvent(new CustomEvent('hass-notification', {
-          detail: { message: `Temporary mask applied for ${event.camera}` },
+          detail: { message: toggleDynamic
+            ? `Mask applied.`
+            : `Mask applied. Frigate is restarting.` },
           bubbles: true,
           composed: true,
         }));
@@ -4207,9 +5745,8 @@ export class FrigateEventsCard extends LitElement {
     } catch (err) {
       console.error('Failed to toggle temporary mask:', err);
       if (!isCurrentlyActive) {
-        const message = err instanceof Error ? err.message : String(err);
         this.dispatchEvent(new CustomEvent('hass-notification', {
-          detail: { message: `Could not apply temporary mask: ${message}` },
+          detail: { message: `Could not add the mask.` },
           bubbles: true,
           composed: true,
         }));
@@ -4241,22 +5778,10 @@ export class FrigateEventsCard extends LitElement {
       }
       this._maskDurationOverrides.set(String(maskId), durationHours <= 0 ? -1 : durationHours);
 
-      const durationText = durationHours <= 0
-        ? 'infinite (manual removal only)'
-        : durationHours === 1
-        ? '1 hour'
-        : durationHours < 24
-        ? `${durationHours} hours`
-        : durationHours === 24
-        ? '24 hours (1 day)'
-        : durationHours === 48
-        ? '48 hours (2 days)'
-        : durationHours % 24 === 0
-        ? `${durationHours / 24} days`
-        : `${durationHours} hours`;
+      const durationText = this._formatMaskDurationChoice(durationHours);
 
       this.dispatchEvent(new CustomEvent('hass-notification', {
-        detail: { message: `Temporary mask updated to ${durationText} for ${event.camera}` },
+        detail: { message: `Mask duration: ${durationText}.` },
         bubbles: true,
         composed: true,
       }));
@@ -4332,7 +5857,9 @@ export class FrigateEventsCard extends LitElement {
     if (currentMask) {
       activeDurationHours = this._getCurrentMaskDurationHours(currentMask);
       if (activeDurationHours <= 0 || !currentMask.expires_at) {
-        timeRemainingStr = '∞';
+        // No-expiry masks: activeDurationText already shows '∞', so leave
+        // timeRemainingStr empty to avoid a doubled "∞ · ∞" subtitle.
+        timeRemainingStr = '';
       } else if (currentMask.expires_at) {
         const expMs = new Date(currentMask.expires_at).getTime();
         const nowMs = Date.now();
@@ -4550,6 +6077,17 @@ export class FrigateEventsCard extends LitElement {
       this._contextMenuEl.parentNode.removeChild(this._contextMenuEl);
       this._contextMenuEl = undefined;
     }
+  }
+
+  private _formatMaskDurationChoice(durationHours: number): string {
+    if (durationHours <= 0) return 'no expiry';
+    if (durationHours === 1) return '1 hour';
+    if (durationHours < 24) return `${durationHours} hours`;
+    if (durationHours % 24 === 0) {
+      const days = durationHours / 24;
+      return days === 1 ? '1 day' : `${days} days`;
+    }
+    return `${durationHours} hours`;
   }
 
   private _formatMaskRemainingTime(expiresAt?: string | null, durationHours?: number): string {
@@ -4863,6 +6401,7 @@ export class FrigateEventsCard extends LitElement {
       this._maskManagerContainer.parentNode.removeChild(this._maskManagerContainer);
       this._maskManagerContainer = undefined;
       this._maskManagerExpandedId = undefined;
+      this._maskEditingId = undefined;
     }
     if (this._maskManagerTimer) {
       clearInterval(this._maskManagerTimer);
@@ -4888,6 +6427,60 @@ export class FrigateEventsCard extends LitElement {
         el.classList.toggle('expiring', msLeft < 3600000);
       }
     });
+  }
+
+  private _parseMaskPolygonNormalized(mask: any): { pts: Array<{ x: number; y: number }>; viewBoxW: number; viewBoxH: number } {
+    let viewBoxW = 1920;
+    let viewBoxH = 1080;
+    if (typeof mask?.width === 'number' && typeof mask?.height === 'number' && mask.width > 0 && mask.height > 0) {
+      viewBoxW = mask.width;
+      viewBoxH = mask.height;
+    }
+    const polyStr = mask?.polygon;
+    if (!polyStr || typeof polyStr !== 'string') return { pts: [], viewBoxW, viewBoxH };
+    const nums = polyStr.split(',').map((s: string) => parseFloat(s.trim())).filter((n: number) => !isNaN(n));
+    if (nums.length < 6) return { pts: [], viewBoxW, viewBoxH };
+    const isNormalized = nums.every((n: number) => n <= 1.0);
+    if (!isNormalized && (!mask?.width || !mask?.height)) {
+      let maxCoord = 0;
+      for (const n of nums) {
+        if (n > maxCoord) maxCoord = n;
+      }
+      if (maxCoord > 2560) {
+        viewBoxW = 3840; viewBoxH = 2160;
+      } else if (maxCoord > 1920) {
+        viewBoxW = 2560; viewBoxH = 1440;
+      }
+    }
+    const clamp01 = (n: number): number => Math.min(1, Math.max(0, n));
+    const pts: Array<{ x: number; y: number }> = [];
+    for (let i = 0; i + 1 < nums.length; i += 2) {
+      if (isNormalized) {
+        pts.push({ x: clamp01(nums[i]), y: clamp01(nums[i + 1]) });
+      } else {
+        pts.push({ x: clamp01(nums[i] / viewBoxW), y: clamp01(nums[i + 1] / viewBoxH) });
+      }
+    }
+    return { pts, viewBoxW, viewBoxH };
+  }
+
+  private _formatNormalizedPolygon(pts: Array<{ x: number; y: number }>): string {
+    return pts.map(p => `${Math.round(p.x * 1000) / 1000},${Math.round(p.y * 1000) / 1000}`).join(',');
+  }
+
+  private _scaleNormalizedPolygon(pts: Array<{ x: number; y: number }>, factor: number): Array<{ x: number; y: number }> {
+    if (pts.length === 0) return pts;
+    let cx = 0, cy = 0;
+    for (const p of pts) {
+      cx += p.x;
+      cy += p.y;
+    }
+    cx /= pts.length;
+    cy /= pts.length;
+    return pts.map(p => ({
+      x: Math.min(1, Math.max(0, cx + (p.x - cx) * factor)),
+      y: Math.min(1, Math.max(0, cy + (p.y - cy) * factor)),
+    }));
   }
 
   private _getMaskPreviewGeometry(mask: any, matchedEvent?: any): {
@@ -5065,11 +6658,12 @@ export class FrigateEventsCard extends LitElement {
     // Keep the list scroll position across re-renders (timers, duration changes, snapshots).
     const previousScroll = container.querySelector<HTMLElement>('.mask-manager-body')?.scrollTop ?? 0;
 
-    // Expanded row: the user's last choice, otherwise the first mask in the current view.
+    // Expanded row: the user's last choice; with no choice yet, expand the
+    // lone mask but collapse all when there are several.
     const expandedId = (this._maskManagerExpandedId === '' ||
       (this._maskManagerExpandedId !== undefined && filteredMasks.some((m: any) => String(m.mask_id) === this._maskManagerExpandedId)))
       ? this._maskManagerExpandedId
-      : (filteredMasks[0] ? String(filteredMasks[0].mask_id) : '');
+      : (filteredMasks.length > 1 ? '' : (filteredMasks[0] ? String(filteredMasks[0].mask_id) : ''));
 
     const buildViewModel = (mask: any) => {
       const clientId = this._config?.frigate_client_id || 'frigate';
@@ -5138,6 +6732,70 @@ export class FrigateEventsCard extends LitElement {
 
     const chevronSvg = '<svg class="mask-row-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M8.59 16.59 13.17 12 8.59 7.41 10 6l6 6-6 6z"/></svg>';
 
+    const buildEditPanel = (mask: any, vm: ReturnType<typeof buildViewModel>): string => {
+      const parsed = this._parseMaskPolygonNormalized(mask);
+      if (parsed.pts.length === 0) return '';
+      const vw = parsed.viewBoxW;
+      const vh = parsed.viewBoxH;
+      const normPoly = this._formatNormalizedPolygon(parsed.pts);
+      const dispPts = parsed.pts.map(p => `${p.x * vw},${p.y * vh}`).join(' ');
+      const handleR = Math.max(14, Math.round(Math.max(vw, vh) * 0.012));
+      const eventId = escapeHtml(mask.event_id || vm.maskId);
+      const handles = parsed.pts.map((p, i) =>
+        `<circle class="mask-edit-handle" data-edit-handle="${i}" cx="${p.x * vw}" cy="${p.y * vh}" r="${handleR}" />`
+      ).join('');
+      const edgeCursor = (i: number): string => {
+        const a = parsed.pts[i];
+        const b = parsed.pts[(i + 1) % parsed.pts.length];
+        const dx = Math.abs(b.x - a.x);
+        const dy = Math.abs(b.y - a.y);
+        return dx < dy * 0.5 ? 'ew-resize' : (dy < dx * 0.5 ? 'ns-resize' : 'move');
+      };
+      const edgeHits = parsed.pts.map((p, i) => {
+        const q = parsed.pts[(i + 1) % parsed.pts.length];
+        return `<line class="mask-edit-edge" data-edit-edge="${i}" x1="${p.x * vw}" y1="${p.y * vh}" x2="${q.x * vw}" y2="${q.y * vh}" style="cursor:${edgeCursor(i)}" />`;
+      }).join('');
+      const minX = Math.min(...parsed.pts.map(p => p.x));
+      const maxX = Math.max(...parsed.pts.map(p => p.x));
+      const minY = Math.min(...parsed.pts.map(p => p.y));
+      const maxY = Math.max(...parsed.pts.map(p => p.y));
+      const coversText = `Covers ${Math.round((maxX - minX) * vw)} × ${Math.round((maxY - minY) * vh)} px`;
+      return `
+        <div class="mask-edit-panel" data-edit-panel="${escapeHtml(vm.maskId)}" data-norm-poly="${escapeHtml(normPoly)}" data-orig-poly="${escapeHtml(normPoly)}" data-viewbox-w="${vw}" data-viewbox-h="${vh}" data-label="${escapeHtml(mask.label || '')}">
+          <div class="mask-edit-preview" data-edit-preview>
+            ${vm.displayUrl ? `<img src="${escapeHtml(vm.displayUrl)}" alt="" loading="lazy" data-fallback-url="${escapeHtml(vm.imageFallbackUrl)}" onerror="((img) => {
+              if (!img.dataset.triedFallback && img.dataset.fallbackUrl) {
+                img.dataset.triedFallback = 'true';
+                img.src = img.dataset.fallbackUrl;
+              } else {
+                img.style.display = 'none';
+              }
+            })(this)" />` : ''}
+            <svg data-edit-svg viewBox="0 0 ${vw} ${vh}" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+              <polygon points="${escapeHtml(dispPts)}" class="mask-edit-poly" data-edit-poly vector-effect="non-scaling-stroke" />
+              ${edgeHits}
+              ${handles}
+            </svg>
+          </div>
+          <div class="mask-edit-meta"><span data-edit-covers>${escapeHtml(coversText)}</span></div>
+          <div class="mask-edit-row" role="group" aria-label="Adjust mask size">
+            <button type="button" class="mask-edit-size-btn" data-action="edit-shrink" data-mask-id="${escapeHtml(vm.maskId)}">Shrink −10%</button>
+            <button type="button" class="mask-edit-size-btn" data-action="edit-expand" data-mask-id="${escapeHtml(vm.maskId)}">Expand +10%</button>
+            <button type="button" class="mask-edit-size-btn" data-action="edit-reset" data-mask-id="${escapeHtml(vm.maskId)}">Reset</button>
+          </div>
+          <div class="mask-edit-label-row">
+            <span class="mask-control-label">Label</span>
+            <input type="text" class="mask-edit-input" data-edit-label maxlength="64" placeholder="person, dog" aria-label="Mask label" />
+            <span class="mask-edit-hint">Comma-separated labels apply the same mask to each object type.</span>
+          </div>
+          <div class="mask-edit-actions">
+            <button type="button" class="mask-edit-cancel" data-action="edit-cancel" data-mask-id="${escapeHtml(vm.maskId)}">Cancel</button>
+            <button type="button" class="mask-edit-save" data-action="edit-save" data-mask-id="${escapeHtml(vm.maskId)}" data-camera="${escapeHtml(mask.camera || '')}" data-event-id="${eventId}">Save</button>
+          </div>
+        </div>
+      `;
+    };
+
     const buildActiveRow = (mask: any): string => {
       const vm = buildViewModel(mask);
       const maskId = escapeHtml(vm.maskId);
@@ -5147,6 +6805,7 @@ export class FrigateEventsCard extends LitElement {
       const currentDurationHours = this._getCurrentMaskDurationHours(mask);
       const remaining = this._formatMaskRemainingTime(mask.expires_at, currentDurationHours);
       const remainingText = remaining === '∞' ? 'No expiry' : remaining;
+      const isExpired = remaining === 'Expired';
       const msLeft = (currentDurationHours <= 0 || !mask.expires_at)
         ? Infinity
         : new Date(mask.expires_at).getTime() - Date.now();
@@ -5161,18 +6820,12 @@ export class FrigateEventsCard extends LitElement {
         <button type="button" class="${cls} ${Math.abs(p.hours - currentDurationHours) < 0.01 ? 'active' : ''}" data-action="set-duration" data-mask-id="${maskId}" data-camera="${camera}" data-hours="${p.hours}" data-poly="${poly}" data-label="${maskLabel}">${p.label}</button>
       `;
 
-      return `
-        <div class="mask-row ${isExpanded ? 'expanded' : ''}" data-mask-id="${maskId}">
-          <button type="button" class="mask-row-head" data-action="toggle-mask" data-mask-id="${maskId}" aria-expanded="${isExpanded}">
-            <span class="mask-thumb">${buildPreview(vm)}</span>
-            <span class="mask-row-text">
-              <span class="mask-row-title" title="Mask ${maskId}" data-safe-text="${escapeHtml(vm.title)}"></span>
-              <span class="mask-row-sub" data-safe-text="${escapeHtml(vm.sub)}"></span>
-            </span>
-            <span class="mask-row-time ${expiring ? 'expiring' : ''}" data-timer-mask-id="${maskId}"><span class="timer-text">${escapeHtml(remainingText)}</span></span>
-            ${chevronSvg}
-          </button>
-          <div class="mask-row-detail">
+      // While editing, the editor replaces the static preview and controls
+      // so it becomes the main view. Cancel/Save live inside the panel.
+      const editPanel = this._maskEditingId === vm.maskId ? buildEditPanel(mask, vm) : '';
+      const showEditor = editPanel !== '';
+
+      const detailBody = `
             <div class="mask-frame">${buildPreview(vm)}</div>
             ${vm.geo.maskW > 0 ? `<div class="mask-meta">Covers ${Math.round(vm.geo.maskW)} × ${Math.round(vm.geo.maskH)} px</div>` : ''}
             <div class="mask-controls">
@@ -5183,12 +6836,30 @@ export class FrigateEventsCard extends LitElement {
                   <button type="button" class="mask-seg-btn ${selectedIsPrimary ? '' : 'active'}" data-action="toggle-more" aria-expanded="false">${escapeHtml(moreLabel)}</button>
                 </div>
               </div>
-              <button type="button" class="mask-remove-btn" data-action="remove-mask" data-mask-id="${maskId}" data-camera="${camera}">Remove mask</button>
+              <div class="mask-row-actions">
+                <button type="button" class="mask-edit-btn" data-action="edit-mask" data-mask-id="${maskId}" data-camera="${camera}">${this._maskEditingId === vm.maskId ? 'Close editor' : 'Edit'}</button>
+                <button type="button" class="mask-remove-btn" data-action="remove-mask" data-mask-id="${maskId}" data-camera="${camera}">Remove mask</button>
+              </div>
             </div>
             <div class="mask-more" hidden>
               ${morePresets.map(p => durationButton(p, 'mask-chip')).join('')}
               <button type="button" class="mask-chip ${(!selectedPreset) ? 'active' : ''}" data-action="custom-duration" data-mask-id="${maskId}" data-camera="${camera}" data-poly="${poly}" data-label="${maskLabel}">${selectedPreset ? 'Custom…' : `Custom (${currentDurationHours}h)`}</button>
             </div>
+      `;
+
+      return `
+        <div class="mask-row ${isExpanded ? 'expanded' : ''}" data-mask-id="${maskId}">
+          <button type="button" class="mask-row-head" data-action="toggle-mask" data-mask-id="${maskId}" aria-expanded="${isExpanded}">
+            <span class="mask-thumb">${buildPreview(vm)}</span>
+            <span class="mask-row-text">
+              <span class="mask-row-title" title="Mask ${maskId}" data-safe-text="${escapeHtml(vm.title)}"></span>
+              <span class="mask-row-sub" data-safe-text="${escapeHtml(vm.sub)}"></span>
+            </span>
+            <span class="mask-row-time ${isExpired ? 'expired' : (expiring ? 'expiring' : '')}" data-timer-mask-id="${maskId}"><span class="timer-text">${escapeHtml(remainingText)}</span></span>
+            ${chevronSvg}
+          </button>
+          <div class="mask-row-detail">
+            ${showEditor ? editPanel : detailBody}
           </div>
         </div>
       `;
@@ -5211,12 +6882,27 @@ export class FrigateEventsCard extends LitElement {
       `;
     };
 
+    const expiredMasks = activeMasks.filter((m: any) => {
+      const dur = this._getCurrentMaskDurationHours(m);
+      if (dur <= 0 || !m.expires_at) return false;
+      return (new Date(m.expires_at).getTime() - Date.now()) <= 0;
+    });
+    const activeNonExpiredCount = Math.max(0, activeMasks.length - expiredMasks.length);
+    const countLabel = expiredMasks.length > 0
+      ? `${activeNonExpiredCount} active · ${expiredMasks.length} expired`
+      : `${totalCount} active`;
+
     container.innerHTML = `
       <div class="frigate-events-modal-backdrop" data-action="close"></div>
       <div class="frigate-events-modal-content" role="dialog" aria-modal="true" aria-label="Temporary masks">
         <div class="mask-manager-header">
           <h2 class="mask-manager-title">Temporary masks</h2>
-          <span class="mask-manager-count">${totalCount} active</span>
+          <span class="mask-manager-count">${countLabel}</span>
+          ${expiredMasks.length > 0 ? `
+            <button type="button" class="mask-clean-expired-btn" data-action="prune-expired" title="Remove expired temporary masks from Frigate">
+              Prune expired (${expiredMasks.length})
+            </button>
+          ` : ''}
           <button class="frigate-events-modal-close" data-action="close" title="Close" aria-label="Close">
             <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
           </button>
@@ -5284,6 +6970,39 @@ export class FrigateEventsCard extends LitElement {
       el.addEventListener('click', (e) => {
         e.stopPropagation();
         this._removeMaskManagerModal();
+      });
+    });
+
+    container.querySelectorAll('[data-action="prune-expired"]').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const targetBtn = btn as HTMLButtonElement;
+        targetBtn.disabled = true;
+        targetBtn.textContent = 'Pruning…';
+        try {
+          if (this.hass?.callService) {
+            if (this.hass.services?.['frigate_temp_mask']?.['prune_expired']) {
+              await this.hass.callService('frigate_temp_mask', 'prune_expired', {});
+            } else {
+              for (const m of expiredMasks) {
+                await this.hass.callService('frigate_temp_mask', 'remove_mask', { mask_id: m.mask_id });
+              }
+            }
+            await this.hass.callService('frigate_temp_mask', 'sync', {});
+          }
+          this.dispatchEvent(new CustomEvent('hass-notification', {
+            detail: { message: `Pruned ${expiredMasks.length} expired mask(s).` },
+            bubbles: true,
+            composed: true,
+          }));
+        } catch (err) {
+          console.error('Failed to prune expired masks:', err);
+        } finally {
+          this.requestUpdate();
+          if (this._maskManagerContainer) {
+            this._renderMaskManagerContent(this._maskManagerContainer);
+          }
+        }
       });
     });
 
@@ -5389,6 +7108,351 @@ export class FrigateEventsCard extends LitElement {
         }
       });
     });
+
+    // ── Inline geometry editor ──
+    const findEditPanel = (maskId: string): HTMLElement | null => {
+      let found: HTMLElement | null = null;
+      container.querySelectorAll('[data-edit-panel]').forEach(panel => {
+        if ((panel as HTMLElement).getAttribute('data-edit-panel') === maskId) {
+          found = panel as HTMLElement;
+        }
+      });
+      return found;
+    };
+    const clamp01 = (n: number): number => Math.min(1, Math.max(0, n));
+    const parsePanelPoly = (panel: HTMLElement): Array<{ x: number; y: number }> => {
+      const raw = panel.getAttribute('data-norm-poly') || '';
+      const nums = raw.split(',').map(s => parseFloat(s.trim())).filter(n => !isNaN(n));
+      const pts: Array<{ x: number; y: number }> = [];
+      for (let i = 0; i + 1 < nums.length; i += 2) {
+        pts.push({ x: clamp01(nums[i]), y: clamp01(nums[i + 1]) });
+      }
+      return pts;
+    };
+    const panelViewBox = (panel: HTMLElement): { w: number; h: number } => ({
+      w: parseFloat(panel.getAttribute('data-viewbox-w') || '1920') || 1920,
+      h: parseFloat(panel.getAttribute('data-viewbox-h') || '1080') || 1080,
+    });
+    const paintPanel = (panel: HTMLElement): void => {
+      const pts = parsePanelPoly(panel);
+      const { w, h } = panelViewBox(panel);
+      const polyEl = panel.querySelector('[data-edit-poly]');
+      if (polyEl) {
+        polyEl.setAttribute('points', pts.map(p => `${p.x * w},${p.y * h}`).join(' '));
+      }
+      pts.forEach((p, i) => {
+        const handle = panel.querySelector(`[data-edit-handle="${i}"]`);
+        if (handle) {
+          handle.setAttribute('cx', String(p.x * w));
+          handle.setAttribute('cy', String(p.y * h));
+        }
+      });
+      panel.querySelectorAll('[data-edit-edge]').forEach((edgeEl) => {
+        const edgeIdx = parseInt((edgeEl as HTMLElement).getAttribute('data-edit-edge') || '-1', 10);
+        if (isNaN(edgeIdx) || edgeIdx < 0 || edgeIdx >= pts.length) return;
+        const a = pts[edgeIdx];
+        const b = pts[(edgeIdx + 1) % pts.length];
+        edgeEl.setAttribute('x1', String(a.x * w));
+        edgeEl.setAttribute('y1', String(a.y * h));
+        edgeEl.setAttribute('x2', String(b.x * w));
+        edgeEl.setAttribute('y2', String(b.y * h));
+        const dx = Math.abs(b.x - a.x);
+        const dy = Math.abs(b.y - a.y);
+        (edgeEl as HTMLElement).style.cursor = dx < dy * 0.5 ? 'ew-resize' : (dy < dx * 0.5 ? 'ns-resize' : 'move');
+      });
+      const covers = panel.querySelector('[data-edit-covers]');
+      if (covers && pts.length > 0) {
+        const xs = pts.map(p => p.x);
+        const ys = pts.map(p => p.y);
+        const cw = Math.round((Math.max(...xs) - Math.min(...xs)) * w);
+        const ch = Math.round((Math.max(...ys) - Math.min(...ys)) * h);
+        covers.textContent = `Covers ${cw} × ${ch} px`;
+      }
+    };
+    const clientToNorm = (svg: SVGSVGElement, clientX: number, clientY: number, w: number, h: number): { x: number; y: number } | null => {
+      try {
+        const ctm = svg.getScreenCTM();
+        if (ctm) {
+          const pt = new DOMPoint(clientX, clientY).matrixTransform(ctm.inverse());
+          return { x: clamp01(pt.x / w), y: clamp01(pt.y / h) };
+        }
+      } catch {
+        // Fall through to bounding-rect approximation below.
+      }
+      const rect = svg.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return null;
+      return { x: clamp01((clientX - rect.left) / rect.width), y: clamp01((clientY - rect.top) / rect.height) };
+    };
+
+    container.querySelectorAll('[data-action="edit-mask"]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const maskId = (btn as HTMLElement).getAttribute('data-mask-id');
+        if (!maskId) return;
+        this._maskEditingId = this._maskEditingId === maskId ? undefined : maskId;
+        this._renderMaskManagerContent(container);
+      });
+    });
+
+    // Active inline-editor drag (vertex, fill, or edge). Escape cancels the
+    // in-progress gesture and restores its snapshot instead of closing the editor.
+    let activeEditDrag: { cancel: () => void } | null = null;
+    container.querySelectorAll('[data-edit-panel]').forEach(panelEl => {
+      const panel = panelEl as HTMLElement;
+      panel.addEventListener('click', (e) => e.stopPropagation());
+      panel.addEventListener('pointerdown', (e) => e.stopPropagation());
+      const labelInput = panel.querySelector('[data-edit-label]') as HTMLInputElement | null;
+      if (labelInput && !labelInput.value) {
+        labelInput.value = panel.getAttribute('data-label') || '';
+      }
+      const svg = panel.querySelector('[data-edit-svg]') as SVGSVGElement | null;
+      if (svg) {
+        panel.querySelectorAll('[data-edit-handle]').forEach(handleEl => {
+          const handle = handleEl as Element;
+          const idx = parseInt((handle as HTMLElement).getAttribute('data-edit-handle') || '-1', 10);
+          if (isNaN(idx) || idx < 0) return;
+          handle.addEventListener('pointerdown', (ev) => {
+            ev.stopPropagation();
+            ev.preventDefault();
+            const evt = ev as PointerEvent;
+            const startPts = parsePanelPoly(panel);
+            let vertexCancelled = false;
+            const vertexDrag = { cancel: (): void => {
+              vertexCancelled = true;
+              panel.setAttribute('data-norm-poly', this._formatNormalizedPolygon(startPts));
+              paintPanel(panel);
+            } };
+            activeEditDrag = vertexDrag;
+            try {
+              handle.setPointerCapture(evt.pointerId);
+            } catch {
+              // Pointer capture unavailable; drag still works via move/up listeners.
+            }
+            const onMove = (me: Event): void => {
+              if (vertexCancelled) return;
+              const { w, h } = panelViewBox(panel);
+              const norm = clientToNorm(svg, (me as PointerEvent).clientX, (me as PointerEvent).clientY, w, h);
+              if (!norm) return;
+              const pts = parsePanelPoly(panel);
+              if (idx >= pts.length) return;
+              pts[idx] = norm;
+              panel.setAttribute('data-norm-poly', this._formatNormalizedPolygon(pts));
+              paintPanel(panel);
+            };
+            const onUp = (): void => {
+              handle.removeEventListener('pointermove', onMove);
+              handle.removeEventListener('pointerup', onUp);
+              handle.removeEventListener('pointercancel', onUp);
+              if (activeEditDrag === vertexDrag) activeEditDrag = null;
+            };
+            handle.addEventListener('pointermove', onMove);
+            handle.addEventListener('pointerup', onUp);
+            handle.addEventListener('pointercancel', onUp);
+          });
+        });
+        const fillPoly = panel.querySelector('[data-edit-poly]');
+        if (fillPoly) {
+          fillPoly.addEventListener('pointerdown', (ev) => {
+            ev.stopPropagation();
+            ev.preventDefault();
+            const evt = ev as PointerEvent;
+            const { w, h } = panelViewBox(panel);
+            const start = clientToNorm(svg, evt.clientX, evt.clientY, w, h);
+            if (!start) return;
+            const orig = parsePanelPoly(panel);
+            if (orig.length === 0) return;
+            const xs = orig.map(p => p.x);
+            const ys = orig.map(p => p.y);
+            // Clamp the shared delta (not individual points) so the shape
+            // never distorts against the 0..1 frame edges.
+            const dxMin = -Math.min(...xs);
+            const dxMax = 1 - Math.max(...xs);
+            const dyMin = -Math.min(...ys);
+            const dyMax = 1 - Math.max(...ys);
+            let fillCancelled = false;
+            const fillDrag = { cancel: (): void => {
+              fillCancelled = true;
+              panel.setAttribute('data-norm-poly', this._formatNormalizedPolygon(orig));
+              paintPanel(panel);
+            } };
+            activeEditDrag = fillDrag;
+            try {
+              fillPoly.setPointerCapture(evt.pointerId);
+            } catch {
+              // Pointer capture unavailable; drag still works via move/up listeners.
+            }
+            const onMove = (me: Event): void => {
+              if (fillCancelled) return;
+              const vb = panelViewBox(panel);
+              const norm = clientToNorm(svg, (me as PointerEvent).clientX, (me as PointerEvent).clientY, vb.w, vb.h);
+              if (!norm) return;
+              const dx = Math.min(dxMax, Math.max(dxMin, norm.x - start.x));
+              const dy = Math.min(dyMax, Math.max(dyMin, norm.y - start.y));
+              const moved = orig.map(p => ({ x: p.x + dx, y: p.y + dy }));
+              panel.setAttribute('data-norm-poly', this._formatNormalizedPolygon(moved));
+              paintPanel(panel);
+            };
+            const onUp = (): void => {
+              fillPoly.removeEventListener('pointermove', onMove);
+              fillPoly.removeEventListener('pointerup', onUp);
+              fillPoly.removeEventListener('pointercancel', onUp);
+              if (activeEditDrag === fillDrag) activeEditDrag = null;
+            };
+            fillPoly.addEventListener('pointermove', onMove);
+            fillPoly.addEventListener('pointerup', onUp);
+            fillPoly.addEventListener('pointercancel', onUp);
+          });
+        }
+        panel.querySelectorAll('[data-edit-edge]').forEach(edgeEl => {
+          const edge = edgeEl as Element;
+          const edgeIdx = parseInt((edge as HTMLElement).getAttribute('data-edit-edge') || '-1', 10);
+          if (isNaN(edgeIdx) || edgeIdx < 0) return;
+          edge.addEventListener('pointerdown', (ev) => {
+            ev.stopPropagation();
+            ev.preventDefault();
+            const evt = ev as PointerEvent;
+            const { w, h } = panelViewBox(panel);
+            const start = clientToNorm(svg, evt.clientX, evt.clientY, w, h);
+            if (!start) return;
+            const orig = parsePanelPoly(panel);
+            if (edgeIdx >= orig.length) return;
+            const nextIdx = (edgeIdx + 1) % orig.length;
+            // Lock orientation from the edge geometry at dragstart so the
+            // edge can't flip mid-drag.
+            const ex = orig[nextIdx].x - orig[edgeIdx].x;
+            const ey = orig[nextIdx].y - orig[edgeIdx].y;
+            const adx = Math.abs(ex);
+            const ady = Math.abs(ey);
+            const mode = adx < ady * 0.5 ? 'v' : (ady < adx * 0.5 ? 'h' : 'd');
+            const exMin = Math.min(orig[edgeIdx].x, orig[nextIdx].x);
+            const exMax = Math.max(orig[edgeIdx].x, orig[nextIdx].x);
+            const eyMin = Math.min(orig[edgeIdx].y, orig[nextIdx].y);
+            const eyMax = Math.max(orig[edgeIdx].y, orig[nextIdx].y);
+            let edgeCancelled = false;
+            const edgeDrag = { cancel: (): void => {
+              edgeCancelled = true;
+              panel.setAttribute('data-norm-poly', this._formatNormalizedPolygon(orig));
+              paintPanel(panel);
+            } };
+            activeEditDrag = edgeDrag;
+            try {
+              edge.setPointerCapture(evt.pointerId);
+            } catch {
+              // Pointer capture unavailable; drag still works via move/up listeners.
+            }
+            const onMove = (me: Event): void => {
+              if (edgeCancelled) return;
+              const vb = panelViewBox(panel);
+              const norm = clientToNorm(svg, (me as PointerEvent).clientX, (me as PointerEvent).clientY, vb.w, vb.h);
+              if (!norm) return;
+              const pts = orig.map(p => ({ x: p.x, y: p.y }));
+              if (mode === 'v') {
+                const nx = clamp01(norm.x);
+                pts[edgeIdx].x = nx;
+                pts[nextIdx].x = nx;
+              } else if (mode === 'h') {
+                const ny = clamp01(norm.y);
+                pts[edgeIdx].y = ny;
+                pts[nextIdx].y = ny;
+              } else {
+                const dx = Math.min(1 - exMax, Math.max(-exMin, norm.x - start.x));
+                const dy = Math.min(1 - eyMax, Math.max(-eyMin, norm.y - start.y));
+                pts[edgeIdx].x = orig[edgeIdx].x + dx;
+                pts[edgeIdx].y = orig[edgeIdx].y + dy;
+                pts[nextIdx].x = orig[nextIdx].x + dx;
+                pts[nextIdx].y = orig[nextIdx].y + dy;
+              }
+              panel.setAttribute('data-norm-poly', this._formatNormalizedPolygon(pts));
+              paintPanel(panel);
+            };
+            const onUp = (): void => {
+              edge.removeEventListener('pointermove', onMove);
+              edge.removeEventListener('pointerup', onUp);
+              edge.removeEventListener('pointercancel', onUp);
+              if (activeEditDrag === edgeDrag) activeEditDrag = null;
+            };
+            edge.addEventListener('pointermove', onMove);
+            edge.addEventListener('pointerup', onUp);
+            edge.addEventListener('pointercancel', onUp);
+          });
+        });
+      }
+    });
+
+    container.querySelectorAll('[data-action="edit-expand"]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const maskId = (btn as HTMLElement).getAttribute('data-mask-id') || '';
+        const panel = findEditPanel(maskId);
+        if (!panel) return;
+        panel.setAttribute('data-norm-poly', this._formatNormalizedPolygon(this._scaleNormalizedPolygon(parsePanelPoly(panel), 1.1)));
+        paintPanel(panel);
+      });
+    });
+
+    container.querySelectorAll('[data-action="edit-shrink"]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const maskId = (btn as HTMLElement).getAttribute('data-mask-id') || '';
+        const panel = findEditPanel(maskId);
+        if (!panel) return;
+        panel.setAttribute('data-norm-poly', this._formatNormalizedPolygon(this._scaleNormalizedPolygon(parsePanelPoly(panel), 0.9)));
+        paintPanel(panel);
+      });
+    });
+
+    container.querySelectorAll('[data-action="edit-reset"]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const maskId = (btn as HTMLElement).getAttribute('data-mask-id') || '';
+        const panel = findEditPanel(maskId);
+        if (!panel) return;
+        panel.setAttribute('data-norm-poly', panel.getAttribute('data-orig-poly') || '');
+        paintPanel(panel);
+      });
+    });
+
+    container.querySelectorAll('[data-action="edit-cancel"]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._maskEditingId = undefined;
+        this._renderMaskManagerContent(container);
+      });
+    });
+
+    container.querySelectorAll('[data-action="edit-save"]').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const maskId = (btn as HTMLElement).getAttribute('data-mask-id') || '';
+        const camera = (btn as HTMLElement).getAttribute('data-camera') || '';
+        const eventId = (btn as HTMLElement).getAttribute('data-event-id') || maskId;
+        const panel = findEditPanel(maskId);
+        if (!maskId || !panel) return;
+        const labelInput = panel.querySelector('[data-edit-label]') as HTMLInputElement | null;
+        const newLabel = (labelInput?.value || '').trim();
+        const newPolygon = panel.getAttribute('data-norm-poly') || '';
+        if (!newPolygon) return;
+        const activeMasks = (this._getTemporaryMaskSensor(this.hass?.states)?.attributes?.masks as any[]) || [];
+        const existing = activeMasks.find((m: any) => String(m.mask_id) === String(maskId));
+        const durationHours = existing ? this._getCurrentMaskDurationHours(existing) : 24;
+        await this._executeEditMask(maskId, camera, eventId, newPolygon, newLabel, durationHours);
+      });
+    });
+
+    container.onkeydown = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape' && activeEditDrag) {
+        e.stopPropagation();
+        const active = activeEditDrag;
+        activeEditDrag = null;
+        active.cancel();
+        return;
+      }
+      if (e.key === 'Escape' && this._maskEditingId) {
+        e.stopPropagation();
+        this._maskEditingId = undefined;
+        this._renderMaskManagerContent(container);
+      }
+    };
   }
 
   private async _executeRestartFrigate(): Promise<void> {
@@ -5398,7 +7462,7 @@ export class FrigateEventsCard extends LitElement {
       await this.hass.callService('frigate_temp_mask', 'restart', {});
       this._localPendingMasks = [];
       this.dispatchEvent(new CustomEvent('hass-notification', {
-        detail: { message: 'Frigate detector process restarting to apply configuration changes...' },
+        detail: { message: 'Frigate is restarting.' },
         bubbles: true,
         composed: true,
       }));
@@ -5473,26 +7537,18 @@ export class FrigateEventsCard extends LitElement {
         this._localPendingMasks = this._localPendingMasks.filter(m => String(m.mask_id) !== String(maskId));
       }
 
+      const removeDynamic = postAttrs?.supports_dynamic_toggle === true;
       this.dispatchEvent(new CustomEvent('hass-notification', {
-        detail: { message: `Temporary mask #${maskId} removed ${camera ? `for ${camera}` : ''}` },
+        detail: { message: removeDynamic
+          ? `Mask removed.`
+          : `Mask removed. Frigate is restarting.` },
         bubbles: true,
         composed: true,
       }));
       this.requestUpdate();
-      if (this._maskManagerContainer) {
-        setTimeout(() => {
-          if (this._maskManagerContainer) this._renderMaskManagerContent(this._maskManagerContainer);
-        }, 300);
-        // Second pass: by 600ms HA state has definitely propagated.
-        // If supports_dynamic_toggle is true (0.18+), ensure no pending entry lingers.
-        setTimeout(() => {
-          const lateAttrs = this._getTemporaryMaskSensor(this.hass?.states)?.attributes;
-          if (lateAttrs?.supports_dynamic_toggle === true) {
-            this._localPendingMasks = this._localPendingMasks.filter(m => String(m.mask_id) !== String(maskId));
-            if (this._maskManagerContainer) this._renderMaskManagerContent(this._maskManagerContainer);
-          }
-        }, 600);
-      }
+      // Close the manager: on pre-0.18 Frigate the delete restarts the
+      // detector, so previews would just go grey until it is back.
+      this._removeMaskManagerModal();
     } catch (err) {
       console.error('Failed to remove mask:', err);
     }
@@ -5508,8 +7564,11 @@ export class FrigateEventsCard extends LitElement {
           await this.hass.callService('shell_command', 'frigate_prune_all_temp_masks', {});
         }
       }
+      const pruneDynamic = this._getTemporaryMaskSensor(this.hass?.states)?.attributes?.supports_dynamic_toggle === true;
       this.dispatchEvent(new CustomEvent('hass-notification', {
-        detail: { message: 'All temporary masks pruned from Frigate' },
+        detail: { message: pruneDynamic
+          ? 'All masks removed.'
+          : 'All masks removed. Frigate is restarting.' },
         bubbles: true,
         composed: true,
       }));
@@ -5539,22 +7598,10 @@ export class FrigateEventsCard extends LitElement {
         duration_hours: durationHours,
       });
       this._maskDurationOverrides.set(String(maskId), durationHours <= 0 ? -1 : durationHours);
-      const durationText = durationHours <= 0
-        ? 'infinite (manual removal only)'
-        : durationHours === 1
-        ? '1 hour'
-        : durationHours < 24
-        ? `${durationHours} hours`
-        : durationHours === 24
-        ? '24 hours (1 day)'
-        : durationHours === 48
-        ? '48 hours (2 days)'
-        : durationHours % 24 === 0
-        ? `${durationHours / 24} days`
-        : `${durationHours} hours`;
+      const durationText = this._formatMaskDurationChoice(durationHours);
 
       this.dispatchEvent(new CustomEvent('hass-notification', {
-        detail: { message: `Temporary mask #${maskId} updated to ${durationText}` },
+        detail: { message: `Mask duration: ${durationText}.` },
         bubbles: true,
         composed: true,
       }));
@@ -5566,6 +7613,71 @@ export class FrigateEventsCard extends LitElement {
       }
     } catch (err) {
       console.error('Failed to update mask duration:', err);
+    }
+  }
+
+  private async _executeEditMask(
+    maskId: string,
+    camera: string,
+    eventId: string,
+    newPolygon: string,
+    newLabel: string,
+    durationHours: number
+  ): Promise<void> {
+    if (!this.hass) return;
+    const key = String(maskId);
+    if (this._maskEditSavingIds.has(key)) return;
+    this._maskEditSavingIds.add(key);
+    const findSaveBtn = (): HTMLButtonElement | null => {
+      let found: HTMLButtonElement | null = null;
+      this._maskManagerContainer?.querySelectorAll('[data-action="edit-save"]').forEach(btn => {
+        if ((btn as HTMLElement).getAttribute('data-mask-id') === key) {
+          found = btn as HTMLButtonElement;
+        }
+      });
+      return found;
+    };
+    const saveBtn = findSaveBtn();
+    if (saveBtn) saveBtn.disabled = true;
+    try {
+      if (!this.hass.callService) throw new Error('Home Assistant service calls are unavailable');
+      const payload = {
+        camera,
+        event_id: eventId || key,
+        mask_id: key,
+        polygon: newPolygon,
+        label: newLabel,
+        duration_hours: durationHours,
+      };
+      try {
+        await this.hass.callService('frigate_temp_mask', 'add_mask', payload);
+      } catch {
+        await this.hass.callService('shell_command', 'frigate_add_temp_mask', payload);
+      }
+      this._maskEditingId = undefined;
+      const sensorAttrs = this._getTemporaryMaskSensor(this.hass?.states)?.attributes;
+      const needsRestart = sensorAttrs?.supports_dynamic_toggle !== true;
+      this.dispatchEvent(new CustomEvent('hass-notification', {
+        detail: { message: needsRestart
+          ? 'Mask updated. Frigate is restarting.'
+          : 'Mask updated.' },
+        bubbles: true,
+        composed: true,
+      }));
+      this.requestUpdate();
+      this._removeMaskManagerModal();
+    } catch (err) {
+      console.error('Failed to edit mask:', err);
+      const btn = findSaveBtn();
+      if (btn) btn.disabled = false;
+      this.dispatchEvent(new CustomEvent('hass-notification', {
+        detail: { message: 'Could not update the mask.' },
+        bubbles: true,
+        composed: true,
+      }));
+      return;
+    } finally {
+      this._maskEditSavingIds.delete(key);
     }
   }
 
@@ -5586,29 +7698,55 @@ export class FrigateEventsCard extends LitElement {
      ───────────────────────────────────────────────────────────── */
 
   private _getEventSeekOffset(event?: FrigateEvent): number {
-    const raw = this._config?.timeline_event_seek_offset;
-    if (raw === undefined || raw === null) return 0;
-    if (typeof raw === 'number') return raw;
-    if (typeof raw === 'string' && !isNaN(Number(raw))) return Number(raw);
-    if (typeof raw === 'object' && event) {
-      const val = this._getConfigValueForEvent(raw as Record<string, number>, event, 0);
-      return typeof val === 'number' ? val : (Number(val) || 0);
+    const configured = this._userConfig?.timeline_event_seek_offset;
+    if (configured !== undefined && configured !== null) {
+      if (typeof configured === 'number') return configured;
+      if (typeof configured === 'string' && !isNaN(Number(configured))) return Number(configured);
+      if (typeof configured === 'object' && event) {
+        const val = this._getConfigValueForEvent(configured as Record<string, number>, event, 0);
+        return typeof val === 'number' ? val : (Number(val) || 0);
+      }
+      return 0;
     }
-    return 0;
+
+    // No explicit timeline offset. Reuse the skip already tuned for event clips
+    // and hover previews, so the timeline opens closer to the visible action
+    // instead of the seconds Frigate records before it.
+    if (!event) return 0;
+    const clipSkip = this._userConfig?.video_start_skip_seconds
+      || this._userConfig?.video_start_padding;
+    if (clipSkip === undefined || clipSkip === null) return 0;
+    const resolved = this._getConfigValueForEvent(clipSkip, event, 0);
+    return typeof resolved === 'number' && Number.isFinite(resolved)
+      ? Math.max(0, resolved)
+      : 0;
   }
 
   private _getTimelineLayoutMode(): 'desktop' | 'compact' | 'tv' {
     try {
       const w = (typeof window !== 'undefined' ? window : undefined) as any;
       if (!w) return 'desktop';
+      // Test override: ?timeline_layout=tv|compact|desktop (also timelineLayout, frigate_tv=1).
+      try {
+        const q = new URLSearchParams(String(w.location?.search || ''));
+        const forced = (q.get('timeline_layout') || q.get('timelineLayout') || '').toLowerCase();
+        if (forced === 'tv' || forced === 'television') return 'tv';
+        if (forced === 'compact' || forced === 'mobile') return 'compact';
+        if (forced === 'desktop') return 'desktop';
+        if (String(q.get('frigate_tv') || '') === '1') return 'tv';
+      } catch (_) {}
       const nav = w.navigator as Navigator | undefined;
       const ua = String((nav as any)?.userAgent || w.navigator?.userAgent || '');
       const platform = String((nav as any)?.platform || '');
       const maxTouchPoints = Number((nav as any)?.maxTouchPoints || 0);
       const matchMediaFn = typeof w.matchMedia === 'function' ? w.matchMedia.bind(w) : undefined;
 
-      // TV user agents / environments win first.
-      if (/TV|AndroidTV|BRAVIA|AFT|webOS|Tizen|CrKey|Leanback|tvbro/i.test(ua)) return 'tv';
+      // TV user agents / environments win first (checked before Android /
+      // phone / touch fallbacks so TV browsers are never demoted to compact).
+      // Covers TV Bro ("TV Bro" and "TVBro"), Fire TV / AFT*, BRAVIA,
+      // GoogleTV/AndroidTV, webOS/NetCast, Tizen/SmartHub, HbbTV/CE-HTML/Opera TV,
+      // Roku, CrKey/Leanback/Cobalt, Viera/AQUOS/VIDAA/Foxxum/Orsay, DTV.
+      if (/TV\s*Bro|Fire\s*TV|AFT[A-Z]*|AndroidTV|GoogleTV|BRAVIA|webOS|NetCast|Tizen|SmartHub|HbbTV|CE-HTML|Opera\s*TV|Roku|CrKey|Leanback|Cobalt|Viera|AQUOS|VIDAA|Foxxum|Orsay|\bDTV\b|\bTV\b/i.test(ua)) return 'tv';
 
       // No-hover + no-pointer environment on a large screen is treated as TV
       // (e.g. a set-top box or TV browser without touch).
@@ -5669,30 +7807,131 @@ export class FrigateEventsCard extends LitElement {
     `;
   }
 
-  private _timelineControlsMarkup(dtValue: string, windowMinutes: number, withHeadings = false): string {
-    const timeGroup = `
+  private _timelineQuickJumpMarkup(): string {
+    return `
+      <div class="timeline-quick-jumps">
+        <button type="button" class="timeline-quick-btn" data-jump="now">Now</button>
+        <button type="button" class="timeline-quick-btn" data-jump="-15m">-15m</button>
+        <button type="button" class="timeline-quick-btn" data-jump="-1h">-1h</button>
+        <button type="button" class="timeline-quick-btn" data-jump="-3h">-3h</button>
+        <button type="button" class="timeline-quick-btn" data-jump="-12h">-12h</button>
+        <button type="button" class="timeline-quick-btn" data-jump="day-start">Start of day</button>
+      </div>
+    `;
+  }
+
+  /**
+   * Start-of-window control. A chip reads the current start in plain language
+   * ("Start 7:39 AM", "Start Yesterday 11:39 PM") and opens a small picker with
+   * day stepping, hour/minute steppers and the quick jumps. No native date or
+   * time picker is involved, so no calendar popup can appear.
+   */
+  private _timelineStartControlMarkup(includeQuickJumps: boolean): string {
+    const startTs = this._timelineStartTs;
+    const { hourText, meridiem } = this._timelineHourParts(startTs);
+    const minuteText = this._timelineMinuteText(startTs);
+    return `
       <div class="timeline-datetime-group">
-        <span class="timeline-datetime-label">Start time</span>
-        <input type="datetime-local" class="timeline-datetime-input" value="${dtValue}" />
-        <div class="timeline-quick-jumps">
-          <button class="timeline-quick-btn" data-jump="now">Now</button>
-          <button class="timeline-quick-btn" data-jump="-15m">-15m</button>
-          <button class="timeline-quick-btn" data-jump="-1h">-1h</button>
-          <button class="timeline-quick-btn" data-jump="-3h">-3h</button>
-          <button class="timeline-quick-btn" data-jump="-12h">-12h</button>
-          <button class="timeline-quick-btn" data-jump="day-start">Start of day</button>
+        <button
+          type="button"
+          class="timeline-start-chip"
+          data-action="toggle-start-popover"
+          aria-haspopup="dialog"
+          aria-expanded="false"
+          aria-controls="timeline-start-popover"
+          aria-label="Change window start time. Starts ${escapeHtml(this._formatTimelineStartFull(startTs))}"
+          title="Window starts ${escapeHtml(this._formatTimelineStartFull(startTs))}"
+        >
+          <svg class="timeline-start-chip-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12,20A8,8 0 0,1 4,12A8,8 0 0,1 12,4A8,8 0 0,1 20,12A8,8 0 0,1 12,20M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12.5,7V12.25L17,14.92L16.25,16.15L11,13V7H12.5Z"/></svg>
+          <span class="timeline-start-chip-label">Start</span>
+          <span class="timeline-start-chip-value" data-timeline-start-summary>${escapeHtml(this._formatTimelineStartSummary(startTs))}</span>
+          <svg class="timeline-start-chip-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="M7.41,8.58L12,13.17L16.59,8.58L18,10L12,16L6,10L7.41,8.58Z"/></svg>
+        </button>
+        <div
+          class="timeline-start-popover"
+          id="timeline-start-popover"
+          role="dialog"
+          aria-label="Change window start time"
+          aria-describedby="timeline-start-live"
+          tabindex="-1"
+          hidden
+        >
+          <div class="timeline-start-day-row">
+            <button type="button" class="timeline-start-day-btn" data-start-day="-1" title="Previous day" aria-label="Previous day">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.41,16.58L10.83,12L15.41,7.41L14,6L8,12L14,18L15.41,16.58Z"/></svg>
+            </button>
+            <span class="timeline-start-day-label" data-start-day-label>Today</span>
+            <button type="button" class="timeline-start-day-btn" data-start-day="1" title="Next day" aria-label="Next day">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z"/></svg>
+            </button>
+          </div>
+          <div class="timeline-start-steppers">
+            <div class="timeline-start-step-cell" role="group" aria-label="Hour">
+              <button type="button" class="timeline-start-step-btn" data-start-step="hour" data-step="-1" title="One hour earlier" aria-label="One hour earlier">−</button>
+              <div class="timeline-start-step-value">
+                <input
+                  class="timeline-start-step-input"
+                  data-start-hour-input
+                  type="text"
+                  inputmode="numeric"
+                  pattern="[0-9]*"
+                  maxlength="2"
+                  value="${escapeHtml(hourText)}"
+                  aria-label="Hour"
+                  autocomplete="off"
+                  spellcheck="false"
+                />
+                ${meridiem
+                  ? `<button type="button" class="timeline-start-step-unit timeline-meridiem-toggle" data-start-meridiem data-action="toggle-meridiem" aria-label="Switch between AM and PM" title="Switch between AM and PM">${escapeHtml(meridiem)}</button>`
+                  : `<span class="timeline-start-step-unit" data-start-meridiem>hr</span>`}
+              </div>
+              <button type="button" class="timeline-start-step-btn" data-start-step="hour" data-step="1" title="One hour later" aria-label="One hour later">+</button>
+            </div>
+            <div class="timeline-start-step-cell" role="group" aria-label="Minutes">
+              <button type="button" class="timeline-start-step-btn" data-start-step="minute" data-step="-1" title="One minute earlier" aria-label="One minute earlier">−</button>
+              <div class="timeline-start-step-value">
+                <input
+                  class="timeline-start-step-input"
+                  data-start-minute-input
+                  type="text"
+                  inputmode="numeric"
+                  pattern="[0-9]*"
+                  maxlength="2"
+                  value="${escapeHtml(minuteText)}"
+                  aria-label="Minute"
+                  autocomplete="off"
+                  spellcheck="false"
+                />
+                <span class="timeline-start-step-unit">min</span>
+              </div>
+              <button type="button" class="timeline-start-step-btn" data-start-step="minute" data-step="1" title="One minute later" aria-label="One minute later">+</button>
+            </div>
+          </div>
+          ${includeQuickJumps ? this._timelineQuickJumpMarkup() : ''}
+          <div class="timeline-start-actions">
+            <button type="button" class="timeline-start-cancel" data-action="close-start-popover">Cancel</button>
+            <button type="button" class="timeline-start-apply" data-action="apply-start">Go</button>
+          </div>
+          <span class="timeline-sr-only" id="timeline-start-live" data-start-live aria-live="polite"></span>
         </div>
       </div>
     `;
+  }
+
+  private _timelineControlsMarkup(windowMinutes: number, withHeadings = false): string {
+    // Desktop keeps the quick jumps inside the picker; the compact/TV sheet
+    // shows them directly so a jump stays one tap away.
+    const timeGroup = this._timelineStartControlMarkup(!withHeadings);
     const windowGroup = `
       <div class="timeline-window-group">
-        <span class="timeline-datetime-label">Window</span>
+        ${withHeadings ? '' : `<span class="timeline-datetime-label">Window</span>`}
         <div class="timeline-window-pills">
-          <button class="timeline-window-pill ${windowMinutes === 15 ? 'active' : ''}" data-window="15">15m</button>
-          <button class="timeline-window-pill ${windowMinutes === 30 ? 'active' : ''}" data-window="30">30m</button>
-          <button class="timeline-window-pill ${windowMinutes === 60 ? 'active' : ''}" data-window="60">1h</button>
-          <button class="timeline-window-pill ${windowMinutes === 180 ? 'active' : ''}" data-window="180">3h</button>
-          <button class="timeline-window-pill ${windowMinutes === 1440 ? 'active' : ''}" data-window="1440">24h</button>
+          <button type="button" class="timeline-window-pill ${windowMinutes === 15 ? 'active' : ''}" data-window="15" aria-pressed="${windowMinutes === 15}">15m</button>
+          <button type="button" class="timeline-window-pill ${windowMinutes === 30 ? 'active' : ''}" data-window="30" aria-pressed="${windowMinutes === 30}">30m</button>
+          <button type="button" class="timeline-window-pill ${windowMinutes === 60 ? 'active' : ''}" data-window="60" aria-pressed="${windowMinutes === 60}">1h</button>
+          <button type="button" class="timeline-window-pill ${windowMinutes === 120 ? 'active' : ''}" data-window="120" aria-pressed="${windowMinutes === 120}">2h</button>
+          <button type="button" class="timeline-window-pill ${windowMinutes === 180 ? 'active' : ''}" data-window="180" aria-pressed="${windowMinutes === 180}">3h</button>
+          <button type="button" class="timeline-window-pill ${windowMinutes === 1440 ? 'active' : ''}" data-window="1440" aria-pressed="${windowMinutes === 1440}">24h</button>
         </div>
       </div>
     `;
@@ -5710,6 +7949,7 @@ export class FrigateEventsCard extends LitElement {
         <div class="timeline-sheet-section">
           <div class="timeline-sheet-heading">Time</div>
           ${timeGroup}
+          ${this._timelineQuickJumpMarkup()}
         </div>
 
         <div class="timeline-sheet-section">
@@ -5755,60 +7995,62 @@ export class FrigateEventsCard extends LitElement {
     `;
   }
 
-  private _timelineScrubberMarkup(startDate: Date, endDate: Date, enhancedA11y = false): string {
+  private _timelineScrubberMarkup(startTs: number, endTs: number, enhancedA11y = false): string {
     const a11y = enhancedA11y
       ? ` tabindex="0" role="slider" aria-label="Timeline scrubber" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"`
       : '';
     return `
       <div class="timeline-scrubber-wrapper">
-        <div class="timeline-track-container"${a11y}>
-          <div class="timeline-events-layer"></div>
-          <div class="timeline-playhead"></div>
+        <div class="timeline-scrubber-meta">
+          <span class="timeline-scrubber-now">
+            <span class="timeline-scrubber-now-dot" aria-hidden="true"></span>
+            <span class="timeline-scrubber-now-time" data-timeline-current-time>--:--:--</span>
+          </span>
+          <span class="timeline-scrubber-range">
+            <span class="timeline-scrubber-range-start" data-timeline-start-label>${escapeHtml(this._formatTimelineAxisLabel(startTs))}</span>
+            <span class="timeline-scrubber-range-sep" aria-hidden="true">to</span>
+            <span class="timeline-scrubber-range-end">
+              <span class="timeline-scrubber-end-prefix">Ends</span>
+              <span data-timeline-end-label>${escapeHtml(this._formatTimelineAxisLabel(endTs))}</span>
+            </span>
+          </span>
         </div>
-        <div class="timeline-track-labels">
-          <span>${startDate.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}</span>
-          <span class="timeline-time-badge" data-timeline-current-time>--:--:--</span>
-          <span>${endDate.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}</span>
+        <div class="timeline-track-container"${a11y}>
+          <div class="timeline-track-inner">
+            <div class="timeline-track-progress"></div>
+            <div class="timeline-events-layer"></div>
+          </div>
+          <div class="timeline-playhead"></div>
         </div>
       </div>
     `;
   }
 
-  private _timelineTransportMarkup(trimmed = false): string {
-    const skips = trimmed
-      ? `
-          <button class="timeline-transport-btn" data-skip="-60" title="Back 1 minute">-1m</button>
-          <button class="timeline-transport-btn" data-skip="-30" title="Back 30 seconds">-30s</button>
-      `
-      : `
-          <button class="timeline-transport-btn" data-skip="-300" title="Back 5 minutes">-5m</button>
-          <button class="timeline-transport-btn" data-skip="-60" title="Back 1 minute">-1m</button>
-          <button class="timeline-transport-btn" data-skip="-30" title="Back 30 seconds">-30s</button>
-      `;
-    const skipsAfter = trimmed
-      ? `
-          <button class="timeline-transport-btn" data-skip="30" title="Forward 30 seconds">+30s</button>
-          <button class="timeline-transport-btn" data-skip="60" title="Forward 1 minute">+1m</button>
-      `
-      : `
-          <button class="timeline-transport-btn" data-skip="30" title="Forward 30 seconds">+30s</button>
-          <button class="timeline-transport-btn" data-skip="60" title="Forward 1 minute">+1m</button>
-          <button class="timeline-transport-btn" data-skip="300" title="Forward 5 minutes">+5m</button>
-      `;
+  private _timelineTransportMarkup(): string {
+    const back = `
+      <button type="button" class="timeline-transport-btn" data-skip="-60" title="Back 1 minute" aria-label="Back 1 minute">-1m</button>
+      <button type="button" class="timeline-transport-btn" data-skip="-30" title="Back 30 seconds" aria-label="Back 30 seconds">-30s</button>
+      <button type="button" class="timeline-transport-btn" data-skip="-10" title="Back 10 seconds" aria-label="Back 10 seconds">-10s</button>
+    `;
+    const forward = `
+      <button type="button" class="timeline-transport-btn" data-skip="10" title="Forward 10 seconds" aria-label="Forward 10 seconds">+10s</button>
+      <button type="button" class="timeline-transport-btn" data-skip="30" title="Forward 30 seconds" aria-label="Forward 30 seconds">+30s</button>
+      <button type="button" class="timeline-transport-btn" data-skip="60" title="Forward 1 minute" aria-label="Forward 1 minute">+1m</button>
+    `;
     return `
       <div class="timeline-transport-bar">
         <div class="timeline-transport-controls">
-          ${skips}
-          <button class="timeline-transport-btn play-btn" data-action="toggle-play" title="Play / Pause">
-            <svg viewBox="0 0 24 24"><path d="M8,5.14V19.14L19,12.14L8,5.14Z"/></svg>
+          <div class="timeline-transport-group">${back}</div>
+          <button type="button" class="timeline-transport-btn play-btn" data-action="toggle-play" title="Play / Pause" aria-label="Play or pause">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8,5.14V19.14L19,12.14L8,5.14Z"/></svg>
           </button>
-          ${skipsAfter}
+          <div class="timeline-transport-group">${forward}</div>
         </div>
 
-        <div class="timeline-speed-controls">
-          <button class="timeline-stepper-btn" data-action="speed-down" title="Decrease speed (min 0.5x)">−</button>
+        <div class="timeline-speed-controls" role="group" aria-label="Playback speed">
+          <button type="button" class="timeline-stepper-btn" data-action="speed-down" title="Decrease speed (min 0.5x)" aria-label="Decrease speed">−</button>
           <span class="timeline-speed-display" data-timeline-speed-display title="Click to reset to 1x">${this._timelinePlaybackRate}x</span>
-          <button class="timeline-stepper-btn" data-action="speed-up" title="Increase speed (max 4096x)">+</button>
+          <button type="button" class="timeline-stepper-btn" data-action="speed-up" title="Increase speed (max 4096x)" aria-label="Increase speed">+</button>
         </div>
       </div>
     `;
@@ -5823,18 +8065,25 @@ export class FrigateEventsCard extends LitElement {
     const camera = initialCamera || this._timelineCamera || (availableCameras.length > 0 ? availableCameras[0] : (this._config?.camera || ''));
     this._timelineCamera = camera;
 
-    // Determine initial time window. Opening straight from an event on a phone
-    // or tablet defaults to 15 minutes so the event fills the scrubber; the
-    // desktop/TV default stays as configured. A window the user picked by hand
-    // is always kept.
+    // Determine initial time window:
+    // - no event (live feed / plain Timeline action): last 24 hours
+    // - event on desktop: 30 minutes, unless the user picked a size
+    // - event on phone/tablet/TV: keep the existing 15-minute default
+    // A size the user picked by hand wins on event opens.
     const layoutMode = this._getTimelineLayoutMode();
     const openedFromEvent = Boolean(initialEvent || (initialTimestamp && initialTimestamp > 0));
-    const configuredDuration = this._timelineWindowDurationSec
-      || ((this._config?.timeline_default_window_hours || 1) * 3600);
-    const duration = (layoutMode === 'compact' && openedFromEvent && !this._timelineWindowUserChosen)
-      ? 15 * 60
-      : configuredDuration;
+    const configuredHours = Number(this._userConfig?.timeline_default_window_hours);
+    const configuredDuration = configuredHours > 0 ? configuredHours * 3600 : 0;
+    const eventDefault = (layoutMode === 'compact' || layoutMode === 'tv') ? 15 * 60 : 30 * 60;
+    const duration = !openedFromEvent
+      ? 24 * 3600
+      : (this._timelinePreferredWindowSec || configuredDuration || eventDefault);
     this._timelineWindowDurationSec = duration;
+    this._timelineEarliestFootageTs = 0;
+    this._timelineSkipStateKey = '';
+    this._timelineStartDraftTs = 0;
+    this._timelinePendingSeekTs = 0;
+    this._timelinePendingSeekUntil = 0;
 
     let seekOffset = this._getEventSeekOffset(initialEvent);
 
@@ -5875,10 +8124,12 @@ export class FrigateEventsCard extends LitElement {
     }
 
     const container = document.createElement('div');
-    // TV renders the same compact card as iPad/phone now; `timelineLayout`
-    // still marks the device for focus handling.
+    // TV keeps `is-compact` (compact CSS/JS paths depend on it) and adds
+    // `is-tv` so TV-only overrides apply. `dataset.timelineLayout` is the
+    // source of truth for the render branch.
     container.className = 'frigate-events-modal frigate-timeline-modal'
-      + (layoutMode === 'desktop' ? '' : ' is-compact');
+      + (layoutMode === 'desktop' ? '' : ' is-compact')
+      + (layoutMode === 'tv' ? ' is-tv' : '');
     container.dataset.timelineLayout = layoutMode;
     this._timelineContainer = container;
     this._isTimelineMuted = this._config?.muted !== false;
@@ -5892,26 +8143,65 @@ export class FrigateEventsCard extends LitElement {
     });
 
     const onKeyDown = (e: KeyboardEvent) => {
+      // TV-only D-pad navigation: ArrowUp/Down/Left/Right move focus between
+      // controls, Enter activates. Desktop/compact keyboard behavior below is untouched.
+      const isTvKeys = container.dataset.timelineLayout === 'tv';
+      if (isTvKeys && (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+        const t = e.target as HTMLElement | null;
+        // Let text/date inputs keep native arrow editing.
+        if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+        // The scrubber track owns Left/Right for seeking (see its keydown handler).
+        if (t && t.classList?.contains('timeline-track-container') && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) return;
+        const focusables = Array.from(
+          container.querySelectorAll<HTMLElement>(
+            'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+          )
+        ).filter(el => el.offsetParent !== null || el === document.activeElement);
+        if (focusables.length > 0) {
+          const idx = focusables.indexOf(document.activeElement as HTMLElement);
+          const dir = (e.key === 'ArrowRight' || e.key === 'ArrowDown') ? 1 : -1;
+          const next = focusables[(idx + dir + focusables.length) % focusables.length];
+          if (next) {
+            e.preventDefault();
+            e.stopPropagation();
+            next.focus({ preventScroll: true });
+            return;
+          }
+        }
+      }
       if (e.key === 'Escape') {
         const c = this._timelineContainer;
+        if (c && c.querySelector('.timeline-datetime-group.is-open')) {
+          e.stopPropagation();
+          this._closeTimelineStartPopover(true);
+          return;
+        }
         if (c && c.classList.contains('settings-open')) {
           c.classList.remove('settings-open');
           const settingsBtn = c.querySelector('[data-action="toggle-settings"]') as HTMLElement | null;
           settingsBtn?.setAttribute('aria-expanded', 'false');
+          this._closeTimelineStartPopover(false);
           e.stopPropagation();
           return;
         }
         this._removeTimelineModal();
-        window.removeEventListener('keydown', onKeyDown);
       } else if (e.code === 'Space' || e.key === ' ') {
         const target = e.target as HTMLElement | null;
         if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
           return;
         }
+        // A focused button (transport, quick jump, start picker) already
+        // activates natively on Space. Skip the global toggle so the key never
+        // double-fires or blocks the button.
+        if (target && target.tagName === 'BUTTON') return;
         e.preventDefault();
         this._toggleTimelinePlayPause();
       }
     };
+    if (this._timelineKeyDownHandler) {
+      window.removeEventListener('keydown', this._timelineKeyDownHandler);
+    }
+    this._timelineKeyDownHandler = onKeyDown;
     window.addEventListener('keydown', onKeyDown);
 
     document.body.appendChild(container);
@@ -5969,7 +8259,7 @@ export class FrigateEventsCard extends LitElement {
 
     // If play is triggered while sitting at the end of the loaded VOD chunk,
     // page to the next chunk (or next window) instead of doing nothing.
-    if (v.currentTime >= maxSeek && v.paused) {
+    if (v.currentTime >= maxSeek && v.paused && !this._timelinePendingSeekTs) {
       this._advanceToNextTimelineWindow();
       return;
     }
@@ -6173,7 +8463,7 @@ export class FrigateEventsCard extends LitElement {
         const maxSeek = (Number.isFinite(v.duration) && v.duration > 0)
           ? Math.max(0, v.duration - 0.5)
           : duration;
-        if (v.currentTime >= maxSeek) {
+        if (v.currentTime >= maxSeek && !this._timelinePendingSeekTs && !this._isTimelineStartPopoverOpen()) {
           this._clearTimelineSpeedInterval();
           this._updateTimelinePlayheadUI();
           this._advanceToNextTimelineWindow();
@@ -6187,6 +8477,16 @@ export class FrigateEventsCard extends LitElement {
   }
 
   private _removeTimelineModal(): void {
+    if (this._timelineKeyDownHandler) {
+      window.removeEventListener('keydown', this._timelineKeyDownHandler);
+      this._timelineKeyDownHandler = undefined;
+    }
+    this._closeTimelineStartPopover(false);
+    this._timelineStartDraftTs = 0;
+    this._timelineEarliestFootageTs = 0;
+    this._timelineSkipStateKey = '';
+    this._timelinePendingSeekTs = 0;
+    this._timelinePendingSeekUntil = 0;
     this._isAdvancingTimeline = false;
     this._clearTimelineSpeedInterval();
     if (this._timelineLoadingTimeout) {
@@ -6378,7 +8678,7 @@ export class FrigateEventsCard extends LitElement {
     return lastEnd;
   }
 
-  private _loadTimelineVideo(seekTargetTs?: number, isAutoAdvance = false): void {
+  private _loadTimelineVideo(seekTargetTs?: number, isAutoAdvance = false, keepPaused = false): void {
     if (!this._timelineContainer || !this._timelineCamera) return;
     if (!isAutoAdvance) this._timelineWindowRequestId++;
 
@@ -6471,14 +8771,10 @@ export class FrigateEventsCard extends LitElement {
       const windowDuration = this._timelineEndTs - this._timelineStartTs;
       if (windowDuration > 0) {
         const pct = Math.max(0, Math.min(100, ((seekTargetTs - this._timelineStartTs) / windowDuration) * 100));
-        const playhead = this._timelineContainer.querySelector('.timeline-playhead') as HTMLElement | null;
-        if (playhead) {
-          playhead.style.left = `${pct}%`;
-        }
+        this._setTimelinePlayheadPercent(pct);
         const currentBadge = this._timelineContainer.querySelector('[data-timeline-current-time]') as HTMLElement | null;
         if (currentBadge) {
-          const curDate = new Date(seekTargetTs * 1000);
-          currentBadge.textContent = curDate.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+          currentBadge.textContent = this._formatTimelineBadge(seekTargetTs);
         }
       }
     }
@@ -6522,6 +8818,10 @@ export class FrigateEventsCard extends LitElement {
 
         // Start playback on the newly active slot
         this._applyTimelinePlaybackRate(this._timelinePlaybackRate);
+        if (keepPaused) {
+          video.pause();
+          this._isAdvancingTimeline = false;
+        }
 
         // Smooth cross-dissolve: let incoming video render for 200ms on top,
         // then retire the old video to standby and cleanly destroy its stream.
@@ -6565,6 +8865,9 @@ export class FrigateEventsCard extends LitElement {
           video.currentTime = offset;
         }
         this._applyTimelinePlaybackRate(this._timelinePlaybackRate);
+        if (keepPaused) {
+          video.pause();
+        }
         this._isAdvancingTimeline = false;
       }
     };
@@ -6586,7 +8889,7 @@ export class FrigateEventsCard extends LitElement {
     };
 
     video.onended = () => {
-      if (this._timelineActiveVideo === slot && !this._isAdvancingTimeline) {
+      if (this._timelineActiveVideo === slot && !this._isAdvancingTimeline && !this._timelinePendingSeekTs && !this._isTimelineStartPopoverOpen()) {
         this._clearTimelineSpeedInterval();
         video.pause();
         if (Number.isFinite(video.duration) && video.duration > 0) {
@@ -6711,9 +9014,12 @@ export class FrigateEventsCard extends LitElement {
       if (!this._timelineIsDragging && !this._isAdvancingTimeline) {
         this._updateTimelinePlayheadUI();
         const v = this._timelineVideoEl;
+        const pickerOpen = this._isTimelineStartPopoverOpen();
         if (
           this._timelinePlaybackRate <= 16 &&
           !v.paused &&
+          !this._timelinePendingSeekTs &&
+          !pickerOpen &&
           Number.isFinite(v.duration) &&
           v.duration > 0 &&
           v.currentTime >= Math.max(0, v.duration - 0.3)
@@ -6726,6 +9032,16 @@ export class FrigateEventsCard extends LitElement {
     this._timelineTimeUpdateRaf = requestAnimationFrame(tick);
   }
 
+  private _setTimelinePlayheadPercent(pct: number): void {
+    const container = this._timelineContainer;
+    if (!container) return;
+    const clamped = Math.max(0, Math.min(100, pct));
+    const playhead = container.querySelector('.timeline-playhead') as HTMLElement | null;
+    if (playhead) playhead.style.left = `${clamped}%`;
+    const progress = container.querySelector('.timeline-track-progress') as HTMLElement | null;
+    if (progress) progress.style.width = `${clamped}%`;
+  }
+
   private _updateTimelinePlayheadUI(): void {
     if (!this._timelineContainer || !this._timelineVideoEl) return;
     const video = this._timelineVideoEl;
@@ -6734,12 +9050,14 @@ export class FrigateEventsCard extends LitElement {
 
     const currentOffset = video.currentTime || 0;
     const currentTs = this._videoOffsetToWallClock(currentOffset);
-    const pct = Math.max(0, Math.min(100, ((currentTs - this._timelineStartTs) / duration) * 100));
-
-    const playhead = this._timelineContainer.querySelector('.timeline-playhead') as HTMLElement | null;
-    if (playhead) {
-      playhead.style.left = `${pct}%`;
+    if (
+      this._timelinePendingSeekTs > 0 &&
+      (Math.abs(currentTs - this._timelinePendingSeekTs) <= 2 || Date.now() > this._timelinePendingSeekUntil)
+    ) {
+      this._timelinePendingSeekTs = 0;
     }
+    const pct = Math.max(0, Math.min(100, ((currentTs - this._timelineStartTs) / duration) * 100));
+    this._setTimelinePlayheadPercent(pct);
 
     const track = this._timelineContainer.querySelector('.timeline-track-container[role="slider"]') as HTMLElement | null;
     if (track) {
@@ -6749,9 +9067,9 @@ export class FrigateEventsCard extends LitElement {
 
     const currentBadge = this._timelineContainer.querySelector('[data-timeline-current-time]') as HTMLElement | null;
     if (currentBadge) {
-      const curDate = new Date(currentTs * 1000);
-      currentBadge.textContent = curDate.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+      currentBadge.textContent = this._formatTimelineBadge(currentTs);
     }
+    this._updateTimelineSkipStates(currentTs);
 
     const playPauseBtns = this._timelineContainer.querySelectorAll('[data-action="toggle-play"]');
     playPauseBtns.forEach(playPauseBtn => {
@@ -6830,14 +9148,10 @@ export class FrigateEventsCard extends LitElement {
           const windowDuration = this._timelineEndTs - this._timelineStartTs;
           if (windowDuration > 0 && this._timelineContainer) {
             const pct = Math.max(0, Math.min(100, ((targetTs - this._timelineStartTs) / windowDuration) * 100));
-            const playhead = this._timelineContainer.querySelector('.timeline-playhead') as HTMLElement | null;
-            if (playhead) {
-              playhead.style.left = `${pct}%`;
-            }
+            this._setTimelinePlayheadPercent(pct);
             const currentBadge = this._timelineContainer.querySelector('[data-timeline-current-time]') as HTMLElement | null;
             if (currentBadge) {
-              const curDate = new Date(targetTs * 1000);
-              currentBadge.textContent = curDate.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+              currentBadge.textContent = this._formatTimelineBadge(targetTs);
             }
           }
           this._updateTimelinePlayheadUI();
@@ -6856,54 +9170,563 @@ export class FrigateEventsCard extends LitElement {
     });
   }
 
+  private _timelineDayOffset(ts: number): number {
+    const date = new Date(ts * 1000);
+    const dayStart = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    return Math.round((dayStart - todayStart) / 86400000);
+  }
+
+  private _formatTimelineDayContext(ts: number): string {
+    const offset = this._timelineDayOffset(ts);
+    if (offset === 0) return 'Today';
+    if (offset === -1) return 'Yesterday';
+    if (offset === 1) return 'Tomorrow';
+    const date = new Date(ts * 1000);
+    const options: Intl.DateTimeFormatOptions = { weekday: 'short', month: 'short', day: 'numeric' };
+    if (date.getFullYear() !== new Date().getFullYear()) options.year = 'numeric';
+    return date.toLocaleDateString(undefined, options);
+  }
+
+  private _formatTimelineClock(ts: number, withSeconds = false): string {
+    return new Date(ts * 1000).toLocaleTimeString(undefined, withSeconds
+      ? { hour: 'numeric', minute: '2-digit', second: '2-digit' }
+      : { hour: 'numeric', minute: '2-digit' });
+  }
+
+  private _formatTimelineStartSummary(ts: number): string {
+    const time = this._formatTimelineClock(ts);
+    if (this._timelineDayOffset(ts) === 0) return time;
+    return `${this._formatTimelineDayContext(ts)} ${time}`;
+  }
+
+  private _formatTimelineAxisLabel(ts: number): string {
+    const time = this._formatTimelineClock(ts);
+    if (this._timelineDayOffset(ts) === 0) return time;
+    return `${this._formatTimelineDayContext(ts)} ${time}`;
+  }
+
+  private _formatTimelineBadge(ts: number): string {
+    return this._formatTimelineClock(ts, true);
+  }
+
+  private _formatTimelineStartFull(ts: number): string {
+    return new Date(ts * 1000).toLocaleString(undefined, {
+      weekday: 'long',
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+  }
+
+  private _timelineHourParts(ts: number): { hourText: string; meridiem: string } {
+    const date = new Date(ts * 1000);
+    let meridiem = '';
+    try {
+      const parts = new Intl.DateTimeFormat(undefined, { hour: 'numeric' }).formatToParts(date);
+      meridiem = parts.find(part => part.type === 'dayPeriod')?.value || '';
+    } catch (_) {
+      meridiem = date.getHours() >= 12 ? 'PM' : 'AM';
+    }
+    // Editable fields use Latin digits so typed values parse consistently even
+    // when the locale's display digits are not 0-9.
+    const hour = date.getHours();
+    const hourText = meridiem ? String(((hour + 11) % 12) + 1) : String(hour);
+    return { hourText, meridiem };
+  }
+
+  private _timelineMinuteText(ts: number): string {
+    return String(new Date(ts * 1000).getMinutes()).padStart(2, '0');
+  }
+
+  private _updateTimelineStartChip(): void {
+    const container = this._timelineContainer;
+    if (!container) return;
+    const summary = this._formatTimelineStartSummary(this._timelineStartTs);
+    const full = this._formatTimelineStartFull(this._timelineStartTs);
+    container.querySelectorAll('[data-timeline-start-summary]').forEach(element => {
+      element.textContent = summary;
+    });
+    container.querySelectorAll('[data-action="toggle-start-popover"]').forEach(chip => {
+      chip.setAttribute('aria-label', `Change window start time. Starts ${full}`);
+      chip.setAttribute('title', `Window starts ${full}`);
+    });
+  }
+
+  private _renderTimelineStartDraft(forceInputs = false): void {
+    const container = this._timelineContainer;
+    if (!container) return;
+    const draft = this._timelineStartDraftTs || this._timelineStartTs;
+    const now = Math.floor(Date.now() / 1000);
+    const { hourText, meridiem } = this._timelineHourParts(draft);
+    const minuteText = this._timelineMinuteText(draft);
+    container.querySelectorAll('[data-start-day-label]').forEach(element => {
+      element.textContent = this._formatTimelineDayContext(draft);
+    });
+    container.querySelectorAll<HTMLInputElement>('[data-start-hour-input]').forEach(input => {
+      if (forceInputs || document.activeElement !== input) input.value = hourText;
+    });
+    container.querySelectorAll('[data-start-meridiem]').forEach(element => {
+      element.textContent = meridiem || 'hr';
+    });
+    container.querySelectorAll<HTMLInputElement>('[data-start-minute-input]').forEach(input => {
+      if (forceInputs || document.activeElement !== input) input.value = minuteText;
+    });
+    const canGoForward = draft < now;
+    container.querySelectorAll<HTMLButtonElement>('[data-start-step]').forEach(button => {
+      if (parseInt(button.getAttribute('data-step') || '0', 10) > 0) {
+        button.disabled = !canGoForward;
+      }
+    });
+    const atToday = this._timelineDayOffset(draft) >= 0;
+    container.querySelectorAll<HTMLButtonElement>('[data-start-day]').forEach(button => {
+      button.disabled = parseInt(button.getAttribute('data-start-day') || '0', 10) > 0 && atToday;
+    });
+    const live = container.querySelector('[data-start-live]');
+    if (live) live.textContent = `Window start ${this._formatTimelineStartFull(draft)}`;
+  }
+
+  private _openTimelineStartPopover(): void {
+    const container = this._timelineContainer;
+    if (!container) return;
+    const group = container.querySelector('.timeline-datetime-group') as HTMLElement | null;
+    const popover = group?.querySelector('.timeline-start-popover') as HTMLElement | null;
+    if (!group || !popover) return;
+    this._timelineStartDraftTs = Math.floor(this._timelineStartTs / 60) * 60;
+    this._renderTimelineStartDraft();
+    popover.hidden = false;
+    group.classList.add('is-open');
+    group.querySelector('[data-action="toggle-start-popover"]')?.setAttribute('aria-expanded', 'true');
+    if (this._timelineStartOutsideHandler) {
+      document.removeEventListener('pointerdown', this._timelineStartOutsideHandler, true);
+    }
+    this._timelineStartOutsideHandler = (e: PointerEvent) => {
+      const target = e.target as Node | null;
+      if (target && group.contains(target)) return;
+      this._closeTimelineStartPopover(false);
+    };
+    document.addEventListener('pointerdown', this._timelineStartOutsideHandler, true);
+    const firstStep = popover.querySelector<HTMLElement>('[data-start-step][data-step="-1"]');
+    (firstStep || popover).focus({ preventScroll: true });
+    popover.scrollIntoView?.({ block: 'nearest' });
+  }
+
+  private _closeTimelineStartPopover(restoreFocus = false): void {
+    if (this._timelineStartOutsideHandler) {
+      document.removeEventListener('pointerdown', this._timelineStartOutsideHandler, true);
+      this._timelineStartOutsideHandler = undefined;
+    }
+    const container = this._timelineContainer;
+    if (!container) return;
+    container.querySelectorAll('.timeline-datetime-group.is-open').forEach(group => {
+      group.classList.remove('is-open');
+      const popover = group.querySelector('.timeline-start-popover') as HTMLElement | null;
+      if (popover) popover.hidden = true;
+      const chip = group.querySelector('[data-action="toggle-start-popover"]') as HTMLElement | null;
+      chip?.setAttribute('aria-expanded', 'false');
+      if (restoreFocus) chip?.focus({ preventScroll: true });
+    });
+  }
+
+  private _stepTimelineStartDraft(kind: 'hour' | 'minute', step: number): void {
+    if (!step) return;
+    const base = this._timelineStartDraftTs || this._timelineStartTs;
+    const date = new Date(base * 1000);
+    if (kind === 'hour') {
+      date.setHours(date.getHours() + step);
+    } else {
+      date.setMinutes(date.getMinutes() + step);
+    }
+    date.setSeconds(0, 0);
+    const now = Math.floor(Date.now() / 1000);
+    this._timelineStartDraftTs = Math.max(0, Math.min(Math.floor(date.getTime() / 1000), now));
+    this._renderTimelineStartDraft(true);
+  }
+
+  private _shiftTimelineStartDraftDay(delta: number): void {
+    if (!delta) return;
+    const base = this._timelineStartDraftTs || this._timelineStartTs;
+    const date = new Date(base * 1000);
+    date.setDate(date.getDate() + delta);
+    date.setSeconds(0, 0);
+    const now = Math.floor(Date.now() / 1000);
+    this._timelineStartDraftTs = Math.max(0, Math.min(Math.floor(date.getTime() / 1000), now));
+    this._renderTimelineStartDraft(true);
+  }
+
+  private _toggleTimelineStartMeridiem(): void {
+    const base = this._timelineStartDraftTs || this._timelineStartTs;
+    const { meridiem } = this._timelineHourParts(base);
+    if (!meridiem) return;
+    const date = new Date(base * 1000);
+    date.setHours((date.getHours() + 12) % 24, date.getMinutes(), 0, 0);
+    this._timelineStartDraftTs = Math.max(0, Math.floor(date.getTime() / 1000));
+    this._renderTimelineStartDraft(true);
+  }
+
+  private _commitTimelineStartHourInput(): void {
+    const container = this._timelineContainer;
+    if (!container) return;
+    const input = container.querySelector<HTMLInputElement>('[data-start-hour-input]');
+    if (!input) return;
+    const draft = this._timelineStartDraftTs || this._timelineStartTs;
+    const raw = input.value.trim();
+    if (!/^\d{1,2}$/.test(raw)) {
+      this._renderTimelineStartDraft(true);
+      return;
+    }
+    let hour = parseInt(raw, 10);
+    if (!Number.isFinite(hour)) {
+      this._renderTimelineStartDraft(true);
+      return;
+    }
+    hour = Math.max(0, Math.min(23, hour));
+    const date = new Date(draft * 1000);
+    const { meridiem } = this._timelineHourParts(draft);
+    if (meridiem) {
+      if (hour === 0) {
+        // 0 always means 12 AM, even when the picker currently shows PM.
+        date.setHours(0, date.getMinutes(), 0, 0);
+      } else if (hour >= 13) {
+        // 13-23 is an explicit 24 hour entry: 18 becomes 6 PM.
+        date.setHours(hour, date.getMinutes(), 0, 0);
+      } else {
+        const isPm = date.getHours() >= 12;
+        const nextHour = hour === 12
+          ? (isPm ? 12 : 0)
+          : (isPm ? hour + 12 : hour);
+        date.setHours(nextHour, date.getMinutes(), 0, 0);
+      }
+    } else {
+      date.setHours(hour, date.getMinutes(), 0, 0);
+    }
+    // Keep the typed value even if it is later today; Go clamps to now.
+    this._timelineStartDraftTs = Math.max(0, Math.floor(date.getTime() / 1000));
+    this._renderTimelineStartDraft(true);
+  }
+
+  private _commitTimelineStartMinuteInput(): void {
+    const container = this._timelineContainer;
+    if (!container) return;
+    const input = container.querySelector<HTMLInputElement>('[data-start-minute-input]');
+    if (!input) return;
+    const draft = this._timelineStartDraftTs || this._timelineStartTs;
+    const raw = input.value.trim();
+    if (!/^\d{1,2}$/.test(raw)) {
+      this._renderTimelineStartDraft(true);
+      return;
+    }
+    let minute = parseInt(raw, 10);
+    if (!Number.isFinite(minute)) {
+      this._renderTimelineStartDraft(true);
+      return;
+    }
+    minute = Math.max(0, Math.min(59, minute));
+    const date = new Date(draft * 1000);
+    date.setMinutes(minute, 0, 0);
+    // Keep the typed value even if it is later today; Go clamps to now.
+    this._timelineStartDraftTs = Math.max(0, Math.floor(date.getTime() / 1000));
+    this._renderTimelineStartDraft(true);
+  }
+
+  private _commitTimelineStartInputs(): void {
+    this._commitTimelineStartHourInput();
+    this._commitTimelineStartMinuteInput();
+  }
+
+  private async _applyTimelineStartDraft(): Promise<void> {
+    const now = Math.floor(Date.now() / 1000);
+    const duration = Math.max(60, this._timelineWindowDurationSec || (this._timelineEndTs - this._timelineStartTs) || 3600);
+    let target = Math.floor((this._timelineStartDraftTs || this._timelineStartTs) / 60) * 60;
+    target = Math.max(0, Math.min(target, now));
+    // A start within the last few minutes would leave a sliver of a window, so
+    // snap back to a full window ending now.
+    if (now - target < 300) target = Math.max(0, now - duration);
+    this._closeTimelineStartPopover(true);
+    await this._seekTimelineTo(target, 'start');
+  }
+
+  private _timelinePlayheadTs(): number {
+    const video = this._timelineVideoEl;
+    if (video && Number.isFinite(video.currentTime) && this._timelineVodEndTs > this._timelineVodStartTs) {
+      return Math.floor(this._videoOffsetToWallClock(video.currentTime || 0));
+    }
+    return Math.floor(this._timelineStartTs);
+  }
+
+  /** Base for relative jumps: the in-flight target while a chunk buffers. */
+  private _timelineNavigationBaseTs(): number {
+    const video = this._timelineVideoEl;
+    const buffering = !video || video.readyState < 2;
+    if (this._timelinePendingSeekTs > 0 && buffering && Date.now() < this._timelinePendingSeekUntil) {
+      return this._timelinePendingSeekTs;
+    }
+    this._timelinePendingSeekTs = 0;
+    return this._timelinePlayheadTs();
+  }
+
+  /**
+   * Backward base. When the loaded chunk opens on the first footage of a
+   * window that started earlier (a leading gap), using the frame's wall clock
+   * would keep the skip inside the gap forever. Anchoring on the window start
+   * lets the skip cross the boundary and shift the window back.
+   */
+  private _timelineBackwardBaseTs(): number {
+    const base = this._timelineNavigationBaseTs();
+    if (this._timelineRecordings.length > 0) {
+      const earliest = this._timelineRecordings[0].start_time;
+      if (earliest > this._timelineStartTs && base <= earliest + 1) {
+        return this._timelineStartTs;
+      }
+    }
+    return base;
+  }
+
+  private _cancelTimelineAdvance(): void {
+    this._isAdvancingTimeline = false;
+    if (this._timelineAdvanceTimeout) {
+      clearTimeout(this._timelineAdvanceTimeout);
+      this._timelineAdvanceTimeout = undefined;
+    }
+  }
+
+  private _isTimelineStartPopoverOpen(): boolean {
+    return Boolean(this._timelineContainer?.querySelector('.timeline-datetime-group.is-open'));
+  }
+
+  private _updateTimelineSkipStates(currentTs: number): void {
+    const container = this._timelineContainer;
+    if (!container) return;
+    const now = Math.floor(Date.now() / 1000);
+    // Frigate's newest segment trails wall clock by roughly 10-15 seconds.
+    // Treat that tail, and the end of the latest known recording, as live so
+    // forward skips disable instead of silently doing nothing.
+    const liveEdgeTolerance = 15;
+    const latestRecording = this._timelineRecordings[this._timelineRecordings.length - 1];
+    const latestFootageEnd = latestRecording ? latestRecording.end_time : 0;
+    const atLiveFootageEnd = latestFootageEnd > 0
+      && latestFootageEnd >= now - 60
+      && currentTs >= latestFootageEnd - 2;
+    const atNow = currentTs >= now - liveEdgeTolerance || atLiveFootageEnd;
+    const earliest = this._timelineEarliestFootageTs;
+    const atEarliest = earliest > 0 && currentTs <= earliest + 1;
+    const key = `${atNow ? 1 : 0}:${atEarliest ? 1 : 0}`;
+    if (key === this._timelineSkipStateKey) return;
+    this._timelineSkipStateKey = key;
+    container.querySelectorAll<HTMLButtonElement>('[data-skip]').forEach(button => {
+      const delta = parseFloat(button.getAttribute('data-skip') || '0');
+      button.disabled = delta > 0 ? atNow : atEarliest;
+    });
+  }
+
+  /**
+   * Move the playhead to a wall-clock timestamp. When the target sits outside
+   * the visible window the window shifts with it (same duration, clamped at
+   * now) and events/recordings are refetched before the VOD chunk reloads.
+   */
+  private async _seekTimelineTo(
+    targetTs: number,
+    placement: 'preserve' | 'start' | 'end' = 'preserve'
+  ): Promise<void> {
+    const container = this._timelineContainer;
+    if (!container) return;
+
+    const wasAdvancing = this._isAdvancingTimeline;
+    this._cancelTimelineAdvance();
+    if (wasAdvancing) this._timelineWindowRequestId++;
+
+    const now = Math.floor(Date.now() / 1000);
+    const duration = Math.max(60, this._timelineWindowDurationSec || (this._timelineEndTs - this._timelineStartTs) || 3600);
+    let target = Math.max(0, Math.floor(targetTs));
+    let newStart = this._timelineStartTs;
+    let newEnd = this._timelineEndTs;
+
+    if (placement === 'end') {
+      target = Math.min(target, now);
+      newEnd = target;
+      newStart = Math.max(0, newEnd - duration);
+    } else if (placement === 'start') {
+      newStart = Math.max(0, target);
+      newEnd = Math.min(now, newStart + duration);
+      if (newEnd - newStart < 60) {
+        newEnd = now;
+        newStart = Math.max(0, newEnd - duration);
+        target = Math.max(newStart, Math.min(target, newEnd));
+      }
+    } else if (target < this._timelineStartTs || target > this._timelineEndTs) {
+      const current = this._timelineNavigationBaseTs();
+      newStart = Math.max(0, this._timelineStartTs + (target - current));
+      newEnd = Math.min(now, newStart + duration);
+      if (newEnd - newStart < 60) newEnd = newStart + duration;
+    }
+    target = Math.max(0, Math.min(target, now));
+    this._timelinePendingSeekTs = Math.max(newStart, Math.min(newEnd, target));
+    this._timelinePendingSeekUntil = Date.now() + 6000;
+
+    const windowChanged = newStart !== this._timelineStartTs || newEnd !== this._timelineEndTs;
+    if (windowChanged) {
+      const expectedStart = Math.floor(newStart);
+      const expectedEnd = Math.floor(Math.max(newEnd, newStart + 1));
+      this._timelineStartTs = expectedStart;
+      this._timelineEndTs = expectedEnd;
+      this._timelineVodStartTs = 0;
+      this._timelineVodEndTs = 0;
+      this._timelineEarliestFootageTs = 0;
+      this._updateTimelineWindowUI();
+      await this._fetchTimelineEvents();
+      if (
+        !this._timelineContainer ||
+        this._timelineStartTs !== expectedStart ||
+        this._timelineEndTs !== expectedEnd
+      ) {
+        return;
+      }
+      this._updateTimelineScrubberEvents();
+    }
+
+    const clampedTarget = Math.max(this._timelineStartTs, Math.min(this._timelineEndTs, target));
+    const video = this._timelineVideoEl;
+    const keepPaused = this._timelinePlaybackRate <= 16
+      && !this._timelineSpeedInterval
+      && !!video
+      && video.readyState >= 2
+      && video.paused;
+    if (
+      windowChanged ||
+      wasAdvancing ||
+      !video ||
+      !Number.isFinite(video.duration) ||
+      video.duration <= 0 ||
+      clampedTarget < this._timelineVodStartTs ||
+      clampedTarget > this._timelineVodEndTs
+    ) {
+      this._loadTimelineVideo(clampedTarget, false, keepPaused);
+      return;
+    }
+
+    const targetOffset = this._wallClockToVideoOffset(clampedTarget);
+    const maxSeek = Math.max(0, video.duration - 0.5);
+    video.currentTime = Math.max(0, Math.min(targetOffset, maxSeek));
+    this._updateTimelinePlayheadUI();
+  }
+
+  private async _skipTimelineBy(deltaSec: number): Promise<void> {
+    if (!this._timelineContainer || !deltaSec) return;
+    const now = Math.floor(Date.now() / 1000);
+    const base = deltaSec < 0 ? this._timelineBackwardBaseTs() : this._timelineNavigationBaseTs();
+    let target = base + deltaSec;
+    if (deltaSec > 0) {
+      target = Math.min(target, now);
+    } else if (target < this._timelineStartTs) {
+      target = await this._clampBackwardTimelineTarget(target);
+    }
+    await this._seekTimelineTo(target, 'preserve');
+  }
+
+  private async _clampBackwardTimelineTarget(targetTs: number): Promise<number> {
+    const target = Math.max(0, Math.floor(targetTs));
+    const windowStart = this._timelineStartTs;
+    if (target >= windowStart) return target;
+    if (this._timelineEarliestFootageTs > 0) return Math.max(target, this._timelineEarliestFootageTs);
+    if (!this.hass || !this._timelineCamera) return target;
+    try {
+      const clientId = this._config?.frigate_client_id || 'frigate';
+      // Pad the query so a segment that starts just before the target is still
+      // found (recordings are stored as short segments).
+      const recordings = await getRecordings(
+        this.hass,
+        clientId,
+        this._timelineCamera,
+        Math.max(0, target - 300),
+        Math.max(0, windowStart - 1)
+      );
+      if (Array.isArray(recordings) && recordings.length > 0) return target;
+      if (this._timelineRecordings.length > 0) {
+        const earliestKnown = Math.floor(Math.min(...this._timelineRecordings.map(recording => recording.start_time)));
+        this._timelineEarliestFootageTs = Math.min(windowStart, earliestKnown);
+        return Math.max(target, this._timelineEarliestFootageTs);
+      }
+    } catch (_) {}
+    return target;
+  }
+
+  private async _runTimelineQuickJump(jump: string): Promise<void> {
+    if (!this._timelineContainer) return;
+    if (jump === 'now') {
+      await this._seekTimelineTo(Math.floor(Date.now() / 1000), 'end');
+      return;
+    }
+    if (jump === 'day-start') {
+      // "Start of day" follows the wall clock, not the timeline position.
+      const reference = new Date();
+      const dayStart = Math.floor(new Date(reference.getFullYear(), reference.getMonth(), reference.getDate(), 0, 0, 0, 0).getTime() / 1000);
+      const dayEnd = Math.floor(new Date(reference.getFullYear(), reference.getMonth(), reference.getDate(), 23, 59, 59, 999).getTime() / 1000);
+      let target = dayStart;
+      if (this.hass && this._timelineCamera) {
+        try {
+          const clientId = this._config?.frigate_client_id || 'frigate';
+          const dayRecordings = await getRecordings(this.hass, clientId, this._timelineCamera, dayStart, dayEnd);
+          if (Array.isArray(dayRecordings) && dayRecordings.length > 0) {
+            dayRecordings.sort((a, b) => a.start_time - b.start_time);
+            target = Math.floor(dayRecordings[0].start_time);
+          }
+        } catch (_) {}
+      }
+      if (!this._timelineContainer) return;
+      await this._seekTimelineTo(target, 'start');
+      return;
+    }
+    const deltas: Record<string, number> = { '-15m': 900, '-1h': 3600, '-3h': 10800, '-12h': 43200 };
+    const delta = deltas[jump] || 0;
+    if (!delta) return;
+    // Every quick jump is measured from the current wall clock, not from the
+    // playhead, so -1h always lands one hour before now regardless of where
+    // the timeline happens to be sitting.
+    const target = Math.floor(Date.now() / 1000) - delta;
+    if (!this._timelineContainer) return;
+    await this._seekTimelineTo(target, 'preserve');
+  }
+
   private _updateTimelineWindowUI(): void {
     if (!this._timelineContainer) return;
     const container = this._timelineContainer;
-    const startDate = new Date(this._timelineStartTs * 1000);
-    const endDate = new Date(this._timelineEndTs * 1000);
+    // A moved window makes any open picker draft stale.
+    this._closeTimelineStartPopover(false);
+    this._updateTimelineStartChip();
 
-    // Format ISO string for datetime-local input (YYYY-MM-DDTHH:mm)
-    const pad = (n: number) => String(n).padStart(2, '0');
-    const dtValue = `${startDate.getFullYear()}-${pad(startDate.getMonth() + 1)}-${pad(startDate.getDate())}T${pad(startDate.getHours())}:${pad(startDate.getMinutes())}`;
-
-    const dtInput = container.querySelector('.timeline-datetime-input') as HTMLInputElement | null;
-    if (dtInput && dtInput.value !== dtValue) {
-      dtInput.value = dtValue;
-    }
-
-    const labels = container.querySelectorAll('.timeline-track-labels > span');
-    if (labels.length >= 3) {
-      labels[0].textContent = startDate.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
-      labels[2].textContent = endDate.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
-    }
+    const startLabel = this._formatTimelineAxisLabel(this._timelineStartTs);
+    const endLabel = this._formatTimelineAxisLabel(this._timelineEndTs);
+    container.querySelectorAll('[data-timeline-start-label]').forEach(element => {
+      element.textContent = startLabel;
+    });
+    container.querySelectorAll('[data-timeline-end-label]').forEach(element => {
+      element.textContent = endLabel;
+    });
 
     const windowMinutes = Math.round(this._timelineWindowDurationSec / 60);
     container.querySelectorAll('.timeline-window-pill').forEach(pill => {
-      const mins = parseInt(pill.getAttribute('data-window') || '60', 10);
-      if (mins === windowMinutes) {
-        pill.classList.add('active');
-      } else {
-        pill.classList.remove('active');
-      }
+      const active = parseInt(pill.getAttribute('data-window') || '60', 10) === windowMinutes;
+      pill.classList.toggle('active', active);
+      pill.setAttribute('aria-pressed', active ? 'true' : 'false');
     });
 
+    this._timelineSkipStateKey = '';
     this._updateTimelinePlayheadUI();
   }
 
   private _renderTimelineContent(container: HTMLElement): void {
     const availableCameras = this._getAvailableCameras();
     const currentCamera = this._timelineCamera || (availableCameras[0] || 'Camera');
-    const startDate = new Date(this._timelineStartTs * 1000);
-    const endDate = new Date(this._timelineEndTs * 1000);
-
-    // Format ISO string for datetime-local input (YYYY-MM-DDTHH:mm)
-    const pad = (n: number) => String(n).padStart(2, '0');
-    const dtValue = `${startDate.getFullYear()}-${pad(startDate.getMonth() + 1)}-${pad(startDate.getDate())}T${pad(startDate.getHours())}:${pad(startDate.getMinutes())}`;
-
     const windowMinutes = Math.round(this._timelineWindowDurationSec / 60);
-    const layoutMode: 'desktop' | 'compact' | 'tv' = container.classList.contains('is-tv')
+    // Source of truth is dataset.timelineLayout (set from _getTimelineLayoutMode
+    // at open); fall back to the live classes for containers built before it.
+    const datasetMode = String((container.dataset as any)?.timelineLayout || '').toLowerCase();
+    const layoutMode: 'desktop' | 'compact' | 'tv' = datasetMode === 'tv' || container.classList.contains('is-tv')
       ? 'tv'
-      : container.classList.contains('is-compact')
+      : datasetMode === 'compact' || container.classList.contains('is-compact')
         ? 'compact'
         : 'desktop';
     const isCompactLayout = layoutMode === 'compact' || layoutMode === 'tv';
@@ -6922,26 +9745,30 @@ export class FrigateEventsCard extends LitElement {
         <div class="timeline-modal-body">
           ${this._timelineCameraTabsMarkup(availableCameras, currentCamera)}
 
-          <!-- Controls: DateTime picker, Quick jumps, Window duration -->
-          ${this._timelineControlsMarkup(dtValue, windowMinutes)}
+          <div class="timeline-panel timeline-time-panel">
+            ${this._timelineControlsMarkup(windowMinutes)}
+          </div>
 
           <!-- Video Player -->
           ${this._timelinePlayerMarkup()}
 
-          <!-- Scrubber Track -->
-          ${this._timelineScrubberMarkup(startDate, endDate, false)}
+          <div class="timeline-panel timeline-scrubber-panel">
+            ${this._timelineScrubberMarkup(this._timelineStartTs, this._timelineEndTs, false)}
+          </div>
 
-          <!-- Transport & Speed Controls -->
-          ${this._timelineTransportMarkup(false)}
+          <div class="timeline-panel timeline-playback-panel">
+            ${this._timelineTransportMarkup()}
+          </div>
         </div>
       </div>
     `;
     } else {
       const tabsMarkup = this._timelineCameraTabsMarkup(availableCameras, currentCamera);
-      const isTvLayout = layoutMode === 'tv';
-      // Compact (phones, tablets and TV): transport lives only in the settings
-      // sheet Playback section. The body transport markup below is hidden by CSS.
-      const compactSheetInner = `<div class="timeline-sheet-section"><div class="timeline-sheet-heading">Playback</div>${this._timelineTransportMarkup(true)}</div>${this._timelineControlsMarkup(dtValue, windowMinutes, true)}`;
+      // Compact (phones/tablets) and TV: transport lives in the settings
+      // sheet Playback section. The body transport markup below stays in place
+      // (hidden by CSS for compact, visible on-stage for TV); tapping the
+      // video toggles play/pause.
+      const compactSheetInner = `<div class="timeline-sheet-section"><div class="timeline-sheet-heading">Playback</div>${this._timelineTransportMarkup()}</div>${this._timelineControlsMarkup(windowMinutes, true)}`;
       container.innerHTML = `
       <div class="frigate-events-modal-content" role="dialog" aria-modal="true" aria-label="Timeline">
         <div class="timeline-compact-topbar">
@@ -6966,15 +9793,15 @@ export class FrigateEventsCard extends LitElement {
           ${this._timelinePlayerMarkup()}
 
           <!-- Scrubber Track -->
-          ${this._timelineScrubberMarkup(startDate, endDate, true)}
+          ${this._timelineScrubberMarkup(this._timelineStartTs, this._timelineEndTs, true)}
           <!-- Transport & Speed Controls (TV on-stage; hidden for compact via CSS, served by the settings sheet) -->
-          ${this._timelineTransportMarkup(true)}
+          ${this._timelineTransportMarkup()}
         </div>
 
         <div class="timeline-settings-backdrop" data-action="close-settings"></div>
         <div class="timeline-settings-sheet" role="dialog" aria-label="Timeline settings">
           <div class="timeline-settings-handle"></div>
-          ${isTvLayout ? this._timelineControlsMarkup(dtValue, windowMinutes) : compactSheetInner}
+          ${compactSheetInner}
         </div>
       </div>
     `;
@@ -7017,6 +9844,7 @@ export class FrigateEventsCard extends LitElement {
     const closeSettings = () => {
       container.classList.remove('settings-open');
       settingsBtn?.setAttribute('aria-expanded', 'false');
+      this._closeTimelineStartPopover(false);
     };
     const openSettings = () => {
       container.classList.add('settings-open');
@@ -7039,10 +9867,14 @@ export class FrigateEventsCard extends LitElement {
     container.querySelectorAll('.timeline-camera-tab').forEach(tab => {
       tab.addEventListener('click', async (e) => {
         e.stopPropagation();
-        this._isAdvancingTimeline = false;
+        this._cancelTimelineAdvance();
         const cam = (tab as HTMLElement).getAttribute('data-camera');
         if (cam && cam !== this._timelineCamera) {
           this._timelineCamera = cam;
+          this._timelineEarliestFootageTs = 0;
+          this._timelineSkipStateKey = '';
+          this._timelinePendingSeekTs = 0;
+          this._closeTimelineStartPopover(false);
           container.querySelectorAll('.timeline-camera-tab').forEach(t => {
             t.classList.toggle('active', t.getAttribute('data-camera') === cam);
           });
@@ -7058,74 +9890,103 @@ export class FrigateEventsCard extends LitElement {
       });
     });
 
-    // Datetime change
-    const dtInput = container.querySelector('.timeline-datetime-input') as HTMLInputElement | null;
-    dtInput?.addEventListener('change', async () => {
-      if (!dtInput.value) return;
-      this._isAdvancingTimeline = false;
-      const parsed = new Date(dtInput.value).getTime() / 1000;
-      if (!isNaN(parsed) && parsed > 0) {
-        this._timelineStartTs = Math.floor(parsed);
-        this._timelineEndTs = Math.floor(this._timelineStartTs + this._timelineWindowDurationSec);
-        this._updateTimelineWindowUI();
-        await this._fetchTimelineEvents();
-        this._updateTimelineScrubberEvents();
-        this._loadTimelineVideo(this._timelineStartTs);
+    // Start time chip + picker
+    const startGroup = container.querySelector('.timeline-datetime-group') as HTMLElement | null;
+    const startChip = startGroup?.querySelector('[data-action="toggle-start-popover"]') as HTMLElement | null;
+    startChip?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (startGroup?.classList.contains('is-open')) {
+        this._closeTimelineStartPopover(true);
+      } else {
+        this._openTimelineStartPopover();
       }
     });
 
-    // Quick jump buttons
-    container.querySelectorAll('[data-jump]').forEach(btn => {
-      btn.addEventListener('click', async (e) => {
+    container.querySelectorAll('[data-start-step]').forEach(stepBtn => {
+      stepBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        this._isAdvancingTimeline = false;
-        const jump = (btn as HTMLElement).getAttribute('data-jump');
-        const now = Math.floor(Date.now() / 1000);
+        const kind = (stepBtn as HTMLElement).getAttribute('data-start-step') === 'minute' ? 'minute' : 'hour';
+        const step = parseInt((stepBtn as HTMLElement).getAttribute('data-step') || '0', 10);
+        this._commitTimelineStartInputs();
+        this._stepTimelineStartDraft(kind, step);
+      });
+    });
 
-        if (jump === 'now') {
-          // Snap window to end at now
-          this._timelineEndTs = now;
-          this._timelineStartTs = Math.max(0, this._timelineEndTs - this._timelineWindowDurationSec);
-        } else if (jump === 'day-start') {
-          // Find the beginning of the currently viewed day (based on current timeline start)
-          const refDate = new Date(this._timelineStartTs * 1000);
-          const startOfDay = new Date(refDate.getFullYear(), refDate.getMonth(), refDate.getDate(), 0, 0, 0, 0);
-          const endOfDay = new Date(refDate.getFullYear(), refDate.getMonth(), refDate.getDate(), 23, 59, 59, 999);
-          const dayStartTs = Math.floor(startOfDay.getTime() / 1000);
-          const dayEndTs = Math.floor(endOfDay.getTime() / 1000);
+    container.querySelectorAll('[data-start-day]').forEach(dayBtn => {
+      dayBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const delta = parseInt((dayBtn as HTMLElement).getAttribute('data-start-day') || '0', 10);
+        this._commitTimelineStartInputs();
+        this._shiftTimelineStartDraftDay(delta);
+      });
+    });
 
-          let targetTs = dayStartTs;
-          if (this.hass && this._timelineCamera) {
-            try {
-              const clientId = this._config?.frigate_client_id || 'frigate';
-              const dayRecordings = await getRecordings(this.hass, clientId, this._timelineCamera, dayStartTs, dayEndTs);
-              if (Array.isArray(dayRecordings) && dayRecordings.length > 0) {
-                dayRecordings.sort((a, b) => a.start_time - b.start_time);
-                targetTs = dayRecordings[0].start_time;
-              }
-            } catch (err) {
-              console.debug('Failed to fetch recordings for day-start jump:', err);
-            }
-          }
+    container.querySelectorAll('[data-action="toggle-meridiem"]').forEach(meridiemBtn => {
+      meridiemBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._commitTimelineStartInputs();
+        this._toggleTimelineStartMeridiem();
+      });
+    });
 
-          this._timelineStartTs = targetTs;
-          this._timelineEndTs = Math.floor(this._timelineStartTs + this._timelineWindowDurationSec);
+    container.querySelectorAll<HTMLInputElement>('[data-start-hour-input], [data-start-minute-input]').forEach(input => {
+      const isHour = input.hasAttribute('data-start-hour-input');
+      const commit = () => {
+        if (isHour) {
+          this._commitTimelineStartHourInput();
         } else {
-          // Relative shifts backward from current window start time
-          let deltaSec = 3600;
-          if (jump === '-15m') deltaSec = 900;
-          else if (jump === '-1h') deltaSec = 3600;
-          else if (jump === '-3h') deltaSec = 10800;
-          else if (jump === '-12h') deltaSec = 43200;
-
-          this._timelineStartTs = Math.max(0, this._timelineStartTs - deltaSec);
-          this._timelineEndTs = Math.floor(this._timelineStartTs + this._timelineWindowDurationSec);
+          this._commitTimelineStartMinuteInput();
         }
+      };
+      const selectAll = () => {
+        try {
+          input.select();
+        } catch (_) {}
+      };
+      input.addEventListener('focus', selectAll);
+      input.addEventListener('click', selectAll);
+      input.addEventListener('input', () => {
+        const cleaned = input.value.replace(/\D/g, '').slice(0, 2);
+        if (cleaned !== input.value) input.value = cleaned;
+      });
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          commit();
+          input.blur();
+        }
+      });
+      input.addEventListener('change', commit);
+    });
 
-        this._updateTimelineWindowUI();
-        await this._fetchTimelineEvents();
-        this._updateTimelineScrubberEvents();
-        this._loadTimelineVideo(jump === 'now' ? now : this._timelineStartTs);
+    container.querySelectorAll('[data-action="apply-start"]').forEach(applyBtn => {
+      applyBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        // Commit both fields before applying in case blur/change ordering differs.
+        this._commitTimelineStartInputs();
+        void this._applyTimelineStartDraft();
+      });
+    });
+
+    container.querySelectorAll('[data-action="close-start-popover"]').forEach(cancelBtn => {
+      cancelBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._closeTimelineStartPopover(true);
+      });
+    });
+
+    // Quick jumps reposition relative to the wall clock and close the picker.
+    container.querySelectorAll('[data-jump]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const jump = (btn as HTMLElement).getAttribute('data-jump') || '';
+        this._closeTimelineStartPopover(false);
+        if (isCompactLayout) {
+          container.classList.remove('settings-open');
+          settingsBtn?.setAttribute('aria-expanded', 'false');
+          settingsBtn?.focus({ preventScroll: true });
+        }
+        void this._runTimelineQuickJump(jump);
       });
     });
 
@@ -7133,13 +9994,13 @@ export class FrigateEventsCard extends LitElement {
     container.querySelectorAll('.timeline-window-pill').forEach(pill => {
       pill.addEventListener('click', async (e) => {
         e.stopPropagation();
-        this._isAdvancingTimeline = false;
+        this._cancelTimelineAdvance();
         const mins = parseInt((pill as HTMLElement).getAttribute('data-window') || '60', 10);
-        const currentWallClock = this._videoOffsetToWallClock(this._timelineVideoEl?.currentTime || 0);
+        const currentWallClock = this._timelineNavigationBaseTs();
         this._timelineWindowDurationSec = mins * 60;
-        this._timelineWindowUserChosen = true;
+        this._timelinePreferredWindowSec = mins * 60;
 
-        // Keep currentWallClock centered in new window duration, constrained by now
+        // Center the playhead in the new window, constrained by now.
         const now = Math.floor(Date.now() / 1000);
         let newStart = Math.floor(currentWallClock - this._timelineWindowDurationSec / 2);
         if (newStart + this._timelineWindowDurationSec > now) {
@@ -7147,9 +10008,15 @@ export class FrigateEventsCard extends LitElement {
         }
         this._timelineStartTs = Math.max(0, newStart);
         this._timelineEndTs = Math.floor(this._timelineStartTs + this._timelineWindowDurationSec);
+        this._timelineWindowRequestId++;
+        this._timelineVodStartTs = 0;
+        this._timelineVodEndTs = 0;
+        this._timelineEarliestFootageTs = 0;
+        this._timelinePendingSeekTs = 0;
 
         this._updateTimelineWindowUI();
         await this._fetchTimelineEvents();
+        if (!this._timelineContainer) return;
         this._updateTimelineScrubberEvents();
         this._loadTimelineVideo(currentWallClock);
       });
@@ -7171,18 +10038,13 @@ export class FrigateEventsCard extends LitElement {
       });
     });
 
-    // Skip buttons
+    // Skip buttons move by wall-clock time, not video time, so they also work
+    // at video 0 and across the loaded VOD chunk / window boundary.
     container.querySelectorAll('[data-skip]').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
-        if (!this._timelineVideoEl) return;
         const delta = parseFloat((btn as HTMLElement).getAttribute('data-skip') || '0');
-        const duration = this._timelineEndTs - this._timelineStartTs;
-        const maxSeek = (Number.isFinite(this._timelineVideoEl.duration) && this._timelineVideoEl.duration > 0)
-          ? Math.max(0, this._timelineVideoEl.duration - 0.5)
-          : duration;
-        this._timelineVideoEl.currentTime = Math.max(0, Math.min(maxSeek, this._timelineVideoEl.currentTime + delta));
-        this._updateTimelinePlayheadUI();
+        void this._skipTimelineBy(delta);
       });
     });
 
@@ -7238,14 +10100,10 @@ export class FrigateEventsCard extends LitElement {
         const ratio = Math.max(0, Math.min(1, (targetTs - this._timelineStartTs) / windowDuration));
 
         // Immediately reflect position visually on track even before video timeupdate fires
-        const playhead = container.querySelector('.timeline-playhead') as HTMLElement | null;
-        if (playhead) {
-          playhead.style.left = `${ratio * 100}%`;
-        }
+        this._setTimelinePlayheadPercent(ratio * 100);
         const currentBadge = container.querySelector('[data-timeline-current-time]') as HTMLElement | null;
         if (currentBadge) {
-          const curDate = new Date(targetTs * 1000);
-          currentBadge.textContent = curDate.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+          currentBadge.textContent = this._formatTimelineBadge(targetTs);
         }
 
         // Seeking outside the loaded VOD chunk requires loading a new chunk.
@@ -7312,13 +10170,9 @@ export class FrigateEventsCard extends LitElement {
       // Scoped to non-desktop layouts so desktop keyboard behavior is untouched.
       if (isCompactLayout) {
         const seekBySeconds = (deltaSec: number) => {
-          if (!this._timelineVideoEl) return;
-          const duration = this._timelineEndTs - this._timelineStartTs;
-          const maxSeek = (Number.isFinite(this._timelineVideoEl.duration) && this._timelineVideoEl.duration > 0)
-            ? Math.max(0, this._timelineVideoEl.duration - 0.5)
-            : duration;
-          this._timelineVideoEl.currentTime = Math.max(0, Math.min(maxSeek, this._timelineVideoEl.currentTime + deltaSec));
-          this._updateTimelinePlayheadUI();
+          // Use the wall-clock skip path so D-pad seeking crosses chunk and
+          // window boundaries exactly like the transport buttons.
+          void this._skipTimelineBy(deltaSec);
         };
         const jumpToEdge = (edge: 'start' | 'end') => {
           const targetTs = edge === 'start' ? this._timelineStartTs : this._timelineEndTs;
@@ -7359,24 +10213,21 @@ export class FrigateEventsCard extends LitElement {
       }
     }
 
-    // Compact/TV: close the settings sheet on selection or backdrop tap.
+    // Compact/TV: close the settings sheet after a window choice or Go.
     if (isCompactLayout) {
-      container.querySelectorAll('.timeline-settings-sheet [data-jump]').forEach(btn => {
-        btn.addEventListener('click', () => {
-          container.classList.remove('settings-open');
-          settingsBtn?.setAttribute('aria-expanded', 'false');
-        });
-      });
       container.querySelectorAll('.timeline-settings-sheet .timeline-window-pill').forEach(pill => {
         pill.addEventListener('click', () => {
           container.classList.remove('settings-open');
           settingsBtn?.setAttribute('aria-expanded', 'false');
+          settingsBtn?.focus({ preventScroll: true });
         });
       });
-      const sheetDtInput = container.querySelector('.timeline-settings-sheet .timeline-datetime-input') as HTMLInputElement | null;
-      sheetDtInput?.addEventListener('change', () => {
-        container.classList.remove('settings-open');
-        settingsBtn?.setAttribute('aria-expanded', 'false');
+      container.querySelectorAll('.timeline-settings-sheet [data-action="apply-start"]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          container.classList.remove('settings-open');
+          settingsBtn?.setAttribute('aria-expanded', 'false');
+          settingsBtn?.focus({ preventScroll: true });
+        });
       });
     }
   }
@@ -7875,13 +10726,26 @@ export class FrigateEventsCard extends LitElement {
     return html`
       <ha-card>
         <div class="content">
-          ${this._config.debug ? html`<div class="debug-version">v${CARD_VERSION}</div>` : ''}
-          ${this._config.live_view ? this._renderLiveView() : ''}
-          ${this._loading && this._events.length === 0
-            ? html`<div class="loading"></div>`
-            : this._error && this._events.length === 0
-              ? html``
-              : html`
+          ${(!!this._config?.debug || (this._config?.testing === true && this._showVersionOverride === true)) ? html`<div class="debug-version">v${CARD_VERSION}</div>` : ''}
+          ${this._config.live_view
+            ? guard(
+                [
+                  this._config.live_view_entity,
+                  this._config.go2rtc_url,
+                  this._config.live_view_aspect_ratio,
+                  this._config.show_mute,
+                  this._config.live_view_show_mute,
+                  this._config.live_view_mute_position,
+                  this._isLiveMuted,
+                  this._liveAutoplayBlocked,
+                  this._liveUserActivated,
+                  this._liveViewError,
+                  this._isFrigateOffline()
+                ],
+                () => this._renderLiveView()
+              )
+            : ''}
+          ${html`
                   <div class="events-container">
                     ${showScrollArrows ? html`
                       <button class="scroll-btn prev" @click=${() => this._scroll('left')} aria-label="Previous">
@@ -7907,30 +10771,119 @@ export class FrigateEventsCard extends LitElement {
 
   private _handleLiveVideoRef = (el: Element | undefined): void => {
     const videoEl = (el as HTMLVideoElement) ?? null;
+    const prevVideoEl = this._liveVideoEl;
     this._liveVideoEl = videoEl;
     if (videoEl) {
       videoEl.muted = this._isLiveMuted;
-      if (this._boundFullscreenHandler) {
-        videoEl.addEventListener('webkitbeginfullscreen', this._boundFullscreenHandler);
-        videoEl.addEventListener('webkitendfullscreen', this._boundFullscreenHandler);
-        videoEl.addEventListener('fullscreenchange', this._boundFullscreenHandler);
-        videoEl.addEventListener('webkitfullscreenchange', this._boundFullscreenHandler);
-      }
-      if (this._boundFullscreenMouseMoveHandler) {
-        videoEl.addEventListener('mousemove', this._boundFullscreenMouseMoveHandler, { capture: true, passive: true });
-        videoEl.addEventListener('pointermove', this._boundFullscreenMouseMoveHandler, { capture: true, passive: true });
-      }
-      videoEl.addEventListener('pause', () => {
-        if (this._remoteStream && videoEl.paused) {
-          videoEl.play().catch(() => {});
+      if (videoEl !== prevVideoEl) {
+        // Keep the element (and Android WebView's default video poster) hidden
+        // until a real frame is playing. Otherwise TV Bro paints its big grey
+        // play button over the live view on every refresh.
+        videoEl.style.opacity = '0';
+        videoEl.style.visibility = 'hidden';
+        videoEl.addEventListener('waiting', () => {
+          this._diagLog('Live video WAITING (buffering)');
+          videoEl.style.opacity = '0';
+        });
+        videoEl.addEventListener('stalled', () => {
+          this._diagLog('Live video STALLED');
+          videoEl.style.opacity = '0';
+        });
+        videoEl.addEventListener('playing', () => {
+          this._diagLog('Live video PLAYING');
+          this._liveAutoplayBlocked = false;
+          videoEl.style.opacity = '1';
+          videoEl.style.visibility = 'visible';
+        });
+        videoEl.addEventListener('timeupdate', () => {
+          if (videoEl.style.opacity === '0') {
+            videoEl.style.opacity = '1';
+          }
+          if (videoEl.style.visibility === 'hidden') {
+            videoEl.style.visibility = 'visible';
+          }
+        });
+        if (this._boundFullscreenHandler) {
+          videoEl.addEventListener('webkitbeginfullscreen', this._boundFullscreenHandler);
+          videoEl.addEventListener('webkitendfullscreen', this._boundFullscreenHandler);
+          videoEl.addEventListener('fullscreenchange', this._boundFullscreenHandler);
+          videoEl.addEventListener('webkitfullscreenchange', this._boundFullscreenHandler);
         }
-      });
+        if (this._boundFullscreenMouseMoveHandler) {
+          videoEl.addEventListener('mousemove', this._boundFullscreenMouseMoveHandler, { capture: true, passive: true });
+          videoEl.addEventListener('pointermove', this._boundFullscreenMouseMoveHandler, { capture: true, passive: true });
+        }
+      }
+      this._startFreezeCanvasCapture(videoEl);
     }
-    if (videoEl && this._remoteStream && videoEl.srcObject !== this._remoteStream) {
+    if (
+      videoEl &&
+      this._remoteStream &&
+      this._remoteStream.getTracks().length > 0 &&
+      videoEl.srcObject !== this._remoteStream
+    ) {
       videoEl.srcObject = this._remoteStream;
-      videoEl.play().catch(() => {});
+      this._playLiveVideo(videoEl);
     }
   };
+
+  private _handleFreezeCanvasRef = (el: Element | undefined): void => {
+    this._freezeCanvasEl = (el as HTMLCanvasElement) ?? null;
+    if (this._freezeCanvasEl && this._liveVideoEl && this._liveVideoEl.videoWidth > 0) {
+      this._updateFreezeCanvas(this._liveVideoEl);
+    }
+  };
+
+  private _updateFreezeCanvas(video: HTMLVideoElement): void {
+    if (!this._freezeCanvasEl || video.videoWidth === 0 || video.videoHeight === 0) return;
+    const canvas = this._freezeCanvasEl;
+    if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+    }
+    const ctx = canvas.getContext('2d', { alpha: false });
+    if (ctx) {
+      try {
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      } catch {}
+    }
+  }
+
+  private _startFreezeCanvasCapture(video: HTMLVideoElement): void {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    if ((video as any)._freezeCaptureActive) return;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (video as any)._freezeCaptureActive = true;
+
+    let lastCapture = 0;
+    const captureFrame = () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if (!this.isConnected || this._liveVideoEl !== video) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (video as any)._freezeCaptureActive = false;
+        return;
+      }
+      const now = performance.now();
+      // Throttle capture to once per 1,000ms for negligible CPU/GPU cost
+      if (now - lastCapture >= 1000) {
+        this._updateFreezeCanvas(video);
+        lastCapture = now;
+      }
+      if ('requestVideoFrameCallback' in video) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (video as any).requestVideoFrameCallback(captureFrame);
+      } else {
+        setTimeout(captureFrame, 1000);
+      }
+    };
+
+    if ('requestVideoFrameCallback' in video) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (video as any).requestVideoFrameCallback(captureFrame);
+    } else {
+      setTimeout(captureFrame, 1000);
+    }
+  }
 
   private _handleLiveMuteToggle(e: Event): void {
     e.stopPropagation();
@@ -7938,7 +10891,7 @@ export class FrigateEventsCard extends LitElement {
     if (this._liveVideoEl) {
       this._liveVideoEl.muted = this._isLiveMuted;
       if (!this._isLiveMuted && this._liveVideoEl.paused) {
-        this._liveVideoEl.play().catch(() => {});
+        this._playLiveVideo(this._liveVideoEl);
       }
     }
   }
@@ -7952,6 +10905,12 @@ export class FrigateEventsCard extends LitElement {
     const aspectRatio = this._config?.live_view_aspect_ratio || '16 / 9';
 
     if (this._liveViewError) {
+      // While Frigate is off (intentional overnight shutdown), any live
+      // error is expected shutdown noise — fall through to the normal video
+      // box with no error text. When online, all errors still show since
+      // they're helpful when debugging/setup.
+      const isShutdownNoise = this._isFrigateOffline();
+      if (!isShutdownNoise) {
       return html`
         <div class="live-view-container" style="aspect-ratio: ${aspectRatio};">
           <div class="live-view-error">
@@ -7960,6 +10919,7 @@ export class FrigateEventsCard extends LitElement {
           </div>
         </div>
       `;
+      }
     }
 
     const showMuteBtn = Boolean(this._config?.show_mute || this._config?.live_view_show_mute);
@@ -7976,27 +10936,35 @@ export class FrigateEventsCard extends LitElement {
         @touchend=${() => this._handleLiveViewTouchEnd()}
         @touchcancel=${() => this._handleLiveViewTouchEnd()}
       >
-        <video
-          class="live-view-video"
-          autoplay
-          .muted=${this._isLiveMuted}
-          ?muted=${this._isLiveMuted}
-          playsinline
-          webkit-playsinline
-          disablepictureinpicture
-          disableremoteplayback
-          poster="data:image/png;base64,iVBORw0KGgoAAAANSU5EUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
-          @click=${(e: Event) => {
-            e.preventDefault();
-          }}
-          @pause=${(e: Event) => {
-            const v = e.target as HTMLVideoElement;
-            if (v && this._remoteStream && v.paused) {
-              v.play().catch(() => {});
-            }
-          }}
-          ${ref(this._handleLiveVideoRef)}
-        ></video>
+        <canvas
+          class="live-view-freeze-canvas"
+          ${ref(this._handleFreezeCanvasRef)}
+        ></canvas>
+        ${this._shouldSuppressLiveVideo()
+          ? ''
+          : html`
+              <video
+                class="live-view-video"
+                autoplay
+                .muted=${this._isLiveMuted}
+                ?muted=${this._isLiveMuted}
+                playsinline
+                webkit-playsinline
+                disablepictureinpicture
+                disableremoteplayback
+                poster="data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw=="
+                @click=${(e: Event) => {
+                  e.preventDefault();
+                }}
+                @pause=${(e: Event) => {
+                  const v = e.target as HTMLVideoElement;
+                  if (v && this._remoteStream && v.paused) {
+                    this._playLiveVideo(v);
+                  }
+                }}
+                ${ref(this._handleLiveVideoRef)}
+              ></video>
+            `}
         ${showMuteBtn
           ? html`
               <button
@@ -8093,6 +11061,7 @@ export class FrigateEventsCard extends LitElement {
                    .muted=${true}
                    loop
                    playsinline
+                   poster="data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw=="
                    @loadedmetadata=${(ev: Event) => this._handleHoverVideoMetadata(ev, event)}
                    @timeupdate=${(ev: Event) => this._handleVideoTimeUpdate(ev, event)}
                    style="position: absolute; top: 0; left: 0; z-index: 2; width: 100%; height: 100%; object-fit: cover; pointer-events: none;"
@@ -8131,7 +11100,7 @@ export class FrigateEventsCard extends LitElement {
       }
 
       ha-card {
-        overflow: hidden;
+        overflow: visible;
         background: transparent;
         box-shadow: none;
         width: 100%;
@@ -8204,6 +11173,10 @@ export class FrigateEventsCard extends LitElement {
         grid-template-columns: repeat(var(--visible-count, 5), 1fr);
         gap: 9px;
         align-items: start;
+        /* Room for the tile shadows; the negative margin keeps the outer
+           spacing identical to the normal 8px Lovelace gap. */
+        padding: 3px 3px 8px 3px;
+        margin: -3px -3px -8px -3px;
       }
 
       .events.scrollable {
@@ -8268,6 +11241,7 @@ export class FrigateEventsCard extends LitElement {
         border-radius: 12px;
         overflow: hidden;
         background: var(--secondary-background-color);
+        box-shadow: var(--ha-card-box-shadow, 0 2px 4px rgba(0, 0, 0, 0.1));
         transition: transform 0.2s, opacity 0.2s;
         -webkit-touch-callout: none !important;
         -webkit-user-select: none !important;
@@ -8287,7 +11261,8 @@ export class FrigateEventsCard extends LitElement {
       .placeholder {
         aspect-ratio: 1 / 1;
         border-radius: 12px;
-        background: #1c1c1c;
+        background: var(--ha-card-background, var(--card-background-color, #fff));
+        box-shadow: var(--ha-card-box-shadow, 0 2px 4px rgba(0, 0, 0, 0.1));
         -webkit-touch-callout: none !important;
         -webkit-user-select: none !important;
         user-select: none !important;
@@ -8321,7 +11296,7 @@ export class FrigateEventsCard extends LitElement {
       .live-view-container {
         width: 100%;
         aspect-ratio: 16 / 9;
-        background: #1c1c1c;
+        background: var(--ha-card-background, var(--card-background-color, #1c1c1c));
         border-radius: 12px;
         overflow: hidden;
         margin-bottom: 8px;
@@ -8331,20 +11306,40 @@ export class FrigateEventsCard extends LitElement {
         -webkit-user-select: none !important;
         user-select: none !important;
         touch-action: manipulation;
+        contain: paint layout;
+        transform: translateZ(0);
+        will-change: transform;
       }
 
-      .live-view-video {
+      .live-view-freeze-canvas {
+        position: absolute;
+        inset: 0;
         width: 100%;
         height: 100%;
         object-fit: contain;
         display: block;
-        background-color: #1c1c1c;
+        pointer-events: none !important;
+        border-radius: 12px;
+        z-index: 1;
+      }
+
+      .live-view-video {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        display: block;
+        background-color: transparent !important;
+        opacity: 0;
+        visibility: hidden;
         transform: translateZ(0);
-        will-change: transform;
+        will-change: transform, opacity;
+        transition: opacity 0.05s ease-out;
         -webkit-touch-callout: none !important;
         -webkit-user-select: none !important;
         user-select: none !important;
         pointer-events: none !important;
+        z-index: 2;
       }
 
       .live-view-container:fullscreen,
@@ -8358,7 +11353,9 @@ export class FrigateEventsCard extends LitElement {
       }
 
       .live-view-container:fullscreen .live-view-video,
-      .live-view-container:-webkit-full-screen .live-view-video {
+      .live-view-container:-webkit-full-screen .live-view-video,
+      .live-view-container:fullscreen .live-view-freeze-canvas,
+      .live-view-container:-webkit-full-screen .live-view-freeze-canvas {
         width: 100%;
         height: 100%;
         object-fit: contain;
