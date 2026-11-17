@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [2.7.3] - 2026-11-17
 - Fixed: **Temporary mask action from the iPhone and Apple Watch** — the mask buttons relied on `action_data` and `tag`, which iOS drops when an action is tapped on the Watch, so `frigate_temp_mask.add_mask` ran with an empty `event_id` and nothing was masked. The event id now travels inside the action identifier (`TEMP_MASK_24H:<event id>`) and the blueprint reads it back out, while `action_data` and `tag` are still used for older notifications.
 - Fixed: **Duplicate mask calls on iOS** — a single tap fires both `ios.notification_action_fired` and `mobile_app_notification_action`. The blueprint now listens only to `mobile_app_notification_action`, so one tap no longer makes two `add_mask` calls, the second of which failed with a 502 while Frigate restarted.
 
