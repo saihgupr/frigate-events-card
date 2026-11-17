@@ -315,7 +315,7 @@ Right-clicking the live feed exposes the same context menu, with direct shortcut
 The card works standalone. The [`frigate_temp_mask`](https://github.com/saihgupr/frigate-temp-mask) companion integration enables temporary masks for recurring false detections such as a parked car, package, or wheelbarrow. Masks use a 10% expanded bounding box around the detection, are written to Frigate's config, and can be changed or removed later.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/temp-mask.png" width="49%" alt="Temporary Mask Manager" />
+  <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/develop/images/snapshots/temp-mask.png" width="49%" alt="Temporary Mask Manager" />
   <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/temp-mask-1.png" width="49%" alt="Frigate Config Object Mask" />
 </p>
 
