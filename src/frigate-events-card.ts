@@ -10,7 +10,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.7.3';
+const CARD_VERSION = '2.7.4';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -9683,11 +9683,11 @@ export class FrigateEventsCard extends LitElement {
     const delta = deltas[jump] || 0;
     if (!delta) return;
     // Every quick jump is measured from the current wall clock, not from the
-    // playhead, so -1h always lands one hour before now regardless of where
-    // the timeline happens to be sitting.
+    // playhead, so -15m or -1h always lands that far before now and becomes
+    // the new window start shown in the Start chip and picker.
     const target = Math.floor(Date.now() / 1000) - delta;
     if (!this._timelineContainer) return;
-    await this._seekTimelineTo(target, 'preserve');
+    await this._seekTimelineTo(target, 'start');
   }
 
   private _updateTimelineWindowUI(): void {
