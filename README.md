@@ -8,7 +8,7 @@ An all-in-one Lovelace card for Frigate: recent detection gallery, WebRTC live v
 ![Screenshot](images/snapshots/timeline.jpeg)
 ![Screenshot](images/snapshots/screenshot_3.png)
 ![Screenshot](images/snapshots/temp-mask.png)
-![Screenshot](images/snapshots/temp-mask-1.png)
+![Screenshot](images/snapshots/temp-mask-1-hero.png)
 
 <details>
 <summary><strong>Contents</strong></summary>
@@ -258,15 +258,32 @@ go2rtc_url: http://192.168.1.211:1984
 
 The Timeline modal plays continuous recordings from Frigate 0.13+ VOD, so you can review footage around an event instead of being limited to the event clip itself. Click any event thumbnail (with `timeline_on_click: true`) or use the live feed's right-click menu to open it.
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/timeline-browser.png" width="100%" alt="Timeline player with event markers, fine transport skips, and grouped controls" />
-</p>
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/timeline-mobile.png" width="38%" alt="Mobile phone timeline layout with under-video scrubber" />
-  &nbsp;&nbsp;
-  <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/timeline-tv.png" width="58%" alt="Smart TV full-bleed theater mode with overlay controls" />
-</p>
+<table width="100%">
+  <thead>
+    <tr>
+      <th colspan="2" align="center">Browser</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td colspan="2" align="center">
+        <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/timeline-browser.png" width="100%" alt="Browser timeline player with event markers, fine transport skips, and grouped controls" />
+      </td>
+    </tr>
+    <tr>
+      <th width="38%" align="center">Mobile</th>
+      <th width="62%" align="center">TV</th>
+    </tr>
+    <tr>
+      <td width="38%" align="center" valign="top">
+        <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/timeline-mobile.png" width="100%" alt="Mobile phone timeline layout with under-video scrubber" />
+      </td>
+      <td width="62%" align="center" valign="top">
+        <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/timeline-tv.png" width="100%" alt="Smart TV full-bleed theater mode with overlay controls" />
+      </td>
+    </tr>
+  </tbody>
+</table>
 
 - **Interactive scrubber**: Drag anywhere on the track to seek. The current time is shown above the playhead, with the window start and end times on either side. Includes a round drag handle and smooth progress fill.
 - **Device-optimized layouts**: Desktop browsers get full grouped tonal panels, mobile phones get a video-first view with under-video scrubber and settings sheet behind a gear icon, and smart TVs get a 16:9 full-bleed theater mode with overlay scrubber and D-pad friendly transport.
@@ -299,12 +316,12 @@ The card works standalone. The [`frigate_temp_mask`](https://github.com/saihgupr
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/temp-mask.png" width="49%" alt="Temporary Mask Manager" />
-  <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/temp-mask-1.png" width="49%" alt="Frigate Config Object Mask" />
+  <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/temp-mask-3.png" width="49%" alt="Temporary mask polygon editor with resize controls and label field" />
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/temp-mask-3.png" width="49%" alt="Temporary mask polygon editor with resize controls and label field" />
   <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/temp-mask-4.png" width="49%" alt="Temporary mask list showing two active masks" />
+  <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/temp-mask-1.png" width="49%" alt="Frigate Config Object Mask" />
 </p>
 
 * **Interactive Polygon Editor**: Edit mask shapes inline over a live camera snapshot. Drag the fill to move the whole mask, drag edges to slide boundaries, or pull vertex pins. Quick controls let you Expand (+10%), Shrink (-10%), or Reset to Frigate's detected bounding box.
@@ -363,7 +380,7 @@ The `frigate_temp_mask` integration exposes the following services under Home As
 Attach **Temporary Mask** action buttons directly to Frigate mobile notifications. Tapping an action calculates the expanded polygon mask, injects it into Frigate, and restarts the detector without opening the dashboard.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/develop/images/snapshots/temp-mask-2.png" width="340" alt="Frigate Mobile Notification with Temporary Mask Actions" />
+  <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/temp-mask-2.png" width="340" alt="Frigate Mobile Notification with Temporary Mask Actions" />
 </p>
 
 [![Open your Home Assistant instance and show the blueprint import dialog with a specific blueprint pre-filled.](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fsaihgupr%2Ffrigate-events-card%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Ffrigate_temp_mask_notification.yaml)
