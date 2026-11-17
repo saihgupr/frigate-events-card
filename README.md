@@ -8,7 +8,7 @@ An all-in-one Lovelace card for Frigate: recent detection gallery, WebRTC live v
 ![Screenshot](images/snapshots/timeline.jpeg)
 ![Screenshot](images/snapshots/screenshot_3.png)
 ![Screenshot](images/snapshots/temp-mask.png)
-![Screenshot](images/snapshots/temp-mask-1.png)
+![Screenshot](images/snapshots/temp-mask-1-hero.png)
 
 <details>
 <summary><strong>Contents</strong></summary>
