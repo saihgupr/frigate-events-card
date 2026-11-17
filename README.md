@@ -384,9 +384,9 @@ action:
         image: "/api/frigate/notifications/{{ trigger.payload_json['after']['id'] }}/thumbnail.jpg"
         tag: "{{ trigger.payload_json['after']['id'] }}"
         actions:
-          - action: "TEMP_MASK_24H"
+          - action: "TEMP_MASK_24H:{{ trigger.payload_json['after']['id'] }}"
             title: "Temporary Mask"
-          - action: "TEMP_MASK_8H"
+          - action: "TEMP_MASK_8H:{{ trigger.payload_json['after']['id'] }}"
             title: "Mask 8h"
           - action: "URI"
             title: "View Live"
@@ -399,19 +399,25 @@ alias: "Apply Frigate Temporary Mask from Notification"
 trigger:
   - platform: event
     event_type: mobile_app_notification_action
-    event_data:
-      action: "TEMP_MASK_24H"
-  - platform: event
-    event_type: mobile_app_notification_action
-    event_data:
-      action: "TEMP_MASK_8H"
+condition:
+  - condition: template
+    value_template: >
+      {{ (trigger.event.data.action | default(trigger.event.data.actionName, true) | default('', true)).split(':', 1)[0] in ['TEMP_MASK_24H', 'TEMP_MASK_8H'] }}
 action:
   - service: frigate_temp_mask.add_mask
     data:
-      event_id: "{{ trigger.event.data.tag | default(trigger.event.data.action_data, true) }}"
+      event_id: >
+        {% set d = trigger.event.data %}
+        {% set action = d.action | default(d.actionName, true) | default('', true) %}
+        {% if ':' in action %}{{ action.split(':', 1)[1] }}
+        {% elif d.action_data is defined and d.action_data.event_id %}{{ d.action_data.event_id }}
+        {% else %}{{ d.tag | default('', true) }}{% endif %}
       duration_hours: >
-        {% if trigger.event.data.action == 'TEMP_MASK_8H' %}8{% else %}24{% endif %}
+        {% set action = trigger.event.data.action | default(trigger.event.data.actionName, true) | default('', true) %}
+        {{ 8 if action.split(':', 1)[0] == 'TEMP_MASK_8H' else 24 }}
 ```
+
+The event id travels inside the action identifier (`TEMP_MASK_24H:<event id>`) because iOS, and Apple Watch in particular, only returns the action name when a button is tapped. Action data and tags are dropped on that path, so a handler that reads `action_data.event_id` finds nothing and the mask is never created.
 
 </details>
 

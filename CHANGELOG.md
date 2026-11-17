@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+- Fixed: **Temporary mask action from the iPhone and Apple Watch** — the mask buttons relied on `action_data` and `tag`, which iOS drops when an action is tapped on the Watch, so `frigate_temp_mask.add_mask` ran with an empty `event_id` and nothing was masked. The event id now travels inside the action identifier (`TEMP_MASK_24H:<event id>`) and the blueprint reads it back out, while `action_data` and `tag` are still used for older notifications.
+- Fixed: **Duplicate mask calls on iOS** — a single tap fires both `ios.notification_action_fired` and `mobile_app_notification_action`. The blueprint now listens only to `mobile_app_notification_action`, so one tap no longer makes two `add_mask` calls, the second of which failed with a 502 while Frigate restarted.
+
 ## [2.7.2] - 2026-11-16
 - Fixed: **Timeline quick jumps now use the current time** — `-15m`, `-1h`, `-3h`, and `-12h` moved relative to the playhead, so the same button landed in a different place depending on where the timeline was sitting. They now always jump to that amount before the current wall-clock time, and `Start of day` goes to the first footage from today.
 - Improved: **Finer timeline skips** — the transport now uses `-1m`, `-30s`, `-10s`, `+10s`, `+30s`, and `+1m` instead of the coarse `±5m` buttons, so it is easier to nudge a few seconds without overshooting.
