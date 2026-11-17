@@ -13,7 +13,7 @@ An all-in-one Lovelace card for Frigate: recent detection gallery, WebRTC live v
 <details>
 <summary><strong>Contents</strong></summary>
 
-- [What's New](#whats-new-in-v26)
+- [What's New](#whats-new-in-v27)
 - [Features](#features)
 - [Installation](#installation)
 - [Usage](#usage)
@@ -29,14 +29,14 @@ An all-in-one Lovelace card for Frigate: recent detection gallery, WebRTC live v
 
 </details>
 
-## What's New in v2.6
+## What's New in v2.7
 
-- **Temporary Mask Manager overhaul**: Live camera snapshots with mask polygon overlays, accurate countdowns, per-mask duration changes, instant removal, and reliable cleanup of expired or orphaned masks — including after Frigate reconnects from an outage.
-- **Active Masks sensor**: New `sensor.frigate_active_masks` diagnostic entity exposing the active mask count, mask details, pending-restart state, and detected Frigate version for dashboards and automations.
-- **Frigate 0.18+ mask compatibility**: Robust support for dictionary-format object masks, automatic adoption of masks found in Frigate's config, and safer mask retention across restarts.
-- **Timeline & continuous playback**: Integrated VOD timeline with an interactive scrubber, color-coded event markers, quick jumps, variable playback speeds, click-to-timeline navigation, and mute controls.
-- **Security hardening**: Event deletion now goes through the admin-only `frigate_temp_mask.delete_event` service, proxy views require authentication, hard-coded Frigate URL/camera fallbacks were removed, and event/mask details render via `textContent` to prevent HTML injection.
-- **Signed snapshot fix**: `auth/sign_path` requests now use the correct `expires` parameter, so signed thumbnails and camera previews load reliably behind authenticated reverse proxies.
+- **Interactive Temporary Mask Editor**: Click "Edit" on any active mask to modify its polygon directly over a live camera snapshot. Drag the fill to translate the whole mask, drag any edge to slide that boundary, or drag vertex pins to reshape. Includes one-click `Expand (+10%)`, `Shrink (-10%)`, and `Reset` controls.
+- **Multi-Label Masking**: Specify comma-separated labels (such as `person, dog`) to apply the same mask polygon across multiple Frigate object filters simultaneously. All copies synchronize and clean up automatically on expiry.
+- **Directly Editable Timeline Start Time**: Click the `Start` chip to directly type hour and minute values with a one-click AM/PM toggle, or step with day and time steppers—eliminating native browser date picker popups.
+- **Restyled Timeline Controls & Finer Skips**: Control panels are grouped into cohesive tonal cards with a round scrubber handle and progress fill. Transport buttons now feature finer skips (`-1m`, `-30s`, `-10s`, `+10s`, `+30s`, `+1m`) that move by wall-clock time and seamlessly stream past video chunk boundaries, with `2h` and `24h` window options.
+- **iPhone and Apple Watch Notification Actions**: Tapping temporary mask actions from iOS and Apple Watch notifications now works reliably by packing the event ID directly into the action identifier, preventing dropped action data.
+- **Smart TV Theater Mode & Event Deduplication**: Full-bleed 16:9 layout on TV browsers with D-pad friendly settings dialogs, alongside an optional `dedupe_events` setting to collapse near-simultaneous detections per camera and label.
 
 ## Features
 
@@ -259,10 +259,17 @@ go2rtc_url: http://192.168.1.211:1984
 The Timeline modal plays continuous recordings from Frigate 0.13+ VOD, so you can review footage around an event instead of being limited to the event clip itself. Click any event thumbnail (with `timeline_on_click: true`) or use the live feed's right-click menu to open it.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/timeline.jpeg" width="100%" alt="Timeline player with event markers and playback controls" />
+  <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/timeline-browser.png" width="100%" alt="Timeline player with event markers, fine transport skips, and grouped controls" />
 </p>
 
-- **Interactive scrubber**: Drag anywhere on the track to seek. The current time is shown above the playhead, with the window start and end times on either side.
+<p align="center">
+  <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/timeline-mobile.png" width="38%" alt="Mobile phone timeline layout with under-video scrubber" />
+  &nbsp;&nbsp;
+  <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/timeline-tv.png" width="58%" alt="Smart TV full-bleed theater mode with overlay controls" />
+</p>
+
+- **Interactive scrubber**: Drag anywhere on the track to seek. The current time is shown above the playhead, with the window start and end times on either side. Includes a round drag handle and smooth progress fill.
+- **Device-optimized layouts**: Desktop browsers get full grouped tonal panels, mobile phones get a video-first view with under-video scrubber and settings sheet behind a gear icon, and smart TVs get a 16:9 full-bleed theater mode with overlay scrubber and D-pad friendly transport.
 - **Event markers**: Color-coded markers highlight detections across the selected window, making it easy to jump between moments.
 - **Start picker**: Click `Start` to type or step the window start by day, hour, or minute. It opens a small in-card picker instead of the browser's date/time calendar, shows `Today` or `Yesterday` with the time, and keeps the quick jumps one click away.
 - **Quick jumps**: Choose `Now`, `-15m`, `-1h`, `-3h`, `-12h`, or `Start of Day` to jump relative to the current time, not the playhead. `-1h` always lands one hour before now, wherever the timeline happens to be.
@@ -296,14 +303,15 @@ The card works standalone. The [`frigate_temp_mask`](https://github.com/saihgupr
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/develop/images/snapshots/temp-mask-3.png" width="49%" alt="Temporary mask polygon editor with resize controls and label field" />
-  <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/develop/images/snapshots/temp-mask-4.png" width="49%" alt="Temporary mask list showing two active masks" />
+  <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/temp-mask-3.png" width="49%" alt="Temporary mask polygon editor with resize controls and label field" />
+  <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/temp-mask-4.png" width="49%" alt="Temporary mask list showing two active masks" />
 </p>
 
-* **Flexible durations**: Set a mask for 1h, 4h, 8h, 12h, 24h, 48h, 7d, or custom hours.
-* **Multiple object labels**: Enter `person, dog` in a mask's Label field to write the same mask under each object filter. Removing or expiring the mask removes every copy.
+* **Interactive Polygon Editor**: Edit mask shapes inline over a live camera snapshot. Drag the fill to move the whole mask, drag edges to slide boundaries, or pull vertex pins. Quick controls let you Expand (+10%), Shrink (-10%), or Reset to Frigate's detected bounding box.
+* **Flexible durations**: Set a mask for 1h, 8h, 24h, 7d, or no expiry with live countdowns. Expired masks prune automatically, including across Frigate restarts and outages.
+* **Multiple object labels**: Enter comma-separated labels (such as `person, dog`) in a mask's Label field to write the same mask under each object filter. Removing or expiring the mask cleans up every copy.
 * **Live previews**: The Mask Manager captures a fresh camera snapshot and overlays each active mask polygon.
-* **Instant removal**: Remove a mask from the context menu without waiting for a detector restart on Frigate 0.18+.
+* **Instant removal**: Remove a mask directly from the context menu or Mask Manager without waiting for detector restarts on Frigate 0.18+.
 
 #### Setup
 
