@@ -295,6 +295,11 @@ The card works standalone. The [`frigate_temp_mask`](https://github.com/saihgupr
   <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/temp-mask-1.png" width="49%" alt="Frigate Config Object Mask" />
 </p>
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/develop/images/snapshots/temp-mask-3.png" width="49%" alt="Temporary mask polygon editor with resize controls and label field" />
+  <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/develop/images/snapshots/temp-mask-4.png" width="49%" alt="Temporary mask list showing two active masks" />
+</p>
+
 * **Flexible durations**: Set a mask for 1h, 4h, 8h, 12h, 24h, 48h, 7d, or custom hours.
 * **Multiple object labels**: Enter `person, dog` in a mask's Label field to write the same mask under each object filter. Removing or expiring the mask removes every copy.
 * **Live previews**: The Mask Manager captures a fresh camera snapshot and overlays each active mask polygon.
