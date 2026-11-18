@@ -188,7 +188,7 @@ video_on_hover: true
 
 This example adds a live WebRTC camera feed above the event gallery. The card supports two WebRTC streaming modes:
 
-1. **Home Assistant WebRTC API (Default)**: Negotiates WebRTC through Home Assistant's native camera WebSocket protocol (`camera/web_rtc_offer`). Ideal for remote viewing (e.g. Home Assistant Cloud / Nabu Casa) as signaling passes through HA.
+1. **Home Assistant WebRTC API (Default)**: Negotiates WebRTC through Home Assistant's native camera WebSocket protocol (`camera/webrtc/offer`). Ideal for remote viewing (e.g. Home Assistant Cloud / Nabu Casa) as signaling passes through HA.
 2. **Direct go2rtc WebRTC (`go2rtc_url`)**: Negotiates WebRTC directly with your Frigate `go2rtc` server via `go2rtc_url` (e.g. `http://192.168.1.211:1984`). Bypasses Home Assistant custom component dependencies, reducing HA CPU overhead and delivering sub-second startup times — ideal for local TV dashboards and wall tablets.
 
 > **Requirements:** Dashboard must be served over **HTTPS** (or `localhost`).
