@@ -655,7 +655,7 @@ export class FrigateEventsCard extends LitElement {
 
   /**
    * Negotiate a WebRTC peer connection to the configured camera entity via
-   * Home Assistant's camera/web_rtc_offer WebSocket subscription protocol.
+   * Home Assistant's camera/webrtc/offer WebSocket subscription protocol.
    *
    * This is the same protocol used internally by ha-web-rtc-player, but
    * called directly so we don't depend on HA's internal Lit context providers.
@@ -834,7 +834,7 @@ export class FrigateEventsCard extends LitElement {
           }
         },
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        { type: 'camera/web_rtc_offer', entity_id: entity, offer: sdpOffer } as any
+        { type: 'camera/webrtc/offer', entity_id: entity, offer: sdpOffer } as any
       );
       if (!this.isConnected || this._peerConnection !== pc) {
         this._teardownWebRTC(true);
@@ -845,7 +845,7 @@ export class FrigateEventsCard extends LitElement {
       pc.onicecandidate = ({ candidate }) => {
         if (candidate && this._liveViewSessionId && this.hass) {
           this.hass.callWS({
-            type: 'camera/web_rtc_candidate',
+            type: 'camera/webrtc/candidate',
             session_id: this._liveViewSessionId,
             candidate: candidate.toJSON(),
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -865,7 +865,7 @@ export class FrigateEventsCard extends LitElement {
       }
       let msg = e?.message || (typeof e === 'object' ? JSON.stringify(e) : String(e));
       if (e?.code === 'unknown_command' || msg.toLowerCase().includes('unknown command')) {
-        msg = 'HA WebRTC protocol (camera/web_rtc_offer) not supported for this entity. Fix WebRTC Camera integration in HA or set go2rtc_url in card config.';
+        msg = 'HA WebRTC protocol (camera/webrtc/offer) not supported for this entity. Fix WebRTC Camera integration in HA or set go2rtc_url in card config.';
       }
       console.error('Frigate Events Card: Failed to start WebRTC session:', msg);
       this._liveViewError = `Failed to start: ${msg}`;
