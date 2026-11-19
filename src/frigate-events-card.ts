@@ -10,7 +10,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.7.4';
+const CARD_VERSION = '2.7.4.2';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -5707,6 +5707,27 @@ export class FrigateEventsCard extends LitElement {
     return 24;
   }
 
+  private _supportsRestartReport(): boolean {
+    return this._getTemporaryMaskSensor(this.hass?.states)?.attributes?.supports_restart_report === true;
+  }
+
+  private async _callAddMask(payload: Record<string, unknown>): Promise<boolean | undefined> {
+    if (!this.hass?.callService) return undefined;
+    const canReport = this._supportsRestartReport();
+    const result = await this.hass.callService(
+      'frigate_temp_mask',
+      'add_mask',
+      payload,
+      undefined,
+      true,
+      canReport
+    );
+    const restarted = result && typeof result === 'object' && 'response' in result
+      ? result.response?.restarted
+      : undefined;
+    return typeof restarted === 'boolean' ? restarted : undefined;
+  }
+
   private async _executeTempMaskToggle(event: FrigateEvent): Promise<boolean> {
     if (!this.hass) return false;
     const maskId = event.id.includes('-') ? event.id.split('-')[0] : event.id;
@@ -5747,7 +5768,7 @@ export class FrigateEventsCard extends LitElement {
         const durationHours = this._getMaskDurationHours();
         if (!this.hass.callService) throw new Error('Home Assistant service calls are unavailable');
         const eventBox = event.data?.box || event.data?.snapshot?.box || event.box;
-        await this.hass.callService('frigate_temp_mask', 'add_mask', {
+        const restarted = await this._callAddMask({
           camera: event.camera,
           event_id: event.id,
           mask_id: maskId,
@@ -5757,7 +5778,7 @@ export class FrigateEventsCard extends LitElement {
         });
         this._localPendingMasks = [];
         this.dispatchEvent(new CustomEvent('hass-notification', {
-          detail: { message: toggleDynamic
+          detail: { message: restarted === false
             ? `Mask applied.`
             : `Mask applied. Frigate is restarting.` },
           bubbles: true,
@@ -5781,10 +5802,11 @@ export class FrigateEventsCard extends LitElement {
   private async _executeChangeMaskDuration(event: FrigateEvent, durationHours: number): Promise<void> {
     if (!this.hass) return;
     const maskId = event.id.includes('-') ? event.id.split('-')[0] : event.id;
+    let restarted: boolean | undefined;
     try {
       if (this.hass.callService) {
         try {
-          await this.hass.callService('frigate_temp_mask', 'add_mask', {
+          restarted = await this._callAddMask({
             camera: event.camera,
             event_id: event.id,
             mask_id: maskId,
@@ -5804,7 +5826,9 @@ export class FrigateEventsCard extends LitElement {
       const durationText = this._formatMaskDurationChoice(durationHours);
 
       this.dispatchEvent(new CustomEvent('hass-notification', {
-        detail: { message: `Mask duration: ${durationText}.` },
+        detail: { message: restarted === true
+          ? `Mask duration: ${durationText}. Frigate is restarting.`
+          : `Mask duration: ${durationText}.` },
         bubbles: true,
         composed: true,
       }));
@@ -7458,7 +7482,15 @@ export class FrigateEventsCard extends LitElement {
         const activeMasks = (this._getTemporaryMaskSensor(this.hass?.states)?.attributes?.masks as any[]) || [];
         const existing = activeMasks.find((m: any) => String(m.mask_id) === String(maskId));
         const durationHours = existing ? this._getCurrentMaskDurationHours(existing) : 24;
-        await this._executeEditMask(maskId, camera, eventId, newPolygon, newLabel, durationHours);
+        const originalPolygon = panel.getAttribute('data-orig-poly') || newPolygon;
+        const originalLabel = panel.getAttribute('data-label') || '';
+        const normalizeLabels = (value: string): string =>
+          (value || '').split(',').map(part => part.trim()).filter(Boolean).sort().join(',');
+        // Only a geometry or label change rewrites the Frigate config. A plain
+        // re-save keeps the existing mask and does not need a restart.
+        const restartNeeded = originalPolygon !== newPolygon
+          || normalizeLabels(originalLabel) !== normalizeLabels(newLabel);
+        await this._executeEditMask(maskId, camera, eventId, newPolygon, newLabel, durationHours, restartNeeded);
       });
     });
 
@@ -7645,7 +7677,8 @@ export class FrigateEventsCard extends LitElement {
     eventId: string,
     newPolygon: string,
     newLabel: string,
-    durationHours: number
+    durationHours: number,
+    restartNeeded: boolean
   ): Promise<void> {
     if (!this.hass) return;
     const key = String(maskId);
@@ -7672,16 +7705,16 @@ export class FrigateEventsCard extends LitElement {
         label: newLabel,
         duration_hours: durationHours,
       };
+      let reportedRestart: boolean | undefined;
       try {
-        await this.hass.callService('frigate_temp_mask', 'add_mask', payload);
+        reportedRestart = await this._callAddMask(payload);
       } catch {
         await this.hass.callService('shell_command', 'frigate_add_temp_mask', payload);
       }
       this._maskEditingId = undefined;
-      const sensorAttrs = this._getTemporaryMaskSensor(this.hass?.states)?.attributes;
-      const needsRestart = sensorAttrs?.supports_dynamic_toggle !== true;
+      const didRestart = reportedRestart ?? restartNeeded;
       this.dispatchEvent(new CustomEvent('hass-notification', {
-        detail: { message: needsRestart
+        detail: { message: didRestart
           ? 'Mask updated. Frigate is restarting.'
           : 'Mask updated.' },
         bubbles: true,

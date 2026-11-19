@@ -20,8 +20,11 @@ export interface HomeAssistant {
     callService?: (
         domain: string,
         service: string,
-        serviceData?: Record<string, unknown>
-    ) => Promise<void>;
+        serviceData?: Record<string, unknown>,
+        target?: Record<string, unknown>,
+        notifyOnError?: boolean,
+        returnResponse?: boolean
+    ) => Promise<{ context?: unknown; response?: any } | void>;
 }
 
 export interface LovelaceCardConfig {

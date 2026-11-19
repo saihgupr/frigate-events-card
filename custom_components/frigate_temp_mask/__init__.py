@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, HomeAssistantError, ServiceCall
+from homeassistant.core import HomeAssistant, HomeAssistantError, ServiceCall, SupportsResponse
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_call_later, async_track_time_interval
 from homeassistant.helpers.storage import Store
@@ -1129,6 +1129,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                 "expired_count": expired_count,
                 "frigate_version": ver_str,
                 "supports_dynamic_toggle": supports_dyn,
+                "supports_restart_report": True,
         }
         sensor = domain_data.get("mask_sensor")
         if sensor:
@@ -1335,6 +1336,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
             _LOGGER.warning("Error reconciling Frigate temporary masks from config: %s", e)
 
     async def async_handle_add_mask(call: ServiceCall):
+        restarted_frigate = False
         camera = (call.data.get("camera") or "").strip()
         raw_event_id = call.data.get("event_id")
         event_id = str(raw_event_id).strip().strip("\"'") if raw_event_id is not None else ""
@@ -1554,6 +1556,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
 
                 # Restart applied all pending changes
                 domain_data["pending_restart_masks"].clear()
+                restarted_frigate = True
             except Exception as e:
                 _LOGGER.error("Failed to save Frigate config: %s", e)
                 raise HomeAssistantError(f"Failed to save the temporary mask to Frigate: {e}") from e
@@ -1601,6 +1604,11 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
             _LOGGER.info("Added temporary mask %s for %s (%s hours)", mask_id, camera, duration_hours)
         else:
             _LOGGER.info("Added temporary mask %s for %s (infinite / no auto-expiration)", mask_id, camera)
+
+        return {
+            "restarted": restarted_frigate,
+            "duration_only": is_duration_only,
+        }
 
     async def _async_remove_mask(raw_mask_id: object) -> None:
         """Remove a temporary mask by id.
@@ -1912,6 +1920,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
 
     async_register_admin_service(
         hass, DOMAIN, "add_mask", async_handle_add_mask,
+        supports_response=SupportsResponse.OPTIONAL,
         schema=vol.Schema({
             vol.Required("event_id"): str,
             vol.Optional("camera"): str,

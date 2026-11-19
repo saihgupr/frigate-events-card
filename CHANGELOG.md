@@ -1,5 +1,8 @@
 # Changelog
 
+## [2.7.4.2] - 2026-11-19
+- Fixed: **Mask toasts now say when Frigate restarts** — on Frigate 0.18+ the card used `supports_dynamic_toggle` for the add toast and said only `Mask applied.`, even though a new mask still saves the config with `save_option=restart`. `add_mask` now reports whether it restarted Frigate, so applying a mask says `Mask applied. Frigate is restarting.`, and editing one says `Mask updated. Frigate is restarting.` only when the polygon or label changed. Plain re-saves still say `Mask updated.` because they do not restart Frigate.
+
 ## [2.7.4] - 2026-11-19
 - Fixed: **Timeline events on Frigate 0.18 now start on the event** — 0.18 could begin a VOD chunk on the recording segment before the requested second. On 0.18+ the card starts the chunk on the event and uses the event thumbnail frame minus 2 seconds; 0.13 keeps the old behavior, and `timeline_event_seek_offset` still wins when set.
 - Fixed: **Timeline markers are easier to click** — short events drew a ~3px bar, so clicks beside it hit the scrubber and skipped the event offset. The bars now have a wider invisible hit area.
