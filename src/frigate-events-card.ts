@@ -456,6 +456,11 @@ export class FrigateEventsCard extends LitElement {
   }
 
   private _cleanup(): void {
+    // Modals live on document.body, so a re-rendered card would otherwise
+    // leave one open on an old instance whose config no longer matches.
+    if (this._timelineContainer) this._removeTimelineModal();
+    if (this._maskManagerContainer) this._removeMaskManagerModal();
+    this._closeContextMenu();
     if (this._unsubscribe) {
       this._unsubscribe();
       this._unsubscribe = undefined;
@@ -3869,6 +3874,18 @@ export class FrigateEventsCard extends LitElement {
         pointer-events: auto;
         transition: opacity 0.15s ease, top 0.15s ease, bottom 0.15s ease;
         z-index: 2;
+      }
+
+      /* Short events are only a few pixels wide; widen the click target
+         without changing how the bar looks. */
+      .timeline-event-marker::before {
+        content: '';
+        position: absolute;
+        top: -4px;
+        bottom: -4px;
+        left: 50%;
+        width: max(100%, 16px);
+        transform: translateX(-50%);
       }
 
       .timeline-event-marker:hover {
@@ -9239,6 +9256,14 @@ export class FrigateEventsCard extends LitElement {
         const baseTs = ev ? (this._getTimelineEventSeekTs(ev) || fallbackTs) : fallbackTs;
         if (baseTs > 0 && this._timelineVideoEl) {
           const targetTs = Math.max(this._timelineStartTs, Math.min(this._timelineEndTs, baseTs));
+          if (this._config?.debug) {
+            console.debug('Frigate Events Card: timeline event seek', {
+              eventId,
+              eventStart: start,
+              configuredOffset: this._userConfig?.timeline_event_seek_offset,
+              targetTs,
+            });
+          }
 
           // The event may be outside the currently loaded VOD chunk; load a new
           // chunk around it instead of clamping the seek to the chunk edge.
