@@ -24,6 +24,10 @@ const HOVER_CROP_MARGIN_PERCENT = 0.20; // 20% margin on each side of the contai
 // below that limit and page through recordings for larger timeline windows.
 const TIMELINE_VOD_MAX_CLIPS = 900;
 
+// Frigate 0.18's thumbnail frame lands a little after the first clear view of
+// the action, so event jumps back up slightly to open on the movement itself.
+const TIMELINE_018_EVENT_SEEK_ADJUST_SEC = -2;
+
 const escapeHtml = (value: unknown): string => String(value ?? '')
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -283,6 +287,8 @@ export class FrigateEventsCard extends LitElement {
   private _timelineStartOutsideHandler?: (e: PointerEvent) => void;
   private _timelineEarliestFootageTs = 0;
   private _timelineSkipStateKey = '';
+  // Cached Frigate version for playback behavior that changed between releases.
+  private _frigateVersionTuple: [number, number, number] | null | undefined;
   // Requested wall-clock position while a chunk is still buffering, so rapid
   // skip presses accumulate instead of reading video.currentTime = 0.
   private _timelinePendingSeekTs = 0;
@@ -450,6 +456,11 @@ export class FrigateEventsCard extends LitElement {
   }
 
   private _cleanup(): void {
+    // Modals live on document.body, so a re-rendered card would otherwise
+    // leave one open on an old instance whose config no longer matches.
+    if (this._timelineContainer) this._removeTimelineModal();
+    if (this._maskManagerContainer) this._removeMaskManagerModal();
+    this._closeContextMenu();
     if (this._unsubscribe) {
       this._unsubscribe();
       this._unsubscribe = undefined;
@@ -3863,6 +3874,18 @@ export class FrigateEventsCard extends LitElement {
         pointer-events: auto;
         transition: opacity 0.15s ease, top 0.15s ease, bottom 0.15s ease;
         z-index: 2;
+      }
+
+      /* Short events are only a few pixels wide; widen the click target
+         without changing how the bar looks. */
+      .timeline-event-marker::before {
+        content: '';
+        position: absolute;
+        top: -4px;
+        bottom: -4px;
+        left: 50%;
+        width: max(100%, 16px);
+        transform: translateX(-50%);
       }
 
       .timeline-event-marker:hover {
@@ -7697,6 +7720,76 @@ export class FrigateEventsCard extends LitElement {
      Continuous Footage Timeline Scrubber & Player Modal (Frigate 0.13)
      ───────────────────────────────────────────────────────────── */
 
+  private _parseFrigateVersion(raw: unknown): [number, number, number] | null {
+    if (typeof raw !== 'string') return null;
+    const match = raw.trim().match(/^v?(\d+)\.(\d+)(?:[.\-](\d+))?/);
+    if (!match) return null;
+    return [Number(match[1]), Number(match[2]), Number(match[3] || 0)];
+  }
+
+  /**
+   * Running Frigate version, read from the Frigate temp-mask sensor attributes.
+   * Cached because it only changes when Frigate is upgraded.
+   */
+  private _getFrigateVersionTuple(): [number, number, number] | null {
+    if (this._frigateVersionTuple !== undefined) return this._frigateVersionTuple;
+    this._frigateVersionTuple = null;
+    const states = this.hass?.states;
+    if (states) {
+      for (const entityId of Object.keys(states)) {
+        const attrs = (states as Record<string, { attributes?: Record<string, unknown> }>)[entityId]?.attributes;
+        if (attrs && attrs.frigate_version !== undefined) {
+          const parsed = this._parseFrigateVersion(attrs.frigate_version);
+          if (parsed) {
+            this._frigateVersionTuple = parsed;
+            break;
+          }
+        }
+      }
+    }
+    return this._frigateVersionTuple;
+  }
+
+  /**
+   * Frigate 0.18 rewrote recording playback and can begin a VOD request at the
+   * recording segment holding the requested second, which lands up to a
+   * segment (~10s) before an event. Starting the request on the event itself
+   * keeps 0.18 aligned while leaving 0.13's original behavior untouched.
+   */
+  private _supportsAnchoredTimelineSeek(): boolean {
+    const version = this._getFrigateVersionTuple();
+    if (!version) return false;
+    return version[0] > 0 || version[1] >= 18;
+  }
+
+  /**
+   * The frame Frigate used for the event thumbnail. On 0.18 the event's
+   * start_time can sit a few seconds before the object is clearly visible,
+   * while the thumbnail is the moment the event actually happened.
+   */
+  private _getEventActionTimestamp(event?: FrigateEvent): number {
+    if (!event) return 0;
+    const snapshotTs = event.data?.snapshot_frame_time;
+    if (typeof snapshotTs === 'number' && Number.isFinite(snapshotTs) && snapshotTs > 0) {
+      return snapshotTs;
+    }
+    return event.start_time || 0;
+  }
+
+  /**
+   * Wall-clock target for an event jump. 0.18+ uses the thumbnail frame with
+   * a small backward adjustment unless the user pinned an explicit timeline
+   * offset; older Frigate keeps the start_time plus clip skip behavior.
+   */
+  private _getTimelineEventSeekTs(event?: FrigateEvent): number {
+    if (!event) return 0;
+    const configured = this._userConfig?.timeline_event_seek_offset;
+    if ((configured === undefined || configured === null) && this._supportsAnchoredTimelineSeek()) {
+      return this._getEventActionTimestamp(event) + TIMELINE_018_EVENT_SEEK_ADJUST_SEC;
+    }
+    return (event.start_time || 0) + this._getEventSeekOffset(event);
+  }
+
   private _getEventSeekOffset(event?: FrigateEvent): number {
     const configured = this._userConfig?.timeline_event_seek_offset;
     if (configured !== undefined && configured !== null) {
@@ -8091,7 +8184,12 @@ export class FrigateEventsCard extends LitElement {
       ? initialEvent.start_time
       : (initialTimestamp && initialTimestamp > 0 ? initialTimestamp : (Date.now() / 1000));
     const baseTargetTs = baseEventTs;
-    let targetSeekTs = initialTimestamp && initialTimestamp > 0 ? (baseTargetTs + seekOffset) : baseTargetTs;
+    let targetSeekTs = baseTargetTs;
+    if (initialTimestamp && initialTimestamp > 0) {
+      targetSeekTs = initialEvent
+        ? this._getTimelineEventSeekTs(initialEvent)
+        : baseTargetTs + seekOffset;
+    }
 
     // Center the event in window or place it near the end
     const now = Math.floor(Date.now() / 1000);
@@ -8113,13 +8211,11 @@ export class FrigateEventsCard extends LitElement {
       if (!initialEvent && initialTimestamp && initialTimestamp > 0) {
         const matched = this._timelineEvents.find(e => Math.abs((e.start_time || 0) - initialTimestamp) < 2);
         if (matched) {
-          seekOffset = this._getEventSeekOffset(matched);
-          const base = matched.start_time || initialTimestamp;
-          targetSeekTs = base + seekOffset;
+          targetSeekTs = this._getTimelineEventSeekTs(matched);
         }
       }
       this._updateTimelineScrubberEvents();
-      this._loadTimelineVideo(targetSeekTs);
+      this._loadTimelineVideo(targetSeekTs, false, false, openedFromEvent);
       return;
     }
 
@@ -8217,13 +8313,11 @@ export class FrigateEventsCard extends LitElement {
     if (!initialEvent && initialTimestamp && initialTimestamp > 0) {
       const matched = this._timelineEvents.find(e => Math.abs((e.start_time || 0) - initialTimestamp) < 2);
       if (matched) {
-        seekOffset = this._getEventSeekOffset(matched);
-        const base = matched.start_time || initialTimestamp;
-        targetSeekTs = base + seekOffset;
+        targetSeekTs = this._getTimelineEventSeekTs(matched);
       }
     }
     this._updateTimelineScrubberEvents();
-    this._loadTimelineVideo(targetSeekTs);
+    this._loadTimelineVideo(targetSeekTs, false, false, openedFromEvent);
   }
 
   private _clearTimelineSpeedInterval(): void {
@@ -8585,7 +8679,11 @@ export class FrigateEventsCard extends LitElement {
    * Returns the VOD chunk bounds and the closest wall-clock seek position that
    * actually has footage, skipping gaps such as overnight periods.
    */
-  private _resolveTimelineVodWindow(seekTargetTs?: number, isAutoAdvance = false): { startTs: number; endTs: number; seekTs: number } {
+  private _resolveTimelineVodWindow(
+    seekTargetTs?: number,
+    isAutoAdvance = false,
+    anchorAtTarget = false
+  ): { startTs: number; endTs: number; seekTs: number } {
     const windowStart = this._timelineStartTs;
     const windowEnd = this._timelineEndTs;
     const recordings = this._timelineRecordings.filter(
@@ -8623,6 +8721,30 @@ export class FrigateEventsCard extends LitElement {
 
     const startTs = Math.max(windowStart, Math.floor(chunk[0].start_time));
     const endTs = Math.min(windowEnd, Math.ceil(chunk[chunk.length - 1].end_time));
+
+    // On Frigate 0.18+ an explicit jump (event open or marker click) starts a
+    // chunk on the target itself. Seeking inside a long chunk can begin on the
+    // previous recording segment on that pipeline, which is what made event
+    // playback start ~10s early compared with 0.13.
+    if (anchorAtTarget) {
+      const anchorIdx = recordings.findIndex(rec => rec.end_time > requestedSeek);
+      if (anchorIdx !== -1) {
+        const anchorRec = recordings[anchorIdx];
+        const anchorStartTs = Math.max(
+          windowStart,
+          Math.floor(requestedSeek < anchorRec.start_time ? anchorRec.start_time : requestedSeek)
+        );
+        const anchorEndIdx = Math.min(recordings.length, anchorIdx + TIMELINE_VOD_MAX_CLIPS);
+        const anchorEndTs = Math.min(windowEnd, Math.ceil(recordings[anchorEndIdx - 1].end_time));
+        if (anchorEndTs > anchorStartTs) {
+          return {
+            startTs: anchorStartTs,
+            endTs: anchorEndTs,
+            seekTs: Math.max(anchorStartTs, Math.min(anchorEndTs, requestedSeek)),
+          };
+        }
+      }
+    }
 
     return {
       startTs,
@@ -8678,13 +8800,19 @@ export class FrigateEventsCard extends LitElement {
     return lastEnd;
   }
 
-  private _loadTimelineVideo(seekTargetTs?: number, isAutoAdvance = false, keepPaused = false): void {
+  private _loadTimelineVideo(
+    seekTargetTs?: number,
+    isAutoAdvance = false,
+    keepPaused = false,
+    anchorAtTarget = false
+  ): void {
     if (!this._timelineContainer || !this._timelineCamera) return;
     if (!isAutoAdvance) this._timelineWindowRequestId++;
 
     // Long windows are split into VOD chunks so Frigate's nginx-vod clip limit
     // is never exceeded. Snap the seek target into the chunk that has footage.
-    const vodWindow = this._resolveTimelineVodWindow(seekTargetTs, isAutoAdvance);
+    const anchor = anchorAtTarget && this._supportsAnchoredTimelineSeek();
+    const vodWindow = this._resolveTimelineVodWindow(seekTargetTs, isAutoAdvance, anchor);
     this._timelineVodStartTs = vodWindow.startTs;
     this._timelineVodEndTs = vodWindow.endTs;
     seekTargetTs = vodWindow.seekTs;
@@ -9124,15 +9252,23 @@ export class FrigateEventsCard extends LitElement {
         const eventId = (marker as HTMLElement).getAttribute('data-event-id');
         const ev = this._timelineEvents.find(item => item.id === eventId);
         const start = (ev && ev.start_time) ? ev.start_time : parseFloat((marker as HTMLElement).getAttribute('data-event-start') || '0');
-        const baseTs = start;
-        const seekOffset = this._getEventSeekOffset(ev);
+        const fallbackTs = start + this._getEventSeekOffset(ev);
+        const baseTs = ev ? (this._getTimelineEventSeekTs(ev) || fallbackTs) : fallbackTs;
         if (baseTs > 0 && this._timelineVideoEl) {
-          const targetTs = Math.max(this._timelineStartTs, Math.min(this._timelineEndTs, baseTs + seekOffset));
+          const targetTs = Math.max(this._timelineStartTs, Math.min(this._timelineEndTs, baseTs));
+          if (this._config?.debug) {
+            console.debug('Frigate Events Card: timeline event seek', {
+              eventId,
+              eventStart: start,
+              configuredOffset: this._userConfig?.timeline_event_seek_offset,
+              targetTs,
+            });
+          }
 
           // The event may be outside the currently loaded VOD chunk; load a new
           // chunk around it instead of clamping the seek to the chunk edge.
           if (targetTs < this._timelineVodStartTs || targetTs > this._timelineVodEndTs) {
-            this._loadTimelineVideo(targetTs);
+            this._loadTimelineVideo(targetTs, false, false, true);
             return;
           }
 
