@@ -1,5 +1,8 @@
 # Changelog
 
+## [2.7.4] - 2026-11-19
+- Fixed: **Timeline events missed the action on Frigate 0.18** — clicking an event or its timeline marker seeked inside a long VOD chunk, and 0.18's playback pipeline could begin on the recording segment that contains the requested second, which plays up to a segment before the event. The card now reads the running Frigate version and, on 0.18+, starts the VOD chunk on the event itself and anchors it to the frame Frigate used for the event thumbnail (`snapshot_frame_time`) minus 2 seconds, so playback opens on the movement instead of the lead-in or the tail of it. Frigate 0.13 keeps the original chunk-and-seek behavior, and `timeline_event_seek_offset` still wins when set.
+
 ## [2.7.3] - 2026-11-17
 - Fixed: **Temporary mask action from the iPhone and Apple Watch** — the mask buttons relied on `action_data` and `tag`, which iOS drops when an action is tapped on the Watch, so `frigate_temp_mask.add_mask` ran with an empty `event_id` and nothing was masked. The event id now travels inside the action identifier (`TEMP_MASK_24H:<event id>`) and the blueprint reads it back out, while `action_data` and `tag` are still used for older notifications.
 - Fixed: **Duplicate mask calls on iOS** — a single tap fires both `ios.notification_action_fired` and `mobile_app_notification_action`. The blueprint now listens only to `mobile_app_notification_action`, so one tap no longer makes two `add_mask` calls, the second of which failed with a 502 while Frigate restarted.
