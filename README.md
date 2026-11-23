@@ -159,6 +159,7 @@ event_click_action: timeline # or detail - which modal opens when clicking an ev
 timeline_on_click: true # legacy alias: false equals event_click_action detail
 timeline_default_window_hours: 1
 timeline_event_seek_offset: 0
+timeline_sync_offset: -3 # seconds; -3 and '-3s' both mean 3 seconds behind
 
 # Optional: Reset display daily at a specific time (24hr format)
 daily_clear_time: "04:00"
@@ -293,7 +294,7 @@ The Timeline modal plays continuous recordings from Frigate 0.13+ VOD, so you ca
 - **Window size**: Switch between `15m`, `30m`, `1h`, `2h`, `3h`, and `24h` recording windows.
 - **Opening window**: Opening from an event uses 30 minutes on desktop and 15 minutes on phone/tablet/TV. Opening without an event, such as from the live feed, starts with the last 24 hours.
 - **Fine controls**: Nudge playback with `-1m`, `-30s`, `-10s`, `+10s`, `+30s`, and `+1m` buttons. They move by wall-clock time, cross recording gaps and window edges, and stop at the start of footage or now.
-- **Timestamp sync**: If the clock above the playhead sits a few seconds ahead of or behind the footage, use the Sync `−5s`, `−1s`, `+1s`, and `+5s` buttons to line the frame up with the displayed time. The offset is saved per camera, survives reopening the timeline, and clicking the value resets it to `0s`.
+- **Timestamp sync**: If the clock above the playhead sits a few seconds ahead of or behind the footage, set `timeline_sync_offset` in the card config. A value like `-3` or `-3s` moves the displayed time 3 seconds behind the footage; positive values move it forward.
 - **Variable speed**: Use the `-`/`+` controls to step from `0.5x` up to `4096x` (speeds above `16x` use frame stepping), with gapless auto-advance across recording chunks.
 
 > **Note:** Timeline playback requires the Frigate integration and access to Frigate's VOD recordings. Streams are signed automatically, so HLS playback works on iOS Safari, the Home Assistant Companion App, and authenticated reverse proxies.
@@ -508,6 +509,7 @@ The most common settings to get you started:
 | `timeline_on_click` | boolean | `true` | Legacy: `false` opens details instead of Timeline (same as `event_click_action: detail`). Open the Timeline directly when clicking an event thumbnail (requires `video` and `show_timeline`). |
 | `timeline_default_window_hours` | number | `0.5` desktop / `0.25` mobile | Default window when opening from an event. When unset, desktop uses 30 minutes and phone/tablet/TV uses 15 minutes. Opening without an event always starts at 24 hours. |
 | `timeline_event_seek_offset` | number \| map | thumbnail frame on Frigate 0.18+, `video_start_skip_seconds` on 0.13 | Seconds added/subtracted when seeking to an event in the Timeline (e.g. `5` or `-5`). Supports per-label/zone map. When unset on Frigate 0.18+, the Timeline opens 2 seconds before the frame Frigate used for the event thumbnail, which is the moment the event took place. On 0.13 it reuses `video_start_skip_seconds` so it starts where event clips start. Set a value to override both. |
+| `timeline_sync_offset` | number \| string | `0` | Shifts the timeline clock against the footage. `-3`, `-3s`, and `'+2.5s'` are all accepted. Negative values move the displayed time behind the frames; positive values move it forward. Applied to the scrubber clock and event seeks. |
 | `timeline_show_mute` | boolean | `true` | Show the mute toggle button on hover over the Timeline video player. Setting `show_mute: false` (or `live_view_show_mute: false`) also hides it; an explicit `timeline_show_mute` wins. |
 
 ### Advanced Detail Modal & Debug Settings
