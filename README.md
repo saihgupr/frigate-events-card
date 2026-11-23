@@ -293,6 +293,7 @@ The Timeline modal plays continuous recordings from Frigate 0.13+ VOD, so you ca
 - **Window size**: Switch between `15m`, `30m`, `1h`, `2h`, `3h`, and `24h` recording windows.
 - **Opening window**: Opening from an event uses 30 minutes on desktop and 15 minutes on phone/tablet/TV. Opening without an event, such as from the live feed, starts with the last 24 hours.
 - **Fine controls**: Nudge playback with `-1m`, `-30s`, `-10s`, `+10s`, `+30s`, and `+1m` buttons. They move by wall-clock time, cross recording gaps and window edges, and stop at the start of footage or now.
+- **Timestamp sync**: If the clock above the playhead sits a few seconds ahead of or behind the footage, use the Sync `−5s`, `−1s`, `+1s`, and `+5s` buttons to line the frame up with the displayed time. The offset is saved per camera, survives reopening the timeline, and clicking the value resets it to `0s`.
 - **Variable speed**: Use the `-`/`+` controls to step from `0.5x` up to `4096x` (speeds above `16x` use frame stepping), with gapless auto-advance across recording chunks.
 
 > **Note:** Timeline playback requires the Frigate integration and access to Frigate's VOD recordings. Streams are signed automatically, so HLS playback works on iOS Safari, the Home Assistant Companion App, and authenticated reverse proxies.

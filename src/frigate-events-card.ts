@@ -300,6 +300,10 @@ export class FrigateEventsCard extends LitElement {
   // skip presses accumulate instead of reading video.currentTime = 0.
   private _timelinePendingSeekTs = 0;
   private _timelinePendingSeekUntil = 0;
+  // Per-camera adjustment between footage and wall-clock timestamps. A few
+  // recording pipelines start a segment slightly before or after its nominal
+  // start time, so the scrubber clock can disagree with the visible frame.
+  private _timelineSyncOffsetSec = 0;
   private _timelineKeyDownHandler?: (e: KeyboardEvent) => void;
 
 
@@ -2981,10 +2985,10 @@ export class FrigateEventsCard extends LitElement {
         margin-top: 10px;
       }
 
-      .mask-create-select {
-        width: 100%;
-        box-sizing: border-box;
-        appearance: auto;
+      .mask-create-cameras {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
       }
 
       .mask-pending-section {
@@ -3273,6 +3277,8 @@ export class FrigateEventsCard extends LitElement {
       .timeline-start-step-btn:focus-visible,
       .timeline-start-apply:focus-visible,
       .timeline-start-cancel:focus-visible,
+      .timeline-sync-btn:focus-visible,
+      .timeline-sync-value:focus-visible,
       .timeline-mute-btn:focus-visible {
         outline: 2px solid var(--tl-accent);
         outline-offset: 2px;
@@ -3730,6 +3736,86 @@ export class FrigateEventsCard extends LitElement {
 
       .timeline-window-group .timeline-window-pill.active {
         box-shadow: 0 2px 6px color-mix(in srgb, var(--tl-accent) 35%, transparent);
+      }
+
+      /* Timestamp sync: small ±seconds correction between clock and footage */
+      .timeline-sync-group {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 3px 4px 3px 10px;
+        border: 1px solid var(--tl-line);
+        border-radius: 12px;
+        background: var(--tl-fill);
+        box-sizing: border-box;
+      }
+
+      .timeline-sync-group .timeline-datetime-label {
+        padding-right: 2px;
+      }
+
+      .timeline-sync-controls {
+        display: inline-flex;
+        align-items: center;
+        gap: 2px;
+      }
+
+      .timeline-sync-btn {
+        height: 30px;
+        padding: 0 8px;
+        font-size: 12px;
+        font-weight: 500;
+        font-family: inherit;
+        border: none;
+        border-radius: 8px;
+        background: none;
+        color: var(--tl-text-2);
+        white-space: nowrap;
+        cursor: pointer;
+        transition: background 0.15s ease, color 0.15s ease;
+      }
+
+      .timeline-sync-btn:hover:not(:disabled) {
+        background: var(--tl-fill-hover);
+        color: var(--tl-text);
+      }
+
+      .timeline-sync-btn:disabled {
+        opacity: 0.35;
+        cursor: default;
+      }
+
+      .timeline-sync-value {
+        min-width: 40px;
+        height: 30px;
+        padding: 0 6px;
+        font-size: 12px;
+        font-weight: 500;
+        font-family: inherit;
+        font-variant-numeric: tabular-nums;
+        color: var(--tl-text-2);
+        background: none;
+        border: none;
+        border-radius: 8px;
+        white-space: nowrap;
+        cursor: pointer;
+        transition: background 0.15s ease, color 0.15s ease;
+      }
+
+      .timeline-sync-value:hover {
+        background: var(--tl-fill-hover);
+        color: var(--tl-text);
+      }
+
+      .timeline-sync-group.is-adjusted .timeline-sync-value {
+        color: var(--tl-accent);
+        font-weight: 600;
+      }
+
+      .timeline-sheet-hint {
+        font-size: 12px;
+        line-height: 1.4;
+        color: var(--tl-text-2);
       }
 
       /* Video player */
@@ -4547,7 +4633,9 @@ export class FrigateEventsCard extends LitElement {
       }
 
       .frigate-timeline-modal.is-compact .timeline-settings-sheet .timeline-window-group,
-      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-window-group {
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-window-group,
+      .frigate-timeline-modal.is-compact .timeline-settings-sheet .timeline-sync-group,
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-sync-group {
         padding: 0;
         border-color: transparent;
         background: transparent;
@@ -4962,6 +5050,29 @@ export class FrigateEventsCard extends LitElement {
         flex-direction: column;
         align-items: stretch;
         gap: 10px;
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-settings-sheet .timeline-sync-group,
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-sync-group {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 8px;
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-settings-sheet .timeline-sync-controls,
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-sync-controls {
+        display: flex;
+        gap: 4px;
+      }
+
+      .frigate-timeline-modal.is-compact .timeline-settings-sheet .timeline-sync-btn,
+      .frigate-timeline-modal.is-compact .timeline-settings-sheet .timeline-sync-value,
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-sync-btn,
+      .frigate-timeline-modal.is-tv .timeline-settings-sheet .timeline-sync-value {
+        height: 44px;
+        padding: 0 10px;
+        font-size: 14px;
+        flex: 1 1 auto;
       }
 
       /* Landscape phones: keep the popup card framing (inset + radius + border
@@ -6776,9 +6887,9 @@ export class FrigateEventsCard extends LitElement {
       : '';
 
     const cameraControl = cameras.length > 0
-      ? `<select class="mask-edit-input mask-create-select" data-create-camera aria-label="Camera for the new mask">
-          ${cameras.map(cam => `<option value="${escapeHtml(cam)}" ${cam === camera ? 'selected' : ''}>${escapeHtml(this._formatCameraName(cam))}</option>`).join('')}
-        </select>`
+      ? `<div class="mask-create-cameras" role="group" aria-label="Camera for the new mask">
+          ${cameras.map(cam => `<button type="button" class="mask-chip ${cam === camera ? 'active' : ''}" data-create-camera="${escapeHtml(cam)}">${escapeHtml(this._formatCameraName(cam))}</button>`).join('')}
+        </div>`
       : `<span class="mask-edit-hint">No cameras found. Add a camera or load events first.</span>`;
 
     return `
@@ -7271,7 +7382,8 @@ export class FrigateEventsCard extends LitElement {
         e.stopPropagation();
         const panel = container.querySelector('[data-create-panel]') as HTMLElement | null;
         if (!panel) return;
-        const camera = (panel.querySelector('[data-create-camera]') as HTMLSelectElement | null)?.value
+        const camera = (panel.querySelector('[data-create-camera].active') as HTMLElement | null)
+          ?.getAttribute('data-create-camera')
           || this._maskCreateCamera;
         const polygon = panel.getAttribute('data-norm-poly') || '';
         const label = ((panel.querySelector('[data-create-label]') as HTMLInputElement | null)?.value || '').trim();
@@ -7279,8 +7391,8 @@ export class FrigateEventsCard extends LitElement {
       });
     });
 
-    container.querySelectorAll('[data-create-camera]').forEach(select => {
-      select.addEventListener('change', (e) => {
+    container.querySelectorAll('[data-create-camera]').forEach(cameraBtn => {
+      cameraBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         const panel = container.querySelector('[data-create-panel]');
         if (panel) {
@@ -7289,7 +7401,9 @@ export class FrigateEventsCard extends LitElement {
           const labelInput = panel.querySelector('[data-create-label]') as HTMLInputElement | null;
           if (labelInput) this._maskCreateLabel = labelInput.value;
         }
-        this._maskCreateCamera = (select as HTMLSelectElement).value;
+        const cam = (cameraBtn as HTMLElement).getAttribute('data-create-camera') || '';
+        if (!cam) return;
+        this._maskCreateCamera = cam;
         this._renderMaskManagerContent(container);
         void this._refreshMaskManagerSnapshots();
       });
@@ -8393,6 +8507,67 @@ export class FrigateEventsCard extends LitElement {
     `;
   }
 
+  private _timelineSyncValueText(): string {
+    const value = this._timelineSyncOffsetSec;
+    if (!value) return '0s';
+    return `${value > 0 ? '+' : '−'}${Math.abs(value)}s`;
+  }
+
+  private _timelineSyncStorageKey(camera = this._timelineCamera): string {
+    const clientId = this._config?.frigate_client_id || 'frigate';
+    return `frigate-events-card:timeline_sync:${clientId}:${camera || ''}`;
+  }
+
+  private _loadTimelineSyncOffset(camera?: string): void {
+    let stored = 0;
+    try {
+      stored = Number(localStorage.getItem(this._timelineSyncStorageKey(camera))) || 0;
+    } catch {
+      stored = 0;
+    }
+    this._timelineSyncOffsetSec = Math.max(-30, Math.min(30, Math.round(stored)));
+  }
+
+  private _saveTimelineSyncOffset(): void {
+    try {
+      localStorage.setItem(this._timelineSyncStorageKey(), String(this._timelineSyncOffsetSec));
+    } catch {
+      // Storage can be unavailable in private or restricted webviews.
+    }
+  }
+
+  /** Buttons for nudging the timestamp mapping a few seconds at a time. */
+  private _timelineSyncControlsMarkup(): string {
+    return `
+      <div class="timeline-sync-controls" role="group" aria-label="Sync timeline timestamps with the footage">
+        <button type="button" class="timeline-sync-btn" data-sync-offset="-5" title="Show timestamps 5 seconds earlier" aria-label="Timestamps 5 seconds earlier">−5s</button>
+        <button type="button" class="timeline-sync-btn" data-sync-offset="-1" title="Show timestamps 1 second earlier" aria-label="Timestamps 1 second earlier">−1s</button>
+        <button type="button" class="timeline-sync-value" data-action="reset-sync" data-timeline-sync-value title="Reset timestamp sync" aria-label="Reset timestamp sync">${escapeHtml(this._timelineSyncValueText())}</button>
+        <button type="button" class="timeline-sync-btn" data-sync-offset="1" title="Show timestamps 1 second later" aria-label="Timestamps 1 second later">+1s</button>
+        <button type="button" class="timeline-sync-btn" data-sync-offset="5" title="Show timestamps 5 seconds later" aria-label="Timestamps 5 seconds later">+5s</button>
+      </div>
+    `;
+  }
+
+  private _updateTimelineSyncUI(): void {
+    const container = this._timelineContainer;
+    if (!container) return;
+    const text = this._timelineSyncValueText();
+    container.querySelectorAll('[data-timeline-sync-value]').forEach(element => {
+      element.textContent = text;
+    });
+    container.querySelectorAll('.timeline-sync-group').forEach(group => {
+      group.classList.toggle('is-adjusted', this._timelineSyncOffsetSec !== 0);
+    });
+    const atLimit = this._timelineSyncOffsetSec <= -30
+      ? -1
+      : (this._timelineSyncOffsetSec >= 30 ? 1 : 0);
+    container.querySelectorAll<HTMLButtonElement>('[data-sync-offset]').forEach(button => {
+      const delta = parseInt(button.getAttribute('data-sync-offset') || '0', 10);
+      button.disabled = (atLimit < 0 && delta < 0) || (atLimit > 0 && delta > 0);
+    });
+  }
+
   private _timelineControlsMarkup(windowMinutes: number, withHeadings = false): string {
     // Desktop keeps the quick jumps inside the picker; the compact/TV sheet
     // shows them directly so a jump stays one tap away.
@@ -8415,6 +8590,11 @@ export class FrigateEventsCard extends LitElement {
       <div class="timeline-controls-bar">
         ${timeGroup}
 
+        <div class="timeline-sync-group">
+          <span class="timeline-datetime-label">Sync</span>
+          ${this._timelineSyncControlsMarkup()}
+        </div>
+
         ${windowGroup}
       </div>
     `;
@@ -8425,6 +8605,14 @@ export class FrigateEventsCard extends LitElement {
           <div class="timeline-sheet-heading">Time</div>
           ${timeGroup}
           ${this._timelineQuickJumpMarkup()}
+        </div>
+
+        <div class="timeline-sheet-section">
+          <div class="timeline-sheet-heading">Timestamp sync</div>
+          <div class="timeline-sync-group">
+            ${this._timelineSyncControlsMarkup()}
+          </div>
+          <span class="timeline-sheet-hint">Nudge the clock back or forward a few seconds until the frame matches the time shown.</span>
         </div>
 
         <div class="timeline-sheet-section">
@@ -8539,6 +8727,7 @@ export class FrigateEventsCard extends LitElement {
     const availableCameras = this._getAvailableCameras();
     const camera = initialCamera || this._timelineCamera || (availableCameras.length > 0 ? availableCameras[0] : (this._config?.camera || ''));
     this._timelineCamera = camera;
+    this._loadTimelineSyncOffset(camera);
 
     // Determine initial time window:
     // - no event (live feed / plain Timeline action): last 24 hours
@@ -8589,6 +8778,7 @@ export class FrigateEventsCard extends LitElement {
 
     if (this._timelineContainer) {
       this._updateTimelineWindowUI();
+      this._updateTimelineSyncUI();
       await this._fetchTimelineEvents();
       if (!initialEvent && initialTimestamp && initialTimestamp > 0) {
         const matched = this._timelineEvents.find(e => Math.abs((e.start_time || 0) - initialTimestamp) < 2);
@@ -9138,8 +9328,11 @@ export class FrigateEventsCard extends LitElement {
   private _wallClockToVideoOffset(targetTs: number): number {
     const vodStart = this._timelineVodStartTs || this._timelineStartTs;
     const vodEnd = this._timelineVodEndTs || this._timelineEndTs;
+    // Undo the user's timestamp sync so a requested wall-clock time lands on
+    // the frame that actually shows it.
+    const adjustedTs = targetTs - this._timelineSyncOffsetSec;
     if (!this._timelineRecordings.length) {
-      return Math.max(0, targetTs - vodStart);
+      return Math.max(0, adjustedTs - vodStart);
     }
     let videoSeconds = 0;
     for (const rec of this._timelineRecordings) {
@@ -9147,10 +9340,10 @@ export class FrigateEventsCard extends LitElement {
       const recEnd = Math.min(vodEnd, rec.end_time);
       if (recEnd <= recStart) continue;
 
-      if (recEnd <= targetTs) {
+      if (recEnd <= adjustedTs) {
         videoSeconds += (recEnd - recStart);
-      } else if (recStart < targetTs) {
-        videoSeconds += Math.max(0, targetTs - recStart);
+      } else if (recStart < adjustedTs) {
+        videoSeconds += Math.max(0, adjustedTs - recStart);
         return videoSeconds;
       } else {
         return videoSeconds;
@@ -9162,24 +9355,28 @@ export class FrigateEventsCard extends LitElement {
   private _videoOffsetToWallClock(videoOffset: number): number {
     const vodStart = this._timelineVodStartTs || this._timelineStartTs;
     const vodEnd = this._timelineVodEndTs || this._timelineEndTs;
-    if (!this._timelineRecordings.length) {
-      return vodStart + videoOffset;
-    }
-    let accumulated = 0;
-    let lastEnd = vodStart;
-    for (const rec of this._timelineRecordings) {
-      const recStart = Math.max(vodStart, rec.start_time);
-      const recEnd = Math.min(vodEnd, rec.end_time);
-      if (recEnd <= recStart) continue;
-      lastEnd = recEnd;
+    let base = vodStart + videoOffset;
+    if (this._timelineRecordings.length) {
+      let accumulated = 0;
+      let lastEnd = vodStart;
+      let matched = false;
+      for (const rec of this._timelineRecordings) {
+        const recStart = Math.max(vodStart, rec.start_time);
+        const recEnd = Math.min(vodEnd, rec.end_time);
+        if (recEnd <= recStart) continue;
+        lastEnd = recEnd;
 
-      const dur = recEnd - recStart;
-      if (accumulated + dur >= videoOffset) {
-        return recStart + (videoOffset - accumulated);
+        const dur = recEnd - recStart;
+        if (accumulated + dur >= videoOffset) {
+          base = recStart + (videoOffset - accumulated);
+          matched = true;
+          break;
+        }
+        accumulated += dur;
       }
-      accumulated += dur;
+      if (!matched) base = lastEnd;
     }
-    return lastEnd;
+    return base + this._timelineSyncOffsetSec;
   }
 
   private _loadTimelineVideo(
@@ -10389,6 +10586,7 @@ export class FrigateEventsCard extends LitElement {
         const cam = (tab as HTMLElement).getAttribute('data-camera');
         if (cam && cam !== this._timelineCamera) {
           this._timelineCamera = cam;
+          this._loadTimelineSyncOffset(cam);
           this._timelineEarliestFootageTs = 0;
           this._timelineSkipStateKey = '';
           this._timelinePendingSeekTs = 0;
@@ -10401,6 +10599,7 @@ export class FrigateEventsCard extends LitElement {
             badge.textContent = this._formatCameraName(cam);
           }
           this._updateTimelineWindowUI();
+          this._updateTimelineSyncUI();
           await this._fetchTimelineEvents();
           this._updateTimelineScrubberEvents();
           this._loadTimelineVideo(this._timelineStartTs);
@@ -10505,6 +10704,31 @@ export class FrigateEventsCard extends LitElement {
           settingsBtn?.focus({ preventScroll: true });
         }
         void this._runTimelineQuickJump(jump);
+      });
+    });
+
+    // Timestamp sync: shifts the clock mapping a few seconds at a time so the
+    // displayed time can line up with the frame on cameras whose recordings
+    // start slightly early or late. Stored per camera.
+    container.querySelectorAll('[data-sync-offset]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const delta = parseInt((btn as HTMLElement).getAttribute('data-sync-offset') || '0', 10);
+        if (!delta) return;
+        this._timelineSyncOffsetSec = Math.max(-30, Math.min(30, this._timelineSyncOffsetSec + delta));
+        this._saveTimelineSyncOffset();
+        this._updateTimelineSyncUI();
+        this._updateTimelinePlayheadUI();
+      });
+    });
+
+    container.querySelectorAll('[data-action="reset-sync"]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._timelineSyncOffsetSec = 0;
+        this._saveTimelineSyncOffset();
+        this._updateTimelineSyncUI();
+        this._updateTimelinePlayheadUI();
       });
     });
 
