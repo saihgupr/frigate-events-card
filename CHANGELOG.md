@@ -2,7 +2,7 @@
 
 ## [2.7.4.3] - 2026-11-22
 - Added: **Add masks without an event** — the mask editor now has an **Add mask** button. Pick a camera, drag the starting rectangle over its live snapshot, set labels and a duration, and save. The card creates the mask id and calls `frigate_temp_mask.add_mask` with the polygon, so no event is needed. The integration's `add_mask` action now accepts a manual mask (`camera` + `polygon`, optional `label`, no `event_id`) and generates a `manual-<timestamp>` id.
-- Changed: **Temp mask menu is now Mask Editor** — the event and live-feed context menus say **Mask Editor**, and the modal title and docs follow it.
+- Changed: **Temp mask menu is now Manage Masks** — the event and live-feed context menus say **Manage Masks**, and the modal title and docs follow it.
 - Added: **Timeline timestamp sync** — a Sync control in the timeline nudges the clock mapping by `−5s`, `−1s`, `+1s`, or `+5s` so the displayed time lines up with the visible frame on recordings that start slightly early or late. The offset is stored per camera in `localStorage`, applied to both the time badge and every seek, and reset by clicking the value.
 
 ## [2.7.4.2] - 2026-11-19

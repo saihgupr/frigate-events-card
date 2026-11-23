@@ -6155,7 +6155,7 @@ export class FrigateEventsCard extends LitElement {
       ` : ''}
       <button class="frigate-events-context-item" data-action="open-mask-manager">
         <svg viewBox="0 0 24 24"><path d="M2,2H8V4H16V2H22V8H20V16H22V22H16V20H8V22H2V16H4V8H2V2M4,4V6H6V4H4M18,4V6H20V4H18M20,18V20H18V18H20M4,18V20H6V18H4M8,6V8H6V16H8V18H16V16H18V8H16V6H8M9,9H15V15H9V9Z"/></svg>
-        <span>Mask Editor</span>
+        <span>Manage Masks</span>
       </button>
       ${hasTempMaskIntegration ? `
       <div class="frigate-events-context-separator"></div>
@@ -6370,7 +6370,7 @@ export class FrigateEventsCard extends LitElement {
       ${hasTempMaskIntegration ? `
       <button class="frigate-events-context-item" data-action="open-mask-manager">
         <svg viewBox="0 0 24 24"><path d="M2,2H8V4H16V2H22V8H20V16H22V22H16V20H8V22H2V16H4V8H2V2M4,4V6H6V4H4M18,4V6H20V4H18M20,18V20H18V18H20M4,18V20H6V18H4M8,6V8H6V16H8V18H16V16H18V8H16V6H8M9,9H15V15H9V9Z"/></svg>
-        <span>Mask Editor</span>
+        <span>Manage Masks</span>
       </button>
       ` : ''}
     `;
@@ -7254,9 +7254,9 @@ export class FrigateEventsCard extends LitElement {
 
     container.innerHTML = `
       <div class="frigate-events-modal-backdrop" data-action="close"></div>
-      <div class="frigate-events-modal-content" role="dialog" aria-modal="true" aria-label="Mask editor">
+      <div class="frigate-events-modal-content" role="dialog" aria-modal="true" aria-label="Manage masks">
         <div class="mask-manager-header">
-          <h2 class="mask-manager-title">Mask editor</h2>
+          <h2 class="mask-manager-title">Manage Masks</h2>
           <span class="mask-manager-count">${countLabel}</span>
           <div class="mask-header-actions">
             ${canCreateMask ? `
