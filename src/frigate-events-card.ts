@@ -10,7 +10,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.7.4.3';
+const CARD_VERSION = '2.7.4.4';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -2282,7 +2282,9 @@ export class FrigateEventsCard extends LitElement {
         --mm-accent: var(--primary-color, #0a84ff);
         --mm-warn: #ff9f0a;
         --mm-danger: var(--error-color, #ff453a);
+        --mm-fill: rgba(128, 128, 128, 0.13);
         --mm-fill: color-mix(in srgb, var(--mm-text) 7%, transparent);
+        --mm-fill-hover: rgba(128, 128, 128, 0.2);
         --mm-fill-hover: color-mix(in srgb, var(--mm-text) 12%, transparent);
       }
 
@@ -2300,8 +2302,8 @@ export class FrigateEventsCard extends LitElement {
       }
 
       .frigate-mask-manager-modal .frigate-events-modal-close {
-        top: 12px;
-        right: 12px;
+        position: static;
+        flex-shrink: 0;
         width: 32px;
         height: 32px;
         background: var(--mm-fill);
@@ -2316,11 +2318,48 @@ export class FrigateEventsCard extends LitElement {
 
       .mask-manager-header {
         display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-shrink: 0;
+        padding: 16px 16px 12px 24px;
+      }
+
+      .mask-manager-heading {
+        display: flex;
         align-items: baseline;
         flex-wrap: wrap;
-        gap: 8px;
+        gap: 2px 8px;
+        min-width: 0;
+        flex: 1;
+      }
+
+      .mask-back-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 32px;
+        height: 32px;
+        margin-left: -8px;
+        padding: 0;
+        border: none;
+        border-radius: 50%;
+        background: var(--mm-fill);
+        color: var(--mm-text-2);
+        cursor: pointer;
         flex-shrink: 0;
-        padding: 20px 56px 12px 24px;
+        transition: background 0.15s ease, color 0.15s ease;
+      }
+
+      .mask-back-btn:hover {
+        background: var(--mm-fill-hover);
+        color: var(--mm-text);
+      }
+
+      .mask-back-btn svg {
+        width: 20px;
+        height: 20px;
+        fill: currentColor;
+        display: block;
       }
 
       .mask-manager-title {
@@ -2340,55 +2379,65 @@ export class FrigateEventsCard extends LitElement {
         display: flex;
         align-items: center;
         gap: 8px;
-        margin-left: auto;
-        align-self: center;
+        flex-shrink: 0;
       }
 
       .mask-add-btn {
         display: inline-flex;
         align-items: center;
-        gap: 4px;
-        min-height: 32px;
-        padding: 0 12px 0 8px;
+        gap: 5px;
+        height: 32px;
+        padding: 0 12px 0 9px;
         font-size: 13px;
-        font-weight: 600;
+        font-weight: 500;
         font-family: inherit;
-        color: #fff;
-        background: var(--mm-accent);
+        line-height: 1;
+        color: var(--mm-text);
+        background: var(--mm-fill);
         border: none;
-        border-radius: 8px;
+        border-radius: 999px;
+        white-space: nowrap;
         cursor: pointer;
-        transition: filter 0.15s ease;
+        transition: background 0.15s ease, color 0.15s ease;
       }
 
       .mask-add-btn:hover {
-        filter: brightness(1.1);
+        background: var(--mm-fill-hover);
       }
 
       .mask-add-btn svg {
-        width: 18px;
-        height: 18px;
+        width: 15px;
+        height: 15px;
         fill: currentColor;
+        opacity: 0.78;
+        flex-shrink: 0;
       }
 
       .mask-clean-expired-btn {
-        margin-left: 0;
-        margin-right: 0;
-        padding: 4px 10px;
+        display: inline-flex;
+        align-items: center;
+        height: 32px;
+        padding: 0 12px;
         font-size: 12px;
         font-weight: 500;
         font-family: inherit;
-        color: #ff9800;
-        background: rgba(255, 152, 0, 0.12);
-        border: 1px solid rgba(255, 152, 0, 0.35);
-        border-radius: 6px;
+        line-height: 1;
+        color: var(--mm-warn);
+        background: rgba(255, 159, 10, 0.12);
+        background: color-mix(in srgb, var(--mm-warn) 12%, transparent);
+        border: 1px solid rgba(255, 159, 10, 0.35);
+        border: 1px solid color-mix(in srgb, var(--mm-warn) 35%, transparent);
+        border-radius: 999px;
+        white-space: nowrap;
         cursor: pointer;
-        transition: all 0.15s ease;
+        transition: background 0.15s ease, border-color 0.15s ease;
       }
 
       .mask-clean-expired-btn:hover:not(:disabled) {
-        background: rgba(255, 152, 0, 0.22);
-        border-color: rgba(255, 152, 0, 0.6);
+        background: rgba(255, 159, 10, 0.22);
+        background: color-mix(in srgb, var(--mm-warn) 22%, transparent);
+        border-color: rgba(255, 159, 10, 0.6);
+        border-color: color-mix(in srgb, var(--mm-warn) 60%, transparent);
       }
 
       .mask-clean-expired-btn:disabled {
@@ -2513,7 +2562,11 @@ export class FrigateEventsCard extends LitElement {
       .mask-edit-cancel:focus-visible,
       .mask-edit-size-btn:focus-visible,
       .mask-text-btn:focus-visible,
-      .mask-filter-tab:focus-visible {
+      .mask-filter-tab:focus-visible,
+      .mask-add-btn:focus-visible,
+      .mask-back-btn:focus-visible,
+      .mask-clean-expired-btn:focus-visible,
+      .frigate-mask-manager-modal .frigate-events-modal-close:focus-visible {
         outline: 2px solid var(--mm-accent);
         outline-offset: 2px;
       }
@@ -2871,6 +2924,7 @@ export class FrigateEventsCard extends LitElement {
         border: none;
         border-radius: 8px;
         cursor: pointer;
+        transition: background 0.15s ease, color 0.15s ease;
       }
 
       .mask-edit-size-btn:hover {
@@ -2885,6 +2939,8 @@ export class FrigateEventsCard extends LitElement {
       }
 
       .mask-edit-input {
+        width: 100%;
+        box-sizing: border-box;
         min-height: 36px;
         padding: 0 12px;
         font-size: 14px;
@@ -2894,6 +2950,7 @@ export class FrigateEventsCard extends LitElement {
         border: 1px solid var(--mm-line);
         border-radius: 8px;
         outline: none;
+        transition: border-color 0.15s ease;
       }
 
       .mask-edit-input:focus {
@@ -2925,6 +2982,7 @@ export class FrigateEventsCard extends LitElement {
         border: none;
         border-radius: 8px;
         cursor: pointer;
+        transition: background 0.15s ease, color 0.15s ease;
       }
 
       .mask-edit-cancel:hover {
@@ -2943,6 +3001,7 @@ export class FrigateEventsCard extends LitElement {
         border: none;
         border-radius: 8px;
         cursor: pointer;
+        transition: filter 0.15s ease;
       }
 
       .mask-edit-save:hover {
@@ -2955,40 +3014,58 @@ export class FrigateEventsCard extends LitElement {
       }
 
       .mask-create-panel {
-        margin: 4px 12px 12px;
-        padding: 12px;
-        border: 1px solid color-mix(in srgb, var(--mm-accent) 45%, var(--mm-line));
-        border-radius: 10px;
-        background: color-mix(in srgb, var(--mm-accent) 6%, transparent);
+        padding: 4px 16px 4px;
       }
 
-      .mask-create-head {
+      .mask-create-meta {
         display: flex;
         align-items: baseline;
         justify-content: space-between;
         flex-wrap: wrap;
         gap: 4px 12px;
-        margin-bottom: 10px;
       }
 
-      .mask-create-title {
-        font-size: 15px;
-        font-weight: 600;
-        color: var(--mm-text);
+      .mask-create-drag-hint {
+        color: var(--mm-text-2);
+        opacity: 0.8;
       }
 
-      .mask-create-camera-row,
-      .mask-create-duration {
+      .mask-create-footer {
         display: flex;
-        flex-direction: column;
-        gap: 4px;
-        margin-top: 10px;
-      }
-
-      .mask-create-cameras {
-        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
         flex-wrap: wrap;
-        gap: 6px;
+        gap: 16px 12px;
+        margin-top: 16px;
+      }
+
+      .mask-create-footer .mask-duration {
+        align-items: flex-start;
+        max-width: 100%;
+      }
+
+      .mask-create-footer .mask-segmented {
+        max-width: 100%;
+        overflow-x: auto;
+        scrollbar-width: none;
+      }
+
+      .mask-create-footer .mask-segmented::-webkit-scrollbar {
+        display: none;
+      }
+
+      .mask-create-footer .mask-seg-btn {
+        white-space: nowrap;
+      }
+
+      .mask-create-footer .mask-edit-actions {
+        margin-top: 0;
+        margin-left: auto;
+      }
+
+      .mask-create-footer .mask-edit-cancel,
+      .mask-create-footer .mask-edit-save {
+        min-height: 36px;
       }
 
       .mask-pending-section {
@@ -3053,9 +3130,28 @@ export class FrigateEventsCard extends LitElement {
         .mask-edit-input {
           min-height: 44px;
         }
+        .mask-add-btn,
+        .mask-clean-expired-btn {
+          height: 36px;
+        }
+        .mask-back-btn,
+        .frigate-mask-manager-modal .frigate-events-modal-close {
+          width: 36px;
+          height: 36px;
+        }
       }
 
       @media (max-width: 420px) {
+        .mask-manager-header {
+          padding: 14px 16px 10px 16px;
+          gap: 8px;
+        }
+        .mask-manager-title {
+          font-size: 18px;
+        }
+        .mask-create-panel {
+          padding: 4px 8px 4px;
+        }
         .mask-thumb {
           flex-basis: 96px;
           width: 96px;
@@ -3066,7 +3162,14 @@ export class FrigateEventsCard extends LitElement {
         .mask-row,
         .mask-row-chevron,
         .mask-seg-btn,
-        .mask-chip {
+        .mask-chip,
+        .mask-add-btn,
+        .mask-back-btn,
+        .mask-clean-expired-btn,
+        .mask-edit-size-btn,
+        .mask-edit-cancel,
+        .mask-edit-save,
+        .mask-edit-input {
           transition: none;
         }
       }
@@ -6502,6 +6605,12 @@ export class FrigateEventsCard extends LitElement {
 
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        if (this._maskCreating && this._maskManagerContainer) {
+          this._maskCreating = false;
+          this._maskCreatePoly = '';
+          this._renderMaskManagerContent(this._maskManagerContainer);
+          return;
+        }
         this._removeMaskManagerModal();
         window.removeEventListener('keydown', onKeyDown);
       }
@@ -6850,15 +6959,14 @@ export class FrigateEventsCard extends LitElement {
   }
 
   /**
-   * Inline "New mask" panel. The polygon is a plain rectangle to start with;
+   * Dedicated "New mask" view. The polygon is a plain rectangle to start with;
    * the shared drag handlers in the mask manager move its fill, edges and
    * vertices just like an existing mask, so users can shape it over the live
    * snapshot before saving.
    */
-  private _buildMaskCreatePanel(cameras: string[], presets: Array<{ hours: number; label: string }>): string {
+  private _buildMaskCreatePanel(camera: string, presets: Array<{ hours: number; label: string }>): string {
     const defaultPoly = '0.3,0.35,0.7,0.35,0.7,0.65,0.3,0.65';
     const poly = this._maskCreatePoly || defaultPoly;
-    const camera = this._maskCreateCamera || cameras[0] || '';
     const parsed = this._parseMaskPolygonNormalized({ polygon: poly, width: 1920, height: 1080 });
     if (parsed.pts.length === 0) return '';
     const vw = parsed.viewBoxW;
@@ -6886,22 +6994,8 @@ export class FrigateEventsCard extends LitElement {
         || (frigateBase ? `${frigateBase}/api/${encodeURIComponent(camera)}/latest.jpg` : ''))
       : '';
 
-    const cameraControl = cameras.length > 0
-      ? `<div class="mask-create-cameras" role="group" aria-label="Camera for the new mask">
-          ${cameras.map(cam => `<button type="button" class="mask-chip ${cam === camera ? 'active' : ''}" data-create-camera="${escapeHtml(cam)}">${escapeHtml(this._formatCameraName(cam))}</button>`).join('')}
-        </div>`
-      : `<span class="mask-edit-hint">No cameras found. Add a camera or load events first.</span>`;
-
     return `
       <div class="mask-create-panel" data-create-panel data-edit-panel="__new__" data-norm-poly="${escapeHtml(normPoly)}" data-orig-poly="${escapeHtml(normPoly)}" data-viewbox-w="${vw}" data-viewbox-h="${vh}" data-label="${escapeHtml(this._maskCreateLabel)}">
-        <div class="mask-create-head">
-          <span class="mask-create-title">New mask</span>
-          <span class="mask-edit-hint">Drag the shape to cover what should be ignored.</span>
-        </div>
-        <div class="mask-create-camera-row">
-          <span class="mask-control-label">Camera</span>
-          ${cameraControl}
-        </div>
         <div class="mask-edit-preview" data-edit-preview>
           ${snapshotUrl ? `<img src="${escapeHtml(snapshotUrl)}" alt="" loading="lazy" onerror="this.style.display='none'" />` : ''}
           <svg data-edit-svg viewBox="0 0 ${vw} ${vh}" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
@@ -6910,7 +7004,10 @@ export class FrigateEventsCard extends LitElement {
             ${handles}
           </svg>
         </div>
-        <div class="mask-edit-meta"><span data-edit-covers>${escapeHtml(coversText)}</span></div>
+        <div class="mask-edit-meta mask-create-meta">
+          <span data-edit-covers>${escapeHtml(coversText)}</span>
+          <span class="mask-create-drag-hint">Drag corners or edges to shape</span>
+        </div>
         <div class="mask-edit-row" role="group" aria-label="Adjust mask size">
           <button type="button" class="mask-edit-size-btn" data-action="edit-shrink" data-mask-id="__new__">Shrink −10%</button>
           <button type="button" class="mask-edit-size-btn" data-action="edit-expand" data-mask-id="__new__">Expand +10%</button>
@@ -6919,19 +7016,21 @@ export class FrigateEventsCard extends LitElement {
         <div class="mask-edit-label-row">
           <span class="mask-control-label">Label</span>
           <input type="text" class="mask-edit-input" data-create-label maxlength="64" placeholder="person, dog" aria-label="Labels for the new mask" value="${escapeHtml(this._maskCreateLabel)}" />
-          <span class="mask-edit-hint">Comma-separated labels apply the same mask to each object type. Leave blank for a camera-wide mask.</span>
+          <span class="mask-edit-hint">Comma-separated labels, or leave blank for all objects.</span>
         </div>
-        <div class="mask-create-duration">
-          <span class="mask-control-label">Keep for</span>
-          <div class="mask-segmented">
-            ${presets.map(p => `
-              <button type="button" class="mask-seg-btn ${p.hours === this._maskCreateDurationHours ? 'active' : ''}" data-create-duration="${p.hours}">${p.label}</button>
-            `).join('')}
+        <div class="mask-create-footer">
+          <div class="mask-duration" role="group" aria-label="Keep this mask for">
+            <span class="mask-control-label">Keep for</span>
+            <div class="mask-segmented">
+              ${presets.map(p => `
+                <button type="button" class="mask-seg-btn ${p.hours === this._maskCreateDurationHours ? 'active' : ''}" data-create-duration="${p.hours}">${p.label}</button>
+              `).join('')}
+            </div>
           </div>
-        </div>
-        <div class="mask-edit-actions">
-          <button type="button" class="mask-edit-cancel" data-action="create-mask-cancel">Cancel</button>
-          <button type="button" class="mask-edit-save" data-action="create-mask-save" ${camera && parsed.pts.length > 0 ? '' : 'disabled'}>Add mask</button>
+          <div class="mask-edit-actions">
+            <button type="button" class="mask-edit-cancel" data-action="create-mask-cancel">Cancel</button>
+            <button type="button" class="mask-edit-save" data-action="create-mask-save" ${camera && parsed.pts.length > 0 ? '' : 'disabled'}>Add mask</button>
+          </div>
         </div>
       </div>
     `;
@@ -7252,31 +7351,58 @@ export class FrigateEventsCard extends LitElement {
       ? `${activeNonExpiredCount} active · ${expiredMasks.length} expired`
       : `${totalCount} active`;
 
+    const activeCreateCamera = this._maskCreateCamera || createCameras[0] || '';
+
     container.innerHTML = `
       <div class="frigate-events-modal-backdrop" data-action="close"></div>
-      <div class="frigate-events-modal-content" role="dialog" aria-modal="true" aria-label="Manage masks">
+      <div class="frigate-events-modal-content" role="dialog" aria-modal="true" aria-label="${this._maskCreating ? 'New mask' : 'Manage masks'}">
         <div class="mask-manager-header">
-          <h2 class="mask-manager-title">Manage Masks</h2>
-          <span class="mask-manager-count">${countLabel}</span>
-          <div class="mask-header-actions">
-            ${canCreateMask ? `
-              <button type="button" class="mask-add-btn" data-action="add-mask" title="Create a new temporary mask">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19,13H13V19H11V13H5V11H11V5H13V11H19V13Z"/></svg>
-                Add mask
+          ${this._maskCreating ? `
+            <button type="button" class="mask-back-btn" data-action="create-mask-cancel" title="Back to masks" aria-label="Back to masks">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
+            </button>
+            <div class="mask-manager-heading">
+              <h2 class="mask-manager-title">New mask</h2>
+              ${createCameras.length === 1 ? `<span class="mask-manager-count" data-safe-text="${escapeHtml(this._formatCameraName(createCameras[0]))}"></span>` : ''}
+            </div>
+            <div class="mask-header-actions">
+              <button class="frigate-events-modal-close" data-action="close" title="Close" aria-label="Close">
+                <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
               </button>
-            ` : ''}
-            ${expiredMasks.length > 0 ? `
-              <button type="button" class="mask-clean-expired-btn" data-action="prune-expired" title="Remove expired temporary masks from Frigate">
-                Prune expired (${expiredMasks.length})
+            </div>
+          ` : `
+            <div class="mask-manager-heading">
+              <h2 class="mask-manager-title">Manage Masks</h2>
+              <span class="mask-manager-count">${countLabel}</span>
+            </div>
+            <div class="mask-header-actions">
+              ${expiredMasks.length > 0 ? `
+                <button type="button" class="mask-clean-expired-btn" data-action="prune-expired" title="Remove expired temporary masks from Frigate">
+                  Prune expired (${expiredMasks.length})
+                </button>
+              ` : ''}
+              ${canCreateMask ? `
+                <button type="button" class="mask-add-btn" data-action="add-mask" title="Create a new temporary mask">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19,13H13V19H11V13H5V11H11V5H13V11H19V13Z"/></svg>
+                  Add mask
+                </button>
+              ` : ''}
+              <button class="frigate-events-modal-close" data-action="close" title="Close" aria-label="Close">
+                <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
               </button>
-            ` : ''}
-          </div>
-          <button class="frigate-events-modal-close" data-action="close" title="Close" aria-label="Close">
-            <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
-          </button>
+            </div>
+          `}
         </div>
 
-        ${cameras.length > 1 ? `
+        ${this._maskCreating ? (createCameras.length > 1 ? `
+          <div class="mask-filter-tabs" role="tablist" aria-label="Camera for the new mask">
+            ${createCameras.map(cam => `
+              <button type="button" role="tab" aria-selected="${cam === activeCreateCamera}" class="mask-filter-tab ${cam === activeCreateCamera ? 'active' : ''}" data-create-camera="${escapeHtml(cam)}">
+                <span data-safe-text="${escapeHtml(this._formatCameraName(cam))}"></span>
+              </button>
+            `).join('')}
+          </div>
+        ` : '') : (cameras.length > 1 ? `
           <div class="mask-filter-tabs" role="tablist">
             <button type="button" role="tab" aria-selected="${filterCamera === 'all'}" class="mask-filter-tab ${filterCamera === 'all' ? 'active' : ''}" data-camera-filter="all">
               All <span class="mask-filter-count">${activeMasks.length + pendingMasks.length}</span>
@@ -7291,35 +7417,40 @@ export class FrigateEventsCard extends LitElement {
               `;
             }).join('')}
           </div>
-        ` : ''}
+        ` : '')}
 
         <div class="mask-manager-body">
-          ${this._maskCreating ? this._buildMaskCreatePanel(createCameras, createPresets) : ''}
-
-          ${filteredMasks.length === 0 && filteredPending.length === 0 && !this._maskCreating ? `
+          ${this._maskCreating ? (createCameras.length > 0 ? this._buildMaskCreatePanel(activeCreateCamera, createPresets) : `
             <div class="mask-empty-state">
-              <h4>Nothing is being ignored</h4>
-              <p>Use Add mask to block a fixed false detection, right-click an event thumbnail to ignore a recurring one, or use the action button on a mobile notification.</p>
+              <h4>No cameras available</h4>
+              <p>Add a camera or load recent events before creating a mask.</p>
             </div>
-          ` : ''}
-
-          ${filteredMasks.length > 0 ? `
-            <div class="mask-list">
-              ${filteredMasks.map(buildActiveRow).join('')}
-            </div>
-          ` : ''}
-
-          ${filteredPending.length > 0 ? `
-            <div class="mask-pending-section">
-              <div class="mask-section-heading">
-                <span>Waiting for Frigate restart</span>
-                ${filteredPending.length > 1 ? `<button type="button" class="mask-text-btn" data-action="dismiss-all-pending">Dismiss all</button>` : ''}
+          `) : `
+            ${filteredMasks.length === 0 && filteredPending.length === 0 ? `
+              <div class="mask-empty-state">
+                <h4>Nothing is being ignored</h4>
+                <p>Use Add mask to block a fixed false detection, right-click an event thumbnail to ignore a recurring one, or use the action button on a mobile notification.</p>
               </div>
+            ` : ''}
+
+            ${filteredMasks.length > 0 ? `
               <div class="mask-list">
-                ${filteredPending.map(buildPendingRow).join('')}
+                ${filteredMasks.map(buildActiveRow).join('')}
               </div>
-            </div>
-          ` : ''}
+            ` : ''}
+
+            ${filteredPending.length > 0 ? `
+              <div class="mask-pending-section">
+                <div class="mask-section-heading">
+                  <span>Waiting for Frigate restart</span>
+                  ${filteredPending.length > 1 ? `<button type="button" class="mask-text-btn" data-action="dismiss-all-pending">Dismiss all</button>` : ''}
+                </div>
+                <div class="mask-list">
+                  ${filteredPending.map(buildPendingRow).join('')}
+                </div>
+              </div>
+            ` : ''}
+          `}
         </div>
       </div>
     `;
@@ -7348,10 +7479,9 @@ export class FrigateEventsCard extends LitElement {
         e.stopPropagation();
         this._maskCreating = !this._maskCreating;
         if (this._maskCreating) {
-          const available = this._getAvailableCameras();
-          this._maskCreateCamera = filterCamera !== 'all' && available.includes(filterCamera)
+          this._maskCreateCamera = filterCamera !== 'all' && createCameras.includes(filterCamera)
             ? filterCamera
-            : (available[0] || '');
+            : (createCameras[0] || '');
           this._maskCreatePoly = '';
           this._maskCreateLabel = 'person';
           this._maskCreateDurationHours = 24;
@@ -7360,9 +7490,8 @@ export class FrigateEventsCard extends LitElement {
         }
         this._renderMaskManagerContent(container);
         if (this._maskCreating) {
-          const panel = container.querySelector('[data-create-panel]') as HTMLElement | null;
-          panel?.scrollIntoView({ block: 'nearest' });
-          (panel?.querySelector('[data-create-label]') as HTMLInputElement | null)?.focus({ preventScroll: true });
+          const body = container.querySelector<HTMLElement>('.mask-manager-body');
+          if (body) body.scrollTop = 0;
           void this._refreshMaskManagerSnapshots();
         }
       });
@@ -7382,7 +7511,7 @@ export class FrigateEventsCard extends LitElement {
         e.stopPropagation();
         const panel = container.querySelector('[data-create-panel]') as HTMLElement | null;
         if (!panel) return;
-        const camera = (panel.querySelector('[data-create-camera].active') as HTMLElement | null)
+        const camera = (container.querySelector('[data-create-camera].active') as HTMLElement | null)
           ?.getAttribute('data-create-camera')
           || this._maskCreateCamera;
         const polygon = panel.getAttribute('data-norm-poly') || '';
