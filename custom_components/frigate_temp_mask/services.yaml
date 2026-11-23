@@ -1,16 +1,16 @@
 add_mask:
   name: Add Temporary Mask
-  description: Adds an expanded bounding-box mask around a false detection in Frigate.
+  description: Adds a temporary mask to Frigate. Supply event_id to mask a false detection, or camera with polygon (and optionally label) to create a manual mask.
   fields:
     camera:
       name: Camera
-      description: Name of the camera in Frigate. If omitted, inferred automatically from event_id.
+      description: Name of the camera in Frigate. Required for manual masks. If omitted for an event mask, inferred from event_id.
       example: front_door
       selector:
         text:
     event_id:
       name: Event ID
-      description: Frigate event ID of the false alarm detection.
+      description: Frigate event ID of the false alarm detection. Leave empty when creating a manual mask from a polygon.
       example: 1786887088.764725-gq35zl
       selector:
         text:

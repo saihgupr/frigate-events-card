@@ -1340,12 +1340,16 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         camera = (call.data.get("camera") or "").strip()
         raw_event_id = call.data.get("event_id")
         event_id = str(raw_event_id).strip().strip("\"'") if raw_event_id is not None else ""
-        if not event_id:
-            raise HomeAssistantError("An event_id is required to add a temporary mask")
         raw_mask_id = call.data.get("mask_id")
         mask_id = str(raw_mask_id).strip().strip("\"'") if raw_mask_id else ""
         if not mask_id:
-            mask_id = event_id.split("-")[0] if "-" in event_id else event_id or "manual"
+            if event_id:
+                mask_id = event_id.split("-")[0] if "-" in event_id else event_id
+            else:
+                # Manual masks (created from the card's mask editor) have no
+                # event to derive an id from. A timestamp keeps the id unique
+                # and lets expiry metadata parse a creation time.
+                mask_id = f"manual-{int(datetime.now(timezone.utc).timestamp())}"
         box_str = call.data.get("box", "")
         try:
             duration_hours = float(call.data.get("duration_hours", 24))
@@ -1414,7 +1418,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
                 camera,
                 mask_id,
             )
-            raise HomeAssistantError(f"Could not get a valid bounding box for Frigate event {event_id}")
+            raise HomeAssistantError("Could not resolve a mask polygon or bounding box")
 
         if not camera:
             raise HomeAssistantError("A camera is required to add a temporary mask")
@@ -1922,7 +1926,7 @@ async def _async_setup_core(hass: HomeAssistant) -> bool:
         hass, DOMAIN, "add_mask", async_handle_add_mask,
         supports_response=SupportsResponse.OPTIONAL,
         schema=vol.Schema({
-            vol.Required("event_id"): str,
+            vol.Optional("event_id"): str,
             vol.Optional("camera"): str,
             vol.Optional("mask_id"): str,
             vol.Optional("box"): str,

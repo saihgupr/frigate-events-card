@@ -201,6 +201,13 @@ export class FrigateEventsCard extends LitElement {
   private _maskManagerExpandedId?: string;
   private _maskEditingId?: string;
   private _maskEditSavingIds = new Set<string>();
+  // Inline "new mask" panel: camera, draft polygon (normalized) and choices
+  // survive the manager's snapshot/timer re-renders.
+  private _maskCreating = false;
+  private _maskCreateCamera = '';
+  private _maskCreatePoly = '';
+  private _maskCreateLabel = 'person';
+  private _maskCreateDurationHours = 24;
   @state() private _localPendingMasks: any[] = [];
   /** Hotkey override for the version badge; independent of config.debug. */
   @state() private _showVersionOverride?: boolean;
@@ -2306,6 +2313,7 @@ export class FrigateEventsCard extends LitElement {
       .mask-manager-header {
         display: flex;
         align-items: baseline;
+        flex-wrap: wrap;
         gap: 8px;
         flex-shrink: 0;
         padding: 20px 56px 12px 24px;
@@ -2324,9 +2332,44 @@ export class FrigateEventsCard extends LitElement {
         color: var(--mm-text-2);
       }
 
-      .mask-clean-expired-btn {
+      .mask-header-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
         margin-left: auto;
-        margin-right: 8px;
+        align-self: center;
+      }
+
+      .mask-add-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        min-height: 32px;
+        padding: 0 12px 0 8px;
+        font-size: 13px;
+        font-weight: 600;
+        font-family: inherit;
+        color: #fff;
+        background: var(--mm-accent);
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+        transition: filter 0.15s ease;
+      }
+
+      .mask-add-btn:hover {
+        filter: brightness(1.1);
+      }
+
+      .mask-add-btn svg {
+        width: 18px;
+        height: 18px;
+        fill: currentColor;
+      }
+
+      .mask-clean-expired-btn {
+        margin-left: 0;
+        margin-right: 0;
         padding: 4px 10px;
         font-size: 12px;
         font-weight: 500;
@@ -2905,6 +2948,43 @@ export class FrigateEventsCard extends LitElement {
       .mask-edit-save:disabled {
         opacity: 0.5;
         cursor: default;
+      }
+
+      .mask-create-panel {
+        margin: 4px 12px 12px;
+        padding: 12px;
+        border: 1px solid color-mix(in srgb, var(--mm-accent) 45%, var(--mm-line));
+        border-radius: 10px;
+        background: color-mix(in srgb, var(--mm-accent) 6%, transparent);
+      }
+
+      .mask-create-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 4px 12px;
+        margin-bottom: 10px;
+      }
+
+      .mask-create-title {
+        font-size: 15px;
+        font-weight: 600;
+        color: var(--mm-text);
+      }
+
+      .mask-create-camera-row,
+      .mask-create-duration {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        margin-top: 10px;
+      }
+
+      .mask-create-select {
+        width: 100%;
+        box-sizing: border-box;
+        appearance: auto;
       }
 
       .mask-pending-section {
@@ -6375,11 +6455,15 @@ export class FrigateEventsCard extends LitElement {
     const sensor = this._getTemporaryMaskSensor(this.hass?.states);
     const activeMasks = Array.isArray(sensor?.attributes?.masks) ? sensor.attributes.masks : [];
     const pendingMasks = Array.isArray(sensor?.attributes?.pending_restart_masks) ? sensor.attributes.pending_restart_masks : [];
-    const cameras = Array.from(new Set(
-      [...activeMasks, ...pendingMasks]
+    const cameras = Array.from(new Set([
+      ...[...activeMasks, ...pendingMasks]
         .map((mask: any) => mask?.camera)
-        .filter((camera: unknown): camera is string => typeof camera === 'string' && camera.length > 0)
-    ));
+        .filter((camera: unknown): camera is string => typeof camera === 'string' && camera.length > 0),
+      // The New mask panel needs a snapshot for every camera the user can
+      // pick from, not just cameras that already have a mask.
+      ...(this._maskCreating ? this._getAvailableCameras() : []),
+      ...(this._maskCreating && this._maskCreateCamera ? [this._maskCreateCamera] : []),
+    ]));
     if (cameras.length === 0) return;
 
     const token = ++this._maskManagerSnapshotToken;
@@ -6449,6 +6533,8 @@ export class FrigateEventsCard extends LitElement {
       this._maskManagerContainer = undefined;
       this._maskManagerExpandedId = undefined;
       this._maskEditingId = undefined;
+      this._maskCreating = false;
+      this._maskCreatePoly = '';
     }
     if (this._maskManagerTimer) {
       clearInterval(this._maskManagerTimer);
@@ -6652,7 +6738,107 @@ export class FrigateEventsCard extends LitElement {
     return { polyPts, posName, maskW, maskH, viewBoxW, viewBoxH, cropRegion };
   }
 
+  /**
+   * Inline "New mask" panel. The polygon is a plain rectangle to start with;
+   * the shared drag handlers in the mask manager move its fill, edges and
+   * vertices just like an existing mask, so users can shape it over the live
+   * snapshot before saving.
+   */
+  private _buildMaskCreatePanel(cameras: string[], presets: Array<{ hours: number; label: string }>): string {
+    const defaultPoly = '0.3,0.35,0.7,0.35,0.7,0.65,0.3,0.65';
+    const poly = this._maskCreatePoly || defaultPoly;
+    const camera = this._maskCreateCamera || cameras[0] || '';
+    const parsed = this._parseMaskPolygonNormalized({ polygon: poly, width: 1920, height: 1080 });
+    if (parsed.pts.length === 0) return '';
+    const vw = parsed.viewBoxW;
+    const vh = parsed.viewBoxH;
+    const normPoly = this._formatNormalizedPolygon(parsed.pts);
+    const dispPts = parsed.pts.map(p => `${p.x * vw},${p.y * vh}`).join(' ');
+    const handleR = Math.max(14, Math.round(Math.max(vw, vh) * 0.012));
+    const handles = parsed.pts.map((p, i) =>
+      `<circle class="mask-edit-handle" data-edit-handle="${i}" cx="${p.x * vw}" cy="${p.y * vh}" r="${handleR}" />`
+    ).join('');
+    const edgeHits = parsed.pts.map((p, i) => {
+      const q = parsed.pts[(i + 1) % parsed.pts.length];
+      const dx = Math.abs(q.x - p.x);
+      const dy = Math.abs(q.y - p.y);
+      const cursor = dx < dy * 0.5 ? 'ew-resize' : (dy < dx * 0.5 ? 'ns-resize' : 'move');
+      return `<line class="mask-edit-edge" data-edit-edge="${i}" x1="${p.x * vw}" y1="${p.y * vh}" x2="${q.x * vw}" y2="${q.y * vh}" style="cursor:${cursor}" />`;
+    }).join('');
+    const xs = parsed.pts.map(p => p.x);
+    const ys = parsed.pts.map(p => p.y);
+    const coversText = `Covers ${Math.round((Math.max(...xs) - Math.min(...xs)) * vw)} × ${Math.round((Math.max(...ys) - Math.min(...ys)) * vh)} px`;
+
+    const frigateBase = this._config?.frigate_url ? this._config.frigate_url.replace(/\/+$/, '') : '';
+    const snapshotUrl = camera
+      ? (this._maskManagerSnapshotUrls.get(camera)
+        || (frigateBase ? `${frigateBase}/api/${encodeURIComponent(camera)}/latest.jpg` : ''))
+      : '';
+
+    const cameraControl = cameras.length > 0
+      ? `<select class="mask-edit-input mask-create-select" data-create-camera aria-label="Camera for the new mask">
+          ${cameras.map(cam => `<option value="${escapeHtml(cam)}" ${cam === camera ? 'selected' : ''}>${escapeHtml(this._formatCameraName(cam))}</option>`).join('')}
+        </select>`
+      : `<span class="mask-edit-hint">No cameras found. Add a camera or load events first.</span>`;
+
+    return `
+      <div class="mask-create-panel" data-create-panel data-edit-panel="__new__" data-norm-poly="${escapeHtml(normPoly)}" data-orig-poly="${escapeHtml(normPoly)}" data-viewbox-w="${vw}" data-viewbox-h="${vh}" data-label="${escapeHtml(this._maskCreateLabel)}">
+        <div class="mask-create-head">
+          <span class="mask-create-title">New mask</span>
+          <span class="mask-edit-hint">Drag the shape to cover what should be ignored.</span>
+        </div>
+        <div class="mask-create-camera-row">
+          <span class="mask-control-label">Camera</span>
+          ${cameraControl}
+        </div>
+        <div class="mask-edit-preview" data-edit-preview>
+          ${snapshotUrl ? `<img src="${escapeHtml(snapshotUrl)}" alt="" loading="lazy" onerror="this.style.display='none'" />` : ''}
+          <svg data-edit-svg viewBox="0 0 ${vw} ${vh}" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+            <polygon points="${escapeHtml(dispPts)}" class="mask-edit-poly" data-edit-poly vector-effect="non-scaling-stroke" />
+            ${edgeHits}
+            ${handles}
+          </svg>
+        </div>
+        <div class="mask-edit-meta"><span data-edit-covers>${escapeHtml(coversText)}</span></div>
+        <div class="mask-edit-row" role="group" aria-label="Adjust mask size">
+          <button type="button" class="mask-edit-size-btn" data-action="edit-shrink" data-mask-id="__new__">Shrink −10%</button>
+          <button type="button" class="mask-edit-size-btn" data-action="edit-expand" data-mask-id="__new__">Expand +10%</button>
+          <button type="button" class="mask-edit-size-btn" data-action="edit-reset" data-mask-id="__new__">Reset</button>
+        </div>
+        <div class="mask-edit-label-row">
+          <span class="mask-control-label">Label</span>
+          <input type="text" class="mask-edit-input" data-create-label maxlength="64" placeholder="person, dog" aria-label="Labels for the new mask" value="${escapeHtml(this._maskCreateLabel)}" />
+          <span class="mask-edit-hint">Comma-separated labels apply the same mask to each object type. Leave blank for a camera-wide mask.</span>
+        </div>
+        <div class="mask-create-duration">
+          <span class="mask-control-label">Keep for</span>
+          <div class="mask-segmented">
+            ${presets.map(p => `
+              <button type="button" class="mask-seg-btn ${p.hours === this._maskCreateDurationHours ? 'active' : ''}" data-create-duration="${p.hours}">${p.label}</button>
+            `).join('')}
+          </div>
+        </div>
+        <div class="mask-edit-actions">
+          <button type="button" class="mask-edit-cancel" data-action="create-mask-cancel">Cancel</button>
+          <button type="button" class="mask-edit-save" data-action="create-mask-save" ${camera && parsed.pts.length > 0 ? '' : 'disabled'}>Add mask</button>
+        </div>
+      </div>
+    `;
+  }
+
   private _renderMaskManagerContent(container: HTMLElement): void {
+    // A snapshot refresh or timer can re-render while the New mask panel is
+    // open. Pick up the in-progress shape and label first so they survive.
+    if (this._maskCreating) {
+      const currentCreatePanel = container.querySelector('[data-create-panel]');
+      if (currentCreatePanel) {
+        const poly = currentCreatePanel.getAttribute('data-norm-poly');
+        if (poly) this._maskCreatePoly = poly;
+        const labelInput = currentCreatePanel.querySelector('[data-create-label]') as HTMLInputElement | null;
+        if (labelInput) this._maskCreateLabel = labelInput.value;
+      }
+    }
+
     const rawMasks = (this._getTemporaryMaskSensor(this.hass?.states)?.attributes?.masks as any[]) || [];
     const activeMasks = Array.isArray(rawMasks) ? rawMasks : [];
     const totalCount = activeMasks.length;
@@ -6678,6 +6864,15 @@ export class FrigateEventsCard extends LitElement {
     const allCams = [...activeMasks.map((m: any) => m.camera), ...pendingMasks.map((m: any) => m.camera)].filter(Boolean);
     const cameras = Array.from(new Set(allCams));
     const filterCamera = this._maskManagerSelectedCamera || 'all';
+    const createCameras = this._getAvailableCameras();
+    cameras.forEach(cam => {
+      if (!createCameras.includes(cam)) createCameras.push(cam);
+    });
+    const canCreateMask = this._config?.show_temp_mask !== false
+      && !!this.hass?.services?.['frigate_temp_mask']?.['add_mask'];
+    if (this._maskCreating && createCameras.length > 0 && !createCameras.includes(this._maskCreateCamera)) {
+      this._maskCreateCamera = createCameras[0];
+    }
 
     const filteredMasks = filterCamera === 'all'
       ? activeMasks
@@ -6701,6 +6896,13 @@ export class FrigateEventsCard extends LitElement {
       { hours: -1, label: 'No expiry' },
     ];
     const allPresets = [...primaryPresets, ...morePresets];
+    const createPresets = [
+      { hours: 1, label: '1h' },
+      { hours: 8, label: '8h' },
+      { hours: 24, label: '24h' },
+      { hours: 168, label: '7d' },
+      { hours: -1, label: 'No expiry' },
+    ];
 
     // Keep the list scroll position across re-renders (timers, duration changes, snapshots).
     const previousScroll = container.querySelector<HTMLElement>('.mask-manager-body')?.scrollTop ?? 0;
@@ -6945,11 +7147,19 @@ export class FrigateEventsCard extends LitElement {
         <div class="mask-manager-header">
           <h2 class="mask-manager-title">Mask editor</h2>
           <span class="mask-manager-count">${countLabel}</span>
-          ${expiredMasks.length > 0 ? `
-            <button type="button" class="mask-clean-expired-btn" data-action="prune-expired" title="Remove expired temporary masks from Frigate">
-              Prune expired (${expiredMasks.length})
-            </button>
-          ` : ''}
+          <div class="mask-header-actions">
+            ${canCreateMask ? `
+              <button type="button" class="mask-add-btn" data-action="add-mask" title="Create a new temporary mask">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19,13H13V19H11V13H5V11H11V5H13V11H19V13Z"/></svg>
+                Add mask
+              </button>
+            ` : ''}
+            ${expiredMasks.length > 0 ? `
+              <button type="button" class="mask-clean-expired-btn" data-action="prune-expired" title="Remove expired temporary masks from Frigate">
+                Prune expired (${expiredMasks.length})
+              </button>
+            ` : ''}
+          </div>
           <button class="frigate-events-modal-close" data-action="close" title="Close" aria-label="Close">
             <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
           </button>
@@ -6973,10 +7183,12 @@ export class FrigateEventsCard extends LitElement {
         ` : ''}
 
         <div class="mask-manager-body">
-          ${filteredMasks.length === 0 && filteredPending.length === 0 ? `
+          ${this._maskCreating ? this._buildMaskCreatePanel(createCameras, createPresets) : ''}
+
+          ${filteredMasks.length === 0 && filteredPending.length === 0 && !this._maskCreating ? `
             <div class="mask-empty-state">
               <h4>Nothing is being ignored</h4>
-              <p>Right-click an event thumbnail to ignore a recurring false detection, or use the action button on a mobile notification.</p>
+              <p>Use Add mask to block a fixed false detection, right-click an event thumbnail to ignore a recurring one, or use the action button on a mobile notification.</p>
             </div>
           ` : ''}
 
@@ -7017,6 +7229,84 @@ export class FrigateEventsCard extends LitElement {
       el.addEventListener('click', (e) => {
         e.stopPropagation();
         this._removeMaskManagerModal();
+      });
+    });
+
+    container.querySelectorAll('[data-action="add-mask"]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._maskCreating = !this._maskCreating;
+        if (this._maskCreating) {
+          const available = this._getAvailableCameras();
+          this._maskCreateCamera = filterCamera !== 'all' && available.includes(filterCamera)
+            ? filterCamera
+            : (available[0] || '');
+          this._maskCreatePoly = '';
+          this._maskCreateLabel = 'person';
+          this._maskCreateDurationHours = 24;
+        } else {
+          this._maskCreatePoly = '';
+        }
+        this._renderMaskManagerContent(container);
+        if (this._maskCreating) {
+          const panel = container.querySelector('[data-create-panel]') as HTMLElement | null;
+          panel?.scrollIntoView({ block: 'nearest' });
+          (panel?.querySelector('[data-create-label]') as HTMLInputElement | null)?.focus({ preventScroll: true });
+          void this._refreshMaskManagerSnapshots();
+        }
+      });
+    });
+
+    container.querySelectorAll('[data-action="create-mask-cancel"]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._maskCreating = false;
+        this._maskCreatePoly = '';
+        this._renderMaskManagerContent(container);
+      });
+    });
+
+    container.querySelectorAll('[data-action="create-mask-save"]').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const panel = container.querySelector('[data-create-panel]') as HTMLElement | null;
+        if (!panel) return;
+        const camera = (panel.querySelector('[data-create-camera]') as HTMLSelectElement | null)?.value
+          || this._maskCreateCamera;
+        const polygon = panel.getAttribute('data-norm-poly') || '';
+        const label = ((panel.querySelector('[data-create-label]') as HTMLInputElement | null)?.value || '').trim();
+        await this._executeCreateMask(camera, polygon, label, this._maskCreateDurationHours);
+      });
+    });
+
+    container.querySelectorAll('[data-create-camera]').forEach(select => {
+      select.addEventListener('change', (e) => {
+        e.stopPropagation();
+        const panel = container.querySelector('[data-create-panel]');
+        if (panel) {
+          const poly = panel.getAttribute('data-norm-poly');
+          if (poly) this._maskCreatePoly = poly;
+          const labelInput = panel.querySelector('[data-create-label]') as HTMLInputElement | null;
+          if (labelInput) this._maskCreateLabel = labelInput.value;
+        }
+        this._maskCreateCamera = (select as HTMLSelectElement).value;
+        this._renderMaskManagerContent(container);
+        void this._refreshMaskManagerSnapshots();
+      });
+    });
+
+    container.querySelectorAll('[data-create-label]').forEach(input => {
+      input.addEventListener('input', (e) => {
+        this._maskCreateLabel = (e.target as HTMLInputElement).value;
+      });
+    });
+
+    container.querySelectorAll('[data-create-duration]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const hours = parseFloat((btn as HTMLElement).getAttribute('data-create-duration') || '24');
+        this._maskCreateDurationHours = isNaN(hours) ? 24 : hours;
+        this._renderMaskManagerContent(container);
       });
     });
 
@@ -7507,6 +7797,12 @@ export class FrigateEventsCard extends LitElement {
         this._maskEditingId = undefined;
         this._renderMaskManagerContent(container);
       }
+      if (e.key === 'Escape' && this._maskCreating) {
+        e.stopPropagation();
+        this._maskCreating = false;
+        this._maskCreatePoly = '';
+        this._renderMaskManagerContent(container);
+      }
     };
   }
 
@@ -7668,6 +7964,59 @@ export class FrigateEventsCard extends LitElement {
       }
     } catch (err) {
       console.error('Failed to update mask duration:', err);
+    }
+  }
+
+  private async _executeCreateMask(
+    camera: string,
+    polygon: string,
+    label: string,
+    durationHours: number
+  ): Promise<void> {
+    if (!this.hass?.callService || !camera || !polygon) return;
+
+    const activeMasks = (this._getTemporaryMaskSensor(this.hass.states)?.attributes?.masks as any[]) || [];
+    const existingIds = new Set(activeMasks.map((mask: any) => String(mask.mask_id)));
+    let maskId = `manual-${Math.floor(Date.now() / 1000)}`;
+    let suffix = 1;
+    while (existingIds.has(maskId)) {
+      maskId = `manual-${Math.floor(Date.now() / 1000)}-${suffix++}`;
+    }
+
+    const saveBtn = this._maskManagerContainer?.querySelector('[data-action="create-mask-save"]') as HTMLButtonElement | null;
+    if (saveBtn) {
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'Adding…';
+    }
+
+    try {
+      const restarted = await this._callAddMask({
+        camera,
+        mask_id: maskId,
+        polygon,
+        label,
+        duration_hours: durationHours,
+      });
+      this._maskCreating = false;
+      this._maskCreatePoly = '';
+      this.dispatchEvent(new CustomEvent('hass-notification', {
+        detail: { message: restarted === false ? 'Mask added.' : 'Mask added. Frigate is restarting.' },
+        bubbles: true,
+        composed: true,
+      }));
+      this.requestUpdate();
+      this._removeMaskManagerModal();
+    } catch (err) {
+      console.error('Failed to add mask:', err);
+      if (saveBtn) {
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Add mask';
+      }
+      this.dispatchEvent(new CustomEvent('hass-notification', {
+        detail: { message: 'Could not add the mask.' },
+        bubbles: true,
+        composed: true,
+      }));
     }
   }
 

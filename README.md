@@ -31,7 +31,7 @@ An all-in-one Lovelace card for Frigate: recent detection gallery, WebRTC live v
 
 ## What's New in v2.7
 
-- **Interactive Temporary Mask Editor**: Click "Edit" on any active mask to modify its polygon directly over a live camera snapshot. Drag the fill to translate the whole mask, drag any edge to slide that boundary, or drag vertex pins to reshape. Includes one-click `Expand (+10%)`, `Shrink (-10%)`, and `Reset` controls.
+- **Interactive Mask Editor**: Open **Mask Editor** from any event or the live feed to create, edit, or remove masks over a live camera snapshot. Drag the fill to translate the whole mask, drag any edge to slide that boundary, or drag vertex pins to reshape. Includes one-click `Expand (+10%)`, `Shrink (-10%)`, and `Reset` controls, and an **Add mask** button for masks that start from a blank rectangle instead of an event.
 - **Multi-Label Masking**: Specify comma-separated labels (such as `person, dog`) to apply the same mask polygon across multiple Frigate object filters simultaneously. All copies synchronize and clean up automatically on expiry.
 - **Directly Editable Timeline Start Time**: Click the `Start` chip to directly type hour and minute values with a one-click AM/PM toggle, or step with day and time steppers—eliminating native browser date picker popups.
 - **Restyled Timeline Controls & Finer Skips**: Control panels are grouped into cohesive tonal cards with a round scrubber handle and progress fill. Transport buttons now feature finer skips (`-1m`, `-30s`, `-10s`, `+10s`, `+30s`, `+1m`) that move by wall-clock time and seamlessly stream past video chunk boundaries, with `2h` and `24h` window options.
@@ -308,14 +308,14 @@ Right-clicking (desktop) or long-pressing (touch devices) any event thumbnail op
 * **Delete Event**: Permanently deletes the event, snapshot, and clip from Frigate and removes the thumbnail immediately.
 * **Temporary Masking (Optional)**: Add or remove a false-positive mask when the [companion integration](#temporary-masking-optional) is installed.
 
-Right-clicking the live feed exposes the same context menu, with direct shortcuts for **Timeline** and **Mask Manager**.
+Right-clicking the live feed exposes the same context menu, with direct shortcuts for **Timeline** and **Mask Editor**.
 
 ### Temporary Masking (Optional)
 
-The card works standalone. The [`frigate_temp_mask`](https://github.com/saihgupr/frigate-temp-mask) companion integration enables temporary masks for recurring false detections such as a parked car, package, or wheelbarrow. Masks use a 10% expanded bounding box around the detection, are written to Frigate's config, and can be changed or removed later.
+The card works standalone. The [`frigate_temp_mask`](https://github.com/saihgupr/frigate-temp-mask) companion integration enables temporary masks for recurring false detections such as a parked car, package, or wheelbarrow. Masks can start from an event's expanded bounding box or be drawn from scratch in the mask editor, are written to Frigate's config, and can be changed or removed later.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/temp-mask.png" width="49%" alt="Temporary Mask Manager" />
+  <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/temp-mask.png" width="49%" alt="Mask Editor" />
   <img src="https://raw.githubusercontent.com/saihgupr/frigate-events-card/main/images/snapshots/temp-mask-3.png" width="49%" alt="Temporary mask polygon editor with resize controls and label field" />
 </p>
 
@@ -325,10 +325,11 @@ The card works standalone. The [`frigate_temp_mask`](https://github.com/saihgupr
 </p>
 
 * **Interactive Polygon Editor**: Edit mask shapes inline over a live camera snapshot. Drag the fill to move the whole mask, drag edges to slide boundaries, or pull vertex pins. Quick controls let you Expand (+10%), Shrink (-10%), or Reset to Frigate's detected bounding box.
+* **Create masks without an event**: Click **Add mask** in the mask editor, pick a camera, shape the rectangle over its live snapshot, choose labels and a duration, and save. The card generates the mask id and writes it to Frigate just like an event mask.
 * **Flexible durations**: Set a mask for 1h, 8h, 24h, 7d, or no expiry with live countdowns. Expired masks prune automatically, including across Frigate restarts and outages.
 * **Multiple object labels**: Enter comma-separated labels (such as `person, dog`) in a mask's Label field to write the same mask under each object filter. Removing or expiring the mask cleans up every copy.
-* **Live previews**: The Mask Manager captures a fresh camera snapshot and overlays each active mask polygon.
-* **Instant removal**: Remove a mask directly from the context menu or Mask Manager without waiting for detector restarts on Frigate 0.18+.
+* **Live previews**: The Mask Editor captures a fresh camera snapshot and overlays each active mask polygon.
+* **Instant removal**: Remove a mask directly from the context menu or Mask Editor without waiting for detector restarts on Frigate 0.18+.
 
 #### Setup
 
@@ -356,7 +357,7 @@ The card automatically detects the integration and adds **Temporary Mask**, **Ch
 > **Restart Behavior by Frigate Version**:
 > * **Adding or Updating Masks:** Frigate **automatically restarts** its internal detector process (~1–2 seconds) so false alarms stop immediately.
 > * **Removing Masks on Frigate 0.18+:** The mask is **instantly disabled** via the Frigate API (`PUT /api/camera/{camera}/set/object_mask/{name}`) and cleaned from `config.yml` — **no detector restart required**.
-> * **Removing Masks on Frigate 0.13 and earlier:** The mask is cleaned from `config.yml` without restarting Frigate. The **Pending Restart Tracker** in the Mask Manager provides a 1-click **Restart Frigate** button.
+> * **Removing Masks on Frigate 0.13 and earlier:** The mask is cleaned from `config.yml` without restarting Frigate. The **Pending Restart Tracker** in the Mask Editor provides a 1-click **Restart Frigate** button.
 
 <details>
 <summary><strong>Integration Services Reference</strong> (Click to expand)</summary>
@@ -365,7 +366,7 @@ The `frigate_temp_mask` integration exposes the following services under Home As
 
 | Service | Description | Key Parameters |
 |---|---|---|
-| `frigate_temp_mask.add_mask` | Adds a temporary bounding-box mask around a false detection in Frigate. | `event_id` (required), `duration_hours` (default: 24), `camera` (optional, auto-inferred from event), `padding` (default: 0.10), `mask_id` (optional) |
+| `frigate_temp_mask.add_mask` | Adds a temporary mask for a false detection, or a manual mask drawn in the card. | `event_id` (optional for manual masks), `camera` (required for manual masks), `polygon` (manual masks), `label`, `duration_hours` (default: 24), `padding` (default: 0.10), `mask_id` (optional) |
 | `frigate_temp_mask.set_duration` | Updates the expiration duration for an active temporary mask without restarting Frigate. | `mask_id` (required), `duration_hours` (required) |
 | `frigate_temp_mask.remove_mask` | Removes a temporary mask from Frigate config on disk without interrupting recordings. | `mask_id` (required) |
 | `frigate_temp_mask.prune_all` | Removes all temporary masks from Frigate configuration. | *None* |
