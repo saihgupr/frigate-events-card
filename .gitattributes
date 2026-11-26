@@ -1,0 +1,5 @@
+# Exclude documentation media, tests, and CI config from source release archives
+images/ export-ignore
+tests/ export-ignore
+.github/ export-ignore
+.DS_Store export-ignore
