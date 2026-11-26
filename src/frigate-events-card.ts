@@ -10,7 +10,7 @@ import { FrigateBoundingBox, FrigateEvent, FrigateEventChange, FrigatePathPoint 
 import { getEvents, getRecordings, getEventSnapshotURL, getEventThumbnailURL, signPath, toRelativePath, getCachedSignedPath, subscribeToEvents, getEventClipURL, getEventHlsURL, getVodClipURL, getVodHlsURL, deleteEvent } from './frigate/api';
 import Hls from 'hls.js';
 
-const CARD_VERSION = '2.7.4.6';
+const CARD_VERSION = '2.7.4.7';
 
 // How often to poll for new events as a fallback (in ms)
 // This handles cases where WebSocket subscriptions silently die
@@ -113,6 +113,7 @@ interface FrigateEventsCardConfig extends LovelaceCardConfig {
   event_click_action?: 'timeline' | 'detail'; // default: 'timeline' — which modal opens when clicking an event
   timeline_show_mute?: boolean;     // default: true
   timeline_default_window_hours?: number; // default: 1
+  timeline_default_playback_rate?: number | string; // default: 1 (must match TIMELINE_PLAYBACK_SPEEDS)
   timeline_event_seek_offset?: number | Record<string, number>;    // default: 0 (seconds added/subtracted, e.g. -26 or { car: -26, person: -10 })
   timeline_sync_offset?: number | string;  // default: 0. Shifts timeline timestamps against the footage. -3 or '-3s' = 3 seconds behind.
 }
@@ -140,6 +141,7 @@ const DEFAULT_CONFIG: Partial<FrigateEventsCardConfig> = {
   event_click_action: 'timeline',
   timeline_show_mute: true,
   timeline_default_window_hours: 1,
+  timeline_default_playback_rate: 1,
   timeline_event_seek_offset: 0,
   timeline_sync_offset: 0,
   title: 'Frigate Events',
@@ -8648,6 +8650,15 @@ export class FrigateEventsCard extends LitElement {
     return 0;
   }
 
+  private _getDefaultTimelinePlaybackRate(): number {
+    const raw = this._config?.timeline_default_playback_rate;
+    if (raw === undefined || raw === null || raw === '') return 1;
+    const parsed = typeof raw === 'number'
+      ? raw
+      : Number(String(raw).trim().replace(/x$/i, ''));
+    return TIMELINE_PLAYBACK_SPEEDS.includes(parsed) ? parsed : 1;
+  }
+
   private _timelineControlsMarkup(windowMinutes: number, withHeadings = false): string {
     // Desktop keeps the quick jumps inside the picker; the compact/TV sheet
     // shows them directly so a jump stays one tap away.
@@ -8866,6 +8877,7 @@ export class FrigateEventsCard extends LitElement {
     container.dataset.timelineLayout = layoutMode;
     this._timelineContainer = container;
     this._isTimelineMuted = this._config?.muted !== false;
+    this._timelinePlaybackRate = this._getDefaultTimelinePlaybackRate();
 
     this._renderTimelineContent(container);
 
@@ -9220,6 +9232,7 @@ export class FrigateEventsCard extends LitElement {
     this._timelinePendingSeekUntil = 0;
     this._isAdvancingTimeline = false;
     this._clearTimelineSpeedInterval();
+    this._timelinePlaybackRate = this._getDefaultTimelinePlaybackRate();
     if (this._timelineLoadingTimeout) {
       clearTimeout(this._timelineLoadingTimeout);
       this._timelineLoadingTimeout = undefined;

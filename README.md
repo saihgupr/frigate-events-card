@@ -158,6 +158,7 @@ show_timeline: true
 event_click_action: timeline # or detail - which modal opens when clicking an event
 timeline_on_click: true # legacy alias: false equals event_click_action detail
 timeline_default_window_hours: 1
+timeline_default_playback_rate: 1 # initial playback speed (0.5, 1, 2, 4, 8, 16...)
 timeline_event_seek_offset: 0
 timeline_sync_offset: -3 # seconds; -3 and '-3s' both mean 3 seconds behind
 
@@ -508,6 +509,7 @@ The most common settings to get you started:
 | `event_click_action` | string | `timeline` | Which modal opens when clicking an event: `timeline` or `detail`. Takes precedence over legacy `timeline_on_click`. |
 | `timeline_on_click` | boolean | `true` | Legacy: `false` opens details instead of Timeline (same as `event_click_action: detail`). Open the Timeline directly when clicking an event thumbnail (requires `video` and `show_timeline`). |
 | `timeline_default_window_hours` | number | `0.5` desktop / `0.25` mobile | Default window when opening from an event. When unset, desktop uses 30 minutes and phone/tablet/TV uses 15 minutes. Opening without an event always starts at 24 hours. |
+| `timeline_default_playback_rate` | number \| string | `1` | Initial playback speed when opening the Timeline (`0.5`, `1`, `2`, `4`, `8`, `16`, up to `4096`; `'4x'` is also accepted). Clicking the speed readout still resets playback to `1x`. |
 | `timeline_event_seek_offset` | number \| map | thumbnail frame on Frigate 0.18+, `video_start_skip_seconds` on 0.13 | Seconds added/subtracted when seeking to an event in the Timeline (e.g. `5` or `-5`). Supports per-label/zone map. When unset on Frigate 0.18+, the Timeline opens 2 seconds before the frame Frigate used for the event thumbnail, which is the moment the event took place. On 0.13 it reuses `video_start_skip_seconds` so it starts where event clips start. Set a value to override both. |
 | `timeline_sync_offset` | number \| string | `0` | Shifts the timeline clock against the footage. `-3`, `-3s`, and `'+2.5s'` are all accepted. Negative values move the displayed time behind the frames; positive values move it forward. Applied to the scrubber clock and event seeks. |
 | `timeline_show_mute` | boolean | `true` | Show the mute toggle button on hover over the Timeline video player. Setting `show_mute: false` (or `live_view_show_mute: false`) also hides it; an explicit `timeline_show_mute` wins. |
@@ -556,6 +558,7 @@ Click an issue to expand the fix.
 <summary><strong>"Live feed unavailable" or WebRTC stream fails</strong></summary>
 
 - **HTTPS Required**: Browsers only allow WebRTC (`RTCPeerConnection`) in secure contexts (**HTTPS** or `localhost`). Plain HTTP (e.g., `http://192.168.1.xxx:8123`) prevents WebRTC from connecting.
+- **macOS Home Assistant Companion App**: The macOS desktop app runs inside `WKWebView`, which restricts certain WebRTC and local-network capabilities. Open Home Assistant in a desktop browser (Safari, Chrome, etc.) or a Safari Dock PWA over HTTPS if `live_view` does not play inside the Mac app.
 - **Camera Entity Format**: Ensure `live_view_entity` is the full entity ID (e.g. `camera.front_door`), not just `front_door`.
 - **Frigate on a Remote Server / Unraid Docker**: Configure `go2rtc_url` for a direct connection:
   ```yaml
